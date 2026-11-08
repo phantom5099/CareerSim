@@ -1,0 +1,46 @@
+name: Security
+
+# 每周和依赖变更时检查已知漏洞、依赖声明、许可证与来源，避免供应链风险随构建进入生产。
+on:
+  schedule:
+    # 即使没有新提交，新披露的漏洞也需要被周期性发现。
+    - cron: "17 3 * * 1"
+  push:
+    branches: [main]
+    paths:
+      # 只在这些文件变化时重跑，依赖没变时扫描结果不会变化。
+      - Cargo.lock
+      - Cargo.toml
+      - deny.toml
+      - .github/workflows/security.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 为什么需要：CI 只验证代码正确性，这里补上漏洞库、通配符/重复依赖、许可证和依赖来源的检查。
+  deny:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install toolchain
+        run: rustup show
+      - name: Cache cargo-deny
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: ${{ runner.os }}-cargo-deny-0.20.2
+      - name: Install cargo-deny
+        run: command -v cargo-deny >/dev/null 2>&1 || cargo install cargo-deny --locked --version 0.20.2
+      # advisories 查已知漏洞，bans 拒绝通配符并提示重复版本，licenses 校验许可证白名单，sources 确保依赖只来自 crates.io。
+      - name: Check dependencies
+        run: cargo deny check advisories bans licenses sources

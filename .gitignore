@@ -1,0 +1,11 @@
+/target
+/.env
+/.env.*
+!/.env.example
+/.pgdata
+coverage/
+*.profraw
+*.log
+.DS_Store
+.idea/
+.vscode/
