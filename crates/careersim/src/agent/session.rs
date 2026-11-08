@@ -17,7 +17,7 @@ use crate::llm::client::TokenUsage;
 pub struct SessionId(Uuid);
 
 impl SessionId {
-    pub fn new() -> Self {
+    pub fn generate() -> Self {
         Self(Uuid::new_v4())
     }
 
@@ -27,12 +27,6 @@ impl SessionId {
 
     pub fn from_uuid(uuid: Uuid) -> Self {
         Self(uuid)
-    }
-}
-
-impl Default for SessionId {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -212,7 +206,7 @@ mod tests {
 
     #[test]
     fn session_id_parses_its_display_form() {
-        let id = SessionId::new();
+        let id = SessionId::generate();
         assert_eq!(id.to_string().parse::<SessionId>().unwrap(), id);
     }
 

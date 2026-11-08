@@ -70,7 +70,7 @@ impl PostgresSessionStore {
 impl SessionStore for PostgresSessionStore {
     async fn create(&self, stage: Stage) -> Result<Session, StoreError> {
         for _ in 0..UUID_RETRIES {
-            let id = SessionId::new();
+            let id = SessionId::generate();
             let at = Utc::now();
             let kind = serde_json::to_value(SessionEventKind::SessionMeta {
                 session_id: id,

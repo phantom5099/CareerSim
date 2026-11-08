@@ -32,7 +32,7 @@ impl MemorySessionStore {
 #[async_trait]
 impl SessionStore for MemorySessionStore {
     async fn create(&self, stage: Stage) -> Result<Session, StoreError> {
-        let id = SessionId::new();
+        let id = SessionId::generate();
         let now = Utc::now();
         let session = Session {
             id,
