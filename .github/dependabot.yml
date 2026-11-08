@@ -1,14 +1,18 @@
+# 每周自动开依赖升级 PR，让漏洞修复和兼容更新经过 CI 审阅，避免长期停留在旧版本。
 version: 2
 updates:
+  # 为什么需要：Rust 依赖的补丁与次要版本升到可用的最新版，减少手工跟踪。
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # 为什么需要：把 minor/patch 合并成一个 PR 降低审阅成本，major 升级仍单独出现以单独评估兼容性。
     groups:
       cargo-minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+  # 为什么需要：workflow 里按 SHA 固定的 action 也需要跟进安全修复和被弃用的版本。
   - package-ecosystem: github-actions
     directory: /
     schedule:
