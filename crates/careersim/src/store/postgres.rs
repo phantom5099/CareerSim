@@ -45,7 +45,7 @@ impl PostgresSessionStore {
             "INSERT INTO sessions (id, stage, created_at, updated_at, last_seq, last_turn_id) \
              VALUES ($1, $2, $3, $3, 0, 0)",
         )
-        .bind(id.as_uuid())
+        .bind(id.into_uuid())
         .bind(stage.as_str())
         .bind(at)
         .execute(&mut *tx)
@@ -55,7 +55,7 @@ impl PostgresSessionStore {
             "INSERT INTO session_events (session_id, seq, v, at, kind) \
              VALUES ($1, 0, $2, $3, $4)",
         )
-        .bind(id.as_uuid())
+        .bind(id.into_uuid())
         .bind(EVENT_VERSION as i32)
         .bind(at)
         .bind(kind)
@@ -119,7 +119,7 @@ impl SessionStore for PostgresSessionStore {
             "SELECT id, stage, created_at, updated_at, last_seq, last_turn_id \
              FROM sessions WHERE id = $1",
         )
-        .bind(id.as_uuid())
+        .bind(id.into_uuid())
         .fetch_optional(&mut *tx)
         .await
         .map_err(|err| backend("load", err))?;
@@ -143,7 +143,7 @@ impl SessionStore for PostgresSessionStore {
             .try_get("last_turn_id")
             .map_err(|err| backend("load", err))?;
 
-        if row_id != id.as_uuid() {
+        if row_id != id.into_uuid() {
             return Err(StoreError::Corrupt(
                 "session row id does not match the requested id".to_owned(),
             ));
@@ -157,7 +157,7 @@ impl SessionStore for PostgresSessionStore {
             "SELECT seq, v, at, kind FROM session_events \
              WHERE session_id = $1 ORDER BY seq ASC",
         )
-        .bind(id.as_uuid())
+        .bind(id.into_uuid())
         .fetch_all(&mut *tx)
         .await
         .map_err(|err| backend("load", err))?;
@@ -236,7 +236,7 @@ impl SessionStore for PostgresSessionStore {
 
     async fn delete(&self, id: SessionId) -> Result<(), StoreError> {
         let result = sqlx::query("DELETE FROM sessions WHERE id = $1")
-            .bind(id.as_uuid())
+            .bind(id.into_uuid())
             .execute(&self.pool)
             .await
             .map_err(|err| backend("delete", err))?;
@@ -264,7 +264,7 @@ impl SessionStore for PostgresSessionStore {
             .map_err(|err| backend("append", err))?;
 
         let row = sqlx::query("SELECT last_seq, stage FROM sessions WHERE id = $1 FOR UPDATE")
-            .bind(id.as_uuid())
+            .bind(id.into_uuid())
             .fetch_optional(&mut *tx)
             .await
             .map_err(|err| backend("append", err))?;
@@ -296,7 +296,7 @@ impl SessionStore for PostgresSessionStore {
                 "INSERT INTO session_events (session_id, seq, v, at, kind) \
                  VALUES ($1, $2, $3, $4, $5)",
             )
-            .bind(id.as_uuid())
+            .bind(id.into_uuid())
             .bind(seq_i64)
             .bind(EVENT_VERSION as i32)
             .bind(at)
@@ -325,7 +325,7 @@ impl SessionStore for PostgresSessionStore {
                  last_turn_id = GREATEST(last_turn_id, $3), updated_at = $4, stage = $5 \
                  WHERE id = $1",
             )
-            .bind(id.as_uuid())
+            .bind(id.into_uuid())
             .bind(new_last_seq)
             .bind(max_turn)
             .bind(at)
@@ -336,7 +336,7 @@ impl SessionStore for PostgresSessionStore {
                  last_turn_id = GREATEST(last_turn_id, $3), updated_at = $4 \
                  WHERE id = $1",
             )
-            .bind(id.as_uuid())
+            .bind(id.into_uuid())
             .bind(new_last_seq)
             .bind(max_turn)
             .bind(at)

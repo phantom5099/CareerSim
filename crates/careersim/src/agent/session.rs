@@ -21,7 +21,7 @@ impl SessionId {
         Self(Uuid::new_v4())
     }
 
-    pub fn as_uuid(self) -> Uuid {
+    pub fn into_uuid(self) -> Uuid {
         self.0
     }
 

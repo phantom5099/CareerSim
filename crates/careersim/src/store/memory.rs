@@ -81,7 +81,7 @@ impl SessionStore for MemorySessionStore {
         summaries.sort_by(|a, b| {
             b.updated_at
                 .cmp(&a.updated_at)
-                .then_with(|| b.id.as_uuid().cmp(&a.id.as_uuid()))
+                .then_with(|| b.id.into_uuid().cmp(&a.id.into_uuid()))
         });
         summaries.truncate(limit);
         Ok(summaries)
