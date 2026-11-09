@@ -25,7 +25,7 @@ use crate::agent::TurnEndReason;
 use crate::agent::TurnId;
 use crate::agent::UserMessageSource;
 use crate::agent::session::event_turn_id;
-use crate::agent::tool::FakeTool;
+use crate::agent::tool::testing::FakeTool;
 use crate::llm::ChatResponse;
 use crate::llm::LlmError;
 use crate::llm::TokenUsage;
