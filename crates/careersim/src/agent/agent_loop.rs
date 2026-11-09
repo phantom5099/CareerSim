@@ -10,19 +10,16 @@ use tracing::{debug, info};
 use super::BuildOptions;
 use super::ContextBuilder;
 use super::Session;
-use super::SessionEventKind;
+use super::SessionError;
 use super::SessionId;
-use super::Stage;
-use super::ToolCall;
+use super::SessionService;
+use super::StageCompletion;
 use super::ToolRegistry;
 use super::ToolStatus;
 use super::TurnEndReason;
 use super::TurnId;
-use super::UserMessageSource;
 use crate::llm::LlmClient;
 use crate::llm::LlmError;
-use crate::store::SessionStore;
-use crate::store::StoreError;
 
 /// 循环参数；模型连接与采样参数由 `LlmClient` 在构造时固定。
 #[derive(Debug, Clone, Copy)]
@@ -39,13 +36,6 @@ pub struct TurnResult {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StageCompletion {
-    pub turn_id: TurnId,
-    /// 推进后的阶段。
-    pub stage: Stage,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum LoopError {
     #[error("session not found")]
@@ -55,14 +45,15 @@ pub enum LoopError {
     #[error("current stage has no next stage")]
     NoNextStage,
     #[error(transparent)]
-    Store(StoreError),
+    Session(SessionError),
 }
 
-impl From<StoreError> for LoopError {
-    fn from(err: StoreError) -> Self {
+impl From<SessionError> for LoopError {
+    fn from(err: SessionError) -> Self {
         match err {
-            StoreError::NotFound => Self::SessionNotFound,
-            other => Self::Store(other),
+            SessionError::NotFound => Self::SessionNotFound,
+            SessionError::NoNextStage => Self::NoNextStage,
+            other => Self::Session(other),
         }
     }
 }
@@ -71,7 +62,7 @@ pub struct AgentLoop {
     llm: Arc<dyn LlmClient>,
     context: Arc<dyn ContextBuilder>,
     tools: Arc<ToolRegistry>,
-    store: Arc<dyn SessionStore>,
+    sessions: Arc<dyn SessionService>,
     config: LoopConfig,
     // std 锁只用于查找/插入，不跨 await；每个会话的回合锁是 tokio 异步锁
     session_locks: std::sync::Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
@@ -82,25 +73,17 @@ impl AgentLoop {
         llm: Arc<dyn LlmClient>,
         context: Arc<dyn ContextBuilder>,
         tools: Arc<ToolRegistry>,
-        store: Arc<dyn SessionStore>,
+        sessions: Arc<dyn SessionService>,
         config: LoopConfig,
     ) -> Self {
         Self {
             llm,
             context,
             tools,
-            store,
+            sessions,
             config,
             session_locks: std::sync::Mutex::new(HashMap::new()),
         }
-    }
-
-    pub async fn create_session(&self, stage: Stage) -> Result<Session, LoopError> {
-        Ok(self.store.create(stage).await?)
-    }
-
-    pub async fn load_session(&self, id: SessionId) -> Result<Session, LoopError> {
-        Ok(self.store.load(id).await?)
     }
 
     pub async fn run_turn(
@@ -115,10 +98,8 @@ impl AgentLoop {
             Err(_) => return Err(LoopError::SessionBusy),
         };
 
-        let mut session = self.store.load(id).await?;
-        self.repair_dangling(&mut session).await?;
-
-        let turn_id = TurnId(session.last_turn_id.0 + 1);
+        let mut session = self.sessions.load(id).await?;
+        let turn_id = self.sessions.start_turn(&mut session).await?;
         info!(
             session_id = %id,
             turn_id = turn_id.0,
@@ -127,15 +108,9 @@ impl AgentLoop {
             "turn started"
         );
 
-        let stored = self
-            .store
-            .append(id, &[SessionEventKind::TurnStarted { turn_id }])
-            .await?;
-        session.absorb(&stored);
-
         if cancel.is_cancelled() {
             return self
-                .close_turn(
+                .finish_turn(
                     &mut session,
                     turn_id,
                     TurnEndReason::Interrupted,
@@ -146,18 +121,9 @@ impl AgentLoop {
                 .await;
         }
 
-        let stored = self
-            .store
-            .append(
-                id,
-                &[SessionEventKind::UserMessage {
-                    turn_id,
-                    content: input.into(),
-                    source: UserMessageSource::User,
-                }],
-            )
+        self.sessions
+            .record_user_message(&mut session, turn_id, input.into())
             .await?;
-        session.absorb(&stored);
 
         let mut steps: u32 = 0;
         let mut output = String::new();
@@ -166,7 +132,7 @@ impl AgentLoop {
         for _ in 0..self.config.max_steps {
             if cancel.is_cancelled() {
                 return self
-                    .close_turn(
+                    .finish_turn(
                         &mut session,
                         turn_id,
                         TurnEndReason::Interrupted,
@@ -199,7 +165,7 @@ impl AgentLoop {
                 Ok(request) => request,
                 Err(err) => {
                     return self
-                        .close_turn(
+                        .finish_turn(
                             &mut session,
                             turn_id,
                             TurnEndReason::Error,
@@ -215,7 +181,7 @@ impl AgentLoop {
                 Ok(response) => response,
                 Err(LlmError::Cancelled) => {
                     return self
-                        .close_turn(
+                        .finish_turn(
                             &mut session,
                             turn_id,
                             TurnEndReason::Interrupted,
@@ -228,7 +194,7 @@ impl AgentLoop {
                 Err(err) => {
                     if cancel.is_cancelled() {
                         return self
-                            .close_turn(
+                            .finish_turn(
                                 &mut session,
                                 turn_id,
                                 TurnEndReason::Interrupted,
@@ -239,7 +205,7 @@ impl AgentLoop {
                             .await;
                     }
                     return self
-                        .close_turn(
+                        .finish_turn(
                             &mut session,
                             turn_id,
                             TurnEndReason::Error,
@@ -254,24 +220,20 @@ impl AgentLoop {
             steps += 1;
             output = response.content.clone();
 
-            let stored = self
-                .store
-                .append(
-                    id,
-                    &[SessionEventKind::AssistantMessage {
-                        turn_id,
-                        content: response.content.clone(),
-                        tool_calls: response.tool_calls.clone(),
-                        usage: response.usage,
-                    }],
+            self.sessions
+                .record_assistant_message(
+                    &mut session,
+                    turn_id,
+                    response.content.clone(),
+                    response.tool_calls.clone(),
+                    response.usage,
                 )
                 .await?;
-            session.absorb(&stored);
 
             if response.tool_calls.is_empty() {
                 if response.content.trim().is_empty() {
                     return self
-                        .close_turn(
+                        .finish_turn(
                             &mut session,
                             turn_id,
                             TurnEndReason::Error,
@@ -282,7 +244,7 @@ impl AgentLoop {
                         .await;
                 }
                 return self
-                    .close_turn(
+                    .finish_turn(
                         &mut session,
                         turn_id,
                         TurnEndReason::Done,
@@ -300,9 +262,8 @@ impl AgentLoop {
             for (index, call) in calls.iter().enumerate() {
                 if cancel.is_cancelled() {
                     for call in &calls[index..] {
-                        results.push(tool_result(
-                            turn_id,
-                            call,
+                        results.push((
+                            call.call_id.clone(),
                             ToolStatus::Error,
                             "aborted".to_owned(),
                         ));
@@ -312,15 +273,16 @@ impl AgentLoop {
                 }
 
                 let (status, result) = self.tools.execute(call, id, turn_id, &cancel).await;
-                results.push(tool_result(turn_id, call, status, result));
+                results.push((call.call_id.clone(), status, result));
             }
 
-            let stored = self.store.append(id, &results).await?;
-            session.absorb(&stored);
+            self.sessions
+                .record_tool_results(&mut session, turn_id, &results)
+                .await?;
 
             if aborted || cancel.is_cancelled() {
                 return self
-                    .close_turn(
+                    .finish_turn(
                         &mut session,
                         turn_id,
                         TurnEndReason::Interrupted,
@@ -332,7 +294,7 @@ impl AgentLoop {
             }
         }
 
-        self.close_turn(
+        self.finish_turn(
             &mut session,
             turn_id,
             TurnEndReason::MaxSteps,
@@ -351,46 +313,19 @@ impl AgentLoop {
             Err(_) => return Err(LoopError::SessionBusy),
         };
 
-        let mut session = self.store.load(id).await?;
-        self.repair_dangling(&mut session).await?;
-
+        let mut session = self.sessions.load(id).await?;
         let from = session.stage;
-        let next = from.next().ok_or(LoopError::NoNextStage)?;
-        let turn_id = TurnId(session.last_turn_id.0 + 1);
-
-        let stored = self
-            .store
-            .append(
-                id,
-                &[
-                    SessionEventKind::TurnStarted { turn_id },
-                    SessionEventKind::TurnEnded {
-                        turn_id,
-                        reason: TurnEndReason::Done,
-                        steps: 0,
-                        error: None,
-                    },
-                    SessionEventKind::StageCompleted {
-                        turn_id,
-                        stage: session.stage,
-                    },
-                ],
-            )
-            .await?;
-        session.absorb(&stored);
+        let completion = self.sessions.finish_stage(&mut session).await?;
 
         info!(
             session_id = %id,
-            turn_id = turn_id.0,
+            turn_id = completion.turn_id.0,
             from = %from,
-            to = %next,
+            to = %completion.stage,
             "stage completed"
         );
 
-        Ok(StageCompletion {
-            turn_id,
-            stage: next,
-        })
+        Ok(completion)
     }
 
     fn session_lock(&self, id: SessionId) -> Arc<Mutex<()>> {
@@ -406,30 +341,8 @@ impl AgentLoop {
             .clone()
     }
 
-    async fn repair_dangling(&self, session: &mut Session) -> Result<(), LoopError> {
-        let Some(turn_id) = session.dangling_turn() else {
-            return Ok(());
-        };
-
-        let stored = self
-            .store
-            .append(
-                session.id,
-                &[SessionEventKind::TurnEnded {
-                    turn_id,
-                    reason: TurnEndReason::Interrupted,
-                    steps: 0,
-                    error: None,
-                }],
-            )
-            .await?;
-        session.absorb(&stored);
-        info!(session_id = %session.id, turn_id = turn_id.0, "repaired dangling turn");
-        Ok(())
-    }
-
     #[allow(clippy::too_many_arguments)]
-    async fn close_turn(
+    async fn finish_turn(
         &self,
         session: &mut Session,
         turn_id: TurnId,
@@ -438,19 +351,9 @@ impl AgentLoop {
         output: String,
         error: Option<String>,
     ) -> Result<TurnResult, LoopError> {
-        let stored = self
-            .store
-            .append(
-                session.id,
-                &[SessionEventKind::TurnEnded {
-                    turn_id,
-                    reason,
-                    steps,
-                    error: error.clone(),
-                }],
-            )
+        self.sessions
+            .end_turn(session, turn_id, reason, steps, error.clone())
             .await?;
-        session.absorb(&stored);
 
         info!(
             session_id = %session.id,
@@ -468,20 +371,6 @@ impl AgentLoop {
             output,
             error,
         })
-    }
-}
-
-fn tool_result(
-    turn_id: TurnId,
-    call: &ToolCall,
-    status: ToolStatus,
-    output: String,
-) -> SessionEventKind {
-    SessionEventKind::ToolResult {
-        turn_id,
-        tool_call_id: call.call_id.clone(),
-        status,
-        output,
     }
 }
 

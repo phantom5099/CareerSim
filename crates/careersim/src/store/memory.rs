@@ -4,23 +4,25 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use serde_json::Value;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
+use super::AppendBatch;
 use super::EVENT_VERSION;
 use super::SessionStore;
 use super::StoreError;
-use super::validate_batch;
-use crate::agent::Session;
-use crate::agent::SessionEvent;
-use crate::agent::SessionEventKind;
-use crate::agent::SessionId;
-use crate::agent::SessionSummary;
-use crate::agent::Stage;
-use crate::agent::TurnId;
+use super::StoredEvent;
+use super::StoredSession;
 
 #[derive(Default)]
-pub struct MemorySessionStore {
-    sessions: Mutex<HashMap<SessionId, Session>>,
+pub(crate) struct MemorySessionStore {
+    sessions: Mutex<HashMap<Uuid, Stored>>,
+}
+
+struct Stored {
+    session: StoredSession,
+    events: Vec<StoredEvent>,
 }
 
 impl MemorySessionStore {
@@ -31,63 +33,67 @@ impl MemorySessionStore {
 
 #[async_trait]
 impl SessionStore for MemorySessionStore {
-    async fn create(&self, stage: Stage) -> Result<Session, StoreError> {
-        let id = SessionId::generate();
+    async fn create(
+        &self,
+        id: Uuid,
+        stage: &str,
+        meta: Value,
+    ) -> Result<(StoredSession, StoredEvent), StoreError> {
         let now = Utc::now();
-        let session = Session {
+        let event = StoredEvent {
+            v: EVENT_VERSION,
+            seq: 0,
+            at: now,
+            kind: meta,
+        };
+        let session = StoredSession {
             id,
-            stage,
-            events: vec![SessionEvent {
-                v: EVENT_VERSION,
-                seq: 0,
-                at: now,
-                kind: SessionEventKind::SessionMeta {
-                    session_id: id,
-                    stage,
-                },
-            }],
+            stage: stage.to_owned(),
             created_at: now,
             updated_at: now,
             last_seq: 0,
-            last_turn_id: TurnId(0),
+            last_turn_id: 0,
         };
 
-        self.sessions.lock().await.insert(id, session.clone());
-        Ok(session)
+        let mut sessions = self.sessions.lock().await;
+        if sessions.contains_key(&id) {
+            return Err(StoreError::Conflict);
+        }
+        sessions.insert(
+            id,
+            Stored {
+                session: session.clone(),
+                events: vec![event.clone()],
+            },
+        );
+        Ok((session, event))
     }
 
-    async fn load(&self, id: SessionId) -> Result<Session, StoreError> {
+    async fn load(&self, id: Uuid) -> Result<(StoredSession, Vec<StoredEvent>), StoreError> {
         self.sessions
             .lock()
             .await
             .get(&id)
-            .cloned()
+            .map(|stored| (stored.session.clone(), stored.events.clone()))
             .ok_or(StoreError::NotFound)
     }
 
-    async fn list(&self, limit: usize) -> Result<Vec<SessionSummary>, StoreError> {
+    async fn list(&self, limit: usize) -> Result<Vec<StoredSession>, StoreError> {
         let sessions = self.sessions.lock().await;
-        let mut summaries: Vec<SessionSummary> = sessions
+        let mut summaries: Vec<StoredSession> = sessions
             .values()
-            .map(|session| SessionSummary {
-                id: session.id,
-                stage: session.stage,
-                created_at: session.created_at,
-                updated_at: session.updated_at,
-                last_seq: session.last_seq,
-                last_turn_id: session.last_turn_id,
-            })
+            .map(|stored| stored.session.clone())
             .collect();
         summaries.sort_by(|a, b| {
             b.updated_at
                 .cmp(&a.updated_at)
-                .then_with(|| b.id.into_uuid().cmp(&a.id.into_uuid()))
+                .then_with(|| b.id.cmp(&a.id))
         });
         summaries.truncate(limit);
         Ok(summaries)
     }
 
-    async fn delete(&self, id: SessionId) -> Result<(), StoreError> {
+    async fn delete(&self, id: Uuid) -> Result<(), StoreError> {
         self.sessions
             .lock()
             .await
@@ -98,23 +104,28 @@ impl SessionStore for MemorySessionStore {
 
     async fn append(
         &self,
-        id: SessionId,
-        events: &[SessionEventKind],
-    ) -> Result<Vec<SessionEvent>, StoreError> {
-        if events.is_empty() {
+        id: Uuid,
+        batch: AppendBatch<'_>,
+    ) -> Result<Vec<StoredEvent>, StoreError> {
+        if batch.events.is_empty() {
             return Ok(Vec::new());
         }
 
         let mut sessions = self.sessions.lock().await;
-        let session = sessions.get_mut(&id).ok_or(StoreError::NotFound)?;
-        validate_batch(session.stage, events)?;
+        let stored = sessions.get_mut(&id).ok_or(StoreError::NotFound)?;
+        if stored.session.stage != batch.expected.stage
+            || stored.session.last_seq != batch.expected.last_seq
+        {
+            return Err(StoreError::Conflict);
+        }
 
         let now = Utc::now();
-        let first_seq = session.last_seq + 1;
-        let events: Vec<SessionEvent> = events
+        let first_seq = stored.session.last_seq + 1;
+        let events: Vec<StoredEvent> = batch
+            .events
             .iter()
             .enumerate()
-            .map(|(index, kind)| SessionEvent {
+            .map(|(index, kind)| StoredEvent {
                 v: EVENT_VERSION,
                 seq: first_seq + index as u64,
                 at: now,
@@ -122,8 +133,13 @@ impl SessionStore for MemorySessionStore {
             })
             .collect();
 
-        session.absorb(&events);
-        session.updated_at = now;
+        stored.session.last_seq = first_seq + events.len() as u64 - 1;
+        stored.session.last_turn_id = stored.session.last_turn_id.max(batch.last_turn_id);
+        if let Some(next) = batch.next_stage {
+            stored.session.stage = next.to_owned();
+        }
+        stored.session.updated_at = now;
+        stored.events.extend(events.iter().cloned());
         Ok(events)
     }
 }

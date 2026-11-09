@@ -1,29 +1,21 @@
 //! PostgreSQL 存储实现。
 
-use std::str::FromStr;
-
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use serde_json::Value;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use super::AppendBatch;
 use super::EVENT_VERSION;
 use super::SessionStore;
 use super::StoreError;
-use super::fold_session;
-use super::max_turn_id;
-use super::validate_batch;
-use crate::agent::Session;
-use crate::agent::SessionEvent;
-use crate::agent::SessionEventKind;
-use crate::agent::SessionId;
-use crate::agent::SessionSummary;
-use crate::agent::Stage;
-use crate::agent::TurnId;
+use super::StoredEvent;
+use super::StoredSession;
+use super::backend;
+use super::to_u64;
 
-const UUID_RETRIES: usize = 3;
-
-pub struct PostgresSessionStore {
+pub(crate) struct PostgresSessionStore {
     pool: PgPool,
 }
 
@@ -34,81 +26,79 @@ impl PostgresSessionStore {
 
     async fn insert_session(
         &self,
-        id: SessionId,
-        stage: Stage,
+        id: Uuid,
+        stage: &str,
         at: DateTime<Utc>,
-        kind: serde_json::Value,
-    ) -> Result<(), sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
+        meta: Value,
+    ) -> Result<(), StoreError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|err| backend("create", err))?;
 
         sqlx::query(
             "INSERT INTO sessions (id, stage, created_at, updated_at, last_seq, last_turn_id) \
              VALUES ($1, $2, $3, $3, 0, 0)",
         )
-        .bind(id.into_uuid())
-        .bind(stage.as_str())
+        .bind(id)
+        .bind(stage)
         .bind(at)
         .execute(&mut *tx)
-        .await?;
+        .await
+        .map_err(|err| {
+            if is_unique_violation(&err) {
+                StoreError::Conflict
+            } else {
+                backend("create", err)
+            }
+        })?;
 
         sqlx::query(
             "INSERT INTO session_events (session_id, seq, v, at, kind) \
              VALUES ($1, 0, $2, $3, $4)",
         )
-        .bind(id.into_uuid())
+        .bind(id)
         .bind(EVENT_VERSION as i32)
         .bind(at)
-        .bind(kind)
+        .bind(meta)
         .execute(&mut *tx)
-        .await?;
+        .await
+        .map_err(|err| backend("create", err))?;
 
-        tx.commit().await
+        tx.commit().await.map_err(|err| backend("create", err))
     }
 }
 
 #[async_trait]
 impl SessionStore for PostgresSessionStore {
-    async fn create(&self, stage: Stage) -> Result<Session, StoreError> {
-        for _ in 0..UUID_RETRIES {
-            let id = SessionId::generate();
-            let at = Utc::now();
-            let kind = serde_json::to_value(SessionEventKind::SessionMeta {
-                session_id: id,
-                stage,
-            })
-            .map_err(|err| StoreError::Backend(format!("encode session_meta: {err}")))?;
+    async fn create(
+        &self,
+        id: Uuid,
+        stage: &str,
+        meta: Value,
+    ) -> Result<(StoredSession, StoredEvent), StoreError> {
+        let at = Utc::now();
+        self.insert_session(id, stage, at, meta.clone()).await?;
 
-            match self.insert_session(id, stage, at, kind).await {
-                Ok(()) => {
-                    return Ok(Session {
-                        id,
-                        stage,
-                        events: vec![SessionEvent {
-                            v: EVENT_VERSION,
-                            seq: 0,
-                            at,
-                            kind: SessionEventKind::SessionMeta {
-                                session_id: id,
-                                stage,
-                            },
-                        }],
-                        created_at: at,
-                        updated_at: at,
-                        last_seq: 0,
-                        last_turn_id: TurnId(0),
-                    });
-                }
-                Err(err) if is_unique_violation(&err) => continue,
-                Err(err) => return Err(backend("create", err)),
-            }
-        }
-
-        Err(StoreError::Backend(
-            "could not allocate a unique session id".to_owned(),
-        ))
+        let session = StoredSession {
+            id,
+            stage: stage.to_owned(),
+            created_at: at,
+            updated_at: at,
+            last_seq: 0,
+            last_turn_id: 0,
+        };
+        let event = StoredEvent {
+            v: EVENT_VERSION,
+            seq: 0,
+            at,
+            kind: meta,
+        };
+        Ok((session, event))
     }
 
-    async fn load(&self, id: SessionId) -> Result<Session, StoreError> {
+    async fn load(&self, id: Uuid) -> Result<(StoredSession, Vec<StoredEvent>), StoreError> {
         let mut tx = self
             .pool
             .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
@@ -119,7 +109,7 @@ impl SessionStore for PostgresSessionStore {
             "SELECT id, stage, created_at, updated_at, last_seq, last_turn_id \
              FROM sessions WHERE id = $1",
         )
-        .bind(id.into_uuid())
+        .bind(id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(|err| backend("load", err))?;
@@ -129,7 +119,7 @@ impl SessionStore for PostgresSessionStore {
         };
 
         let row_id: Uuid = row.try_get("id").map_err(|err| backend("load", err))?;
-        let stage_text: String = row.try_get("stage").map_err(|err| backend("load", err))?;
+        let stage: String = row.try_get("stage").map_err(|err| backend("load", err))?;
         let created_at: DateTime<Utc> = row
             .try_get("created_at")
             .map_err(|err| backend("load", err))?;
@@ -143,21 +133,26 @@ impl SessionStore for PostgresSessionStore {
             .try_get("last_turn_id")
             .map_err(|err| backend("load", err))?;
 
-        if row_id != id.into_uuid() {
+        if row_id != id {
             return Err(StoreError::Corrupt(
                 "session row id does not match the requested id".to_owned(),
             ));
         }
-        let stage =
-            Stage::from_str(&stage_text).map_err(|err| StoreError::Corrupt(err.to_string()))?;
-        let last_seq = to_u64(last_seq, "last_seq")?;
-        let last_turn_id = to_u64(last_turn_id, "last_turn_id")?;
+
+        let session = StoredSession {
+            id,
+            stage,
+            created_at,
+            updated_at,
+            last_seq: to_u64(last_seq, "last_seq")?,
+            last_turn_id: to_u64(last_turn_id, "last_turn_id")?,
+        };
 
         let rows = sqlx::query(
             "SELECT seq, v, at, kind FROM session_events \
              WHERE session_id = $1 ORDER BY seq ASC",
         )
-        .bind(id.into_uuid())
+        .bind(id)
         .fetch_all(&mut *tx)
         .await
         .map_err(|err| backend("load", err))?;
@@ -167,33 +162,21 @@ impl SessionStore for PostgresSessionStore {
             let seq: i64 = row.try_get("seq").map_err(|err| backend("load", err))?;
             let v: i32 = row.try_get("v").map_err(|err| backend("load", err))?;
             let at: DateTime<Utc> = row.try_get("at").map_err(|err| backend("load", err))?;
-            let kind: serde_json::Value =
-                row.try_get("kind").map_err(|err| backend("load", err))?;
+            let kind: Value = row.try_get("kind").map_err(|err| backend("load", err))?;
 
             let seq = to_u64(seq, "seq")?;
             let v = u32::try_from(v)
                 .map_err(|_| StoreError::Corrupt(format!("negative event version at seq {seq}")))?;
-            let kind = serde_json::from_value(kind).map_err(|err| {
-                StoreError::Corrupt(format!("invalid event payload at seq {seq}: {err}"))
-            })?;
 
-            events.push(SessionEvent { v, seq, at, kind });
+            events.push(StoredEvent { v, seq, at, kind });
         }
 
         tx.commit().await.map_err(|err| backend("load", err))?;
 
-        fold_session(
-            id,
-            stage,
-            created_at,
-            updated_at,
-            last_seq,
-            TurnId(last_turn_id),
-            events,
-        )
+        Ok((session, events))
     }
 
-    async fn list(&self, limit: usize) -> Result<Vec<SessionSummary>, StoreError> {
+    async fn list(&self, limit: usize) -> Result<Vec<StoredSession>, StoreError> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let rows = sqlx::query(
             "SELECT id, stage, created_at, updated_at, last_seq, last_turn_id \
@@ -204,12 +187,10 @@ impl SessionStore for PostgresSessionStore {
         .await
         .map_err(|err| backend("list", err))?;
 
-        let mut summaries = Vec::with_capacity(rows.len());
+        let mut sessions = Vec::with_capacity(rows.len());
         for row in rows {
             let id: Uuid = row.try_get("id").map_err(|err| backend("list", err))?;
-            let stage_text: String = row.try_get("stage").map_err(|err| backend("list", err))?;
-            let stage =
-                Stage::from_str(&stage_text).map_err(|err| StoreError::Corrupt(err.to_string()))?;
+            let stage: String = row.try_get("stage").map_err(|err| backend("list", err))?;
             let last_seq: i64 = row
                 .try_get("last_seq")
                 .map_err(|err| backend("list", err))?;
@@ -217,8 +198,8 @@ impl SessionStore for PostgresSessionStore {
                 .try_get("last_turn_id")
                 .map_err(|err| backend("list", err))?;
 
-            summaries.push(SessionSummary {
-                id: SessionId::from_uuid(id),
+            sessions.push(StoredSession {
+                id,
                 stage,
                 created_at: row
                     .try_get("created_at")
@@ -227,16 +208,16 @@ impl SessionStore for PostgresSessionStore {
                     .try_get("updated_at")
                     .map_err(|err| backend("list", err))?,
                 last_seq: to_u64(last_seq, "last_seq")?,
-                last_turn_id: TurnId(to_u64(last_turn_id, "last_turn_id")?),
+                last_turn_id: to_u64(last_turn_id, "last_turn_id")?,
             });
         }
 
-        Ok(summaries)
+        Ok(sessions)
     }
 
-    async fn delete(&self, id: SessionId) -> Result<(), StoreError> {
+    async fn delete(&self, id: Uuid) -> Result<(), StoreError> {
         let result = sqlx::query("DELETE FROM sessions WHERE id = $1")
-            .bind(id.into_uuid())
+            .bind(id)
             .execute(&self.pool)
             .await
             .map_err(|err| backend("delete", err))?;
@@ -250,10 +231,10 @@ impl SessionStore for PostgresSessionStore {
 
     async fn append(
         &self,
-        id: SessionId,
-        events: &[SessionEventKind],
-    ) -> Result<Vec<SessionEvent>, StoreError> {
-        if events.is_empty() {
+        id: Uuid,
+        batch: AppendBatch<'_>,
+    ) -> Result<Vec<StoredEvent>, StoreError> {
+        if batch.events.is_empty() {
             return Ok(Vec::new());
         }
 
@@ -263,11 +244,13 @@ impl SessionStore for PostgresSessionStore {
             .await
             .map_err(|err| backend("append", err))?;
 
-        let row = sqlx::query("SELECT last_seq, stage FROM sessions WHERE id = $1 FOR UPDATE")
-            .bind(id.into_uuid())
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|err| backend("append", err))?;
+        let row = sqlx::query(
+            "SELECT last_seq, last_turn_id, stage FROM sessions WHERE id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|err| backend("append", err))?;
 
         let Some(row) = row else {
             return Err(StoreError::NotFound);
@@ -276,36 +259,39 @@ impl SessionStore for PostgresSessionStore {
         let last_seq: i64 = row
             .try_get("last_seq")
             .map_err(|err| backend("append", err))?;
-        let stage_text: String = row.try_get("stage").map_err(|err| backend("append", err))?;
-        let current =
-            Stage::from_str(&stage_text).map_err(|err| StoreError::Corrupt(err.to_string()))?;
-        let next_stage = validate_batch(current, events)?;
+        let last_turn_id: i64 = row
+            .try_get("last_turn_id")
+            .map_err(|err| backend("append", err))?;
+        let stage: String = row.try_get("stage").map_err(|err| backend("append", err))?;
 
-        let first_seq = to_u64(last_seq, "last_seq")? + 1;
+        let current_last_seq = to_u64(last_seq, "last_seq")?;
+        if stage != batch.expected.stage || current_last_seq != batch.expected.last_seq {
+            return Err(StoreError::Conflict);
+        }
+
+        let first_seq = current_last_seq + 1;
         let at = Utc::now();
-        let mut stored = Vec::with_capacity(events.len());
+        let mut stored = Vec::with_capacity(batch.events.len());
 
-        for (index, kind) in events.iter().enumerate() {
+        for (index, kind) in batch.events.iter().enumerate() {
             let seq = first_seq + index as u64;
             let seq_i64 = i64::try_from(seq)
                 .map_err(|_| StoreError::Backend("event seq overflow".to_owned()))?;
-            let payload = serde_json::to_value(kind)
-                .map_err(|err| StoreError::Backend(format!("encode event: {err}")))?;
 
             sqlx::query(
                 "INSERT INTO session_events (session_id, seq, v, at, kind) \
                  VALUES ($1, $2, $3, $4, $5)",
             )
-            .bind(id.into_uuid())
+            .bind(id)
             .bind(seq_i64)
             .bind(EVENT_VERSION as i32)
             .bind(at)
-            .bind(payload)
+            .bind(kind)
             .execute(&mut *tx)
             .await
             .map_err(|err| backend("append", err))?;
 
-            stored.push(SessionEvent {
+            stored.push(StoredEvent {
                 v: EVENT_VERSION,
                 seq,
                 at,
@@ -313,32 +299,33 @@ impl SessionStore for PostgresSessionStore {
             });
         }
 
-        let new_last_seq = first_seq + events.len() as u64 - 1;
+        let new_last_seq = first_seq + batch.events.len() as u64 - 1;
         let new_last_seq = i64::try_from(new_last_seq)
             .map_err(|_| StoreError::Backend("event seq overflow".to_owned()))?;
-        let max_turn =
-            max_turn_id(events).map_or(0, |turn_id| i64::try_from(turn_id.0).unwrap_or(i64::MAX));
+        let new_last_turn_id =
+            i64::try_from(to_u64(last_turn_id, "last_turn_id")?.max(batch.last_turn_id))
+                .unwrap_or(i64::MAX);
 
-        let update = if let Some(next) = next_stage {
+        let update = if let Some(next) = batch.next_stage {
             sqlx::query(
                 "UPDATE sessions SET last_seq = $2, \
-                 last_turn_id = GREATEST(last_turn_id, $3), updated_at = $4, stage = $5 \
+                 last_turn_id = $3, updated_at = $4, stage = $5 \
                  WHERE id = $1",
             )
-            .bind(id.into_uuid())
+            .bind(id)
             .bind(new_last_seq)
-            .bind(max_turn)
+            .bind(new_last_turn_id)
             .bind(at)
-            .bind(next.as_str())
+            .bind(next)
         } else {
             sqlx::query(
                 "UPDATE sessions SET last_seq = $2, \
-                 last_turn_id = GREATEST(last_turn_id, $3), updated_at = $4 \
+                 last_turn_id = $3, updated_at = $4 \
                  WHERE id = $1",
             )
-            .bind(id.into_uuid())
+            .bind(id)
             .bind(new_last_seq)
-            .bind(max_turn)
+            .bind(new_last_turn_id)
             .bind(at)
         };
 
@@ -354,12 +341,4 @@ impl SessionStore for PostgresSessionStore {
 
 fn is_unique_violation(err: &sqlx::Error) -> bool {
     matches!(err, sqlx::Error::Database(err) if err.is_unique_violation())
-}
-
-fn to_u64(value: i64, field: &str) -> Result<u64, StoreError> {
-    u64::try_from(value).map_err(|_| StoreError::Corrupt(format!("{field} is negative: {value}")))
-}
-
-fn backend(operation: &str, err: impl std::fmt::Display) -> StoreError {
-    StoreError::Backend(format!("{operation}: {err}"))
 }

@@ -9,7 +9,7 @@ use careersim::agent::LoopConfig;
 use careersim::agent::ToolRegistry;
 use careersim::config::AppConfig;
 use careersim::llm::OpenAiCompatibleClient;
-use careersim::store::PostgresSessionStore;
+use careersim::postgres_session_service;
 use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
 
@@ -48,7 +48,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(OpenAiCompatibleClient::new(config.llm, http)),
         Arc::new(DefaultContextBuilder),
         Arc::new(ToolRegistry::new()),
-        Arc::new(PostgresSessionStore::new(pool)),
+        Arc::new(postgres_session_service(pool)),
         LoopConfig {
             max_steps: config.max_steps,
         },

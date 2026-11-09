@@ -8,13 +8,14 @@ pub mod session;
 pub mod stage;
 pub mod tool;
 
-pub use agent_loop::{AgentLoop, LoopConfig, LoopError, StageCompletion, TurnResult};
+pub use agent_loop::{AgentLoop, LoopConfig, LoopError, TurnResult};
 pub use context::{BuildOptions, ContextBuilder, ContextError, DefaultContextBuilder};
 pub use message::Message;
 pub use role::Role;
 pub use session::{
-    Session, SessionEvent, SessionEventKind, SessionId, SessionSummary, ToolStatus, TurnEndReason,
-    TurnId, UserMessageSource,
+    Session, SessionError, SessionEvent, SessionEventKind, SessionId, SessionService,
+    SessionSummary, StageCompletion, StoreSessionService, ToolStatus, TurnEndReason, TurnId,
+    UserMessageSource,
 };
 pub use stage::{ParseStageError, Stage};
 pub use tool::{Tool, ToolCall, ToolContext, ToolError, ToolOutput, ToolRegistry, ToolSpec};

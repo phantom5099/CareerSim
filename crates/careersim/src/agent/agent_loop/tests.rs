@@ -13,6 +13,9 @@ use crate::agent::Message;
 use crate::agent::Role;
 use crate::agent::Session;
 use crate::agent::SessionEventKind;
+use crate::agent::SessionService;
+use crate::agent::Stage;
+use crate::agent::StoreSessionService;
 use crate::agent::Tool;
 use crate::agent::ToolCall;
 use crate::agent::ToolContext;
@@ -34,7 +37,7 @@ use crate::store::MemorySessionStore;
 
 struct Harness {
     agent: AgentLoop,
-    store: Arc<MemorySessionStore>,
+    sessions: Arc<dyn SessionService>,
     llm: Arc<MockLlmClient>,
 }
 
@@ -44,15 +47,21 @@ fn harness(responses: Vec<ChatResponse>) -> Harness {
 
 fn harness_with(responses: Vec<ChatResponse>, tools: ToolRegistry, max_steps: usize) -> Harness {
     let llm = Arc::new(MockLlmClient::new(responses));
-    let store = Arc::new(MemorySessionStore::new());
+    let sessions = Arc::new(StoreSessionService::new(
+        Arc::new(MemorySessionStore::new()),
+    ));
     let agent = AgentLoop::new(
         llm.clone(),
         Arc::new(DefaultContextBuilder),
         Arc::new(tools),
-        store.clone(),
+        sessions.clone(),
         LoopConfig { max_steps },
     );
-    Harness { agent, store, llm }
+    Harness {
+        agent,
+        sessions,
+        llm,
+    }
 }
 
 fn reply(content: &str) -> ChatResponse {
@@ -100,8 +109,8 @@ async fn wait_for_requests(llm: &MockLlmClient, count: usize) {
 #[tokio::test]
 async fn creates_sessions_with_distinct_ids() {
     let harness = harness(Vec::new());
-    let first = harness.agent.create_session(Stage::HrScreen).await.unwrap();
-    let second = harness.agent.create_session(Stage::HrScreen).await.unwrap();
+    let first = harness.sessions.create(Stage::HrScreen).await.unwrap();
+    let second = harness.sessions.create(Stage::HrScreen).await.unwrap();
 
     assert_ne!(first.id, second.id);
     assert_eq!(first.events.len(), 1);
@@ -115,7 +124,7 @@ async fn creates_sessions_with_distinct_ids() {
 #[tokio::test]
 async fn plain_turn_records_lifecycle_and_usage() {
     let harness = harness(vec![reply("你好，先做个自我介绍吧。")]);
-    let session = harness.agent.create_session(Stage::HrScreen).await.unwrap();
+    let session = harness.sessions.create(Stage::HrScreen).await.unwrap();
 
     let result = harness
         .agent
@@ -128,7 +137,7 @@ async fn plain_turn_records_lifecycle_and_usage() {
     assert_eq!(result.output, "你好，先做个自我介绍吧。");
     assert!(result.error.is_none());
 
-    let session = harness.agent.load_session(session.id).await.unwrap();
+    let session = harness.sessions.load(session.id).await.unwrap();
     assert_eq!(
         turn_kinds(&session, TurnId(1)),
         vec![
@@ -169,7 +178,7 @@ async fn tool_calls_loop_until_text_reply() {
         tools,
         8,
     );
-    let session = harness.agent.create_session(Stage::Exam).await.unwrap();
+    let session = harness.sessions.create(Stage::Exam).await.unwrap();
 
     let result = harness
         .agent
@@ -181,7 +190,7 @@ async fn tool_calls_loop_until_text_reply() {
     assert_eq!(result.steps, 2);
     assert_eq!(result.output, "结果是 42。");
 
-    let session = harness.agent.load_session(session.id).await.unwrap();
+    let session = harness.sessions.load(session.id).await.unwrap();
     assert!(session.events.iter().any(|event| matches!(
         &event.kind,
         SessionEventKind::ToolResult {
@@ -208,11 +217,7 @@ async fn tool_calls_loop_until_text_reply() {
 #[tokio::test]
 async fn unknown_tool_becomes_error_result() {
     let harness = harness(vec![tool_reply("call_x", "missing", "{}"), reply("好的")]);
-    let session = harness
-        .agent
-        .create_session(Stage::TechInterview)
-        .await
-        .unwrap();
+    let session = harness.sessions.create(Stage::TechInterview).await.unwrap();
 
     let result = harness
         .agent
@@ -221,7 +226,7 @@ async fn unknown_tool_becomes_error_result() {
         .unwrap();
 
     assert_eq!(result.reason, TurnEndReason::Done);
-    let session = harness.agent.load_session(session.id).await.unwrap();
+    let session = harness.sessions.load(session.id).await.unwrap();
     assert!(session.events.iter().any(|event| matches!(
         &event.kind,
         SessionEventKind::ToolResult {
@@ -238,7 +243,7 @@ async fn max_steps_is_a_normal_result() {
     let mut tools = ToolRegistry::new();
     tools.register(Arc::new(FakeTool::new("lookup", "42")));
     let harness = harness_with(vec![tool_reply("call_1", "lookup", "{}")], tools, 1);
-    let session = harness.agent.create_session(Stage::Exam).await.unwrap();
+    let session = harness.sessions.create(Stage::Exam).await.unwrap();
 
     let result = harness
         .agent
@@ -250,7 +255,7 @@ async fn max_steps_is_a_normal_result() {
     assert_eq!(result.steps, 1);
     assert_eq!(harness.llm.requests().len(), 1);
 
-    let session = harness.agent.load_session(session.id).await.unwrap();
+    let session = harness.sessions.load(session.id).await.unwrap();
     assert!(matches!(
         session.events.last().unwrap().kind,
         SessionEventKind::TurnEnded {
@@ -264,7 +269,7 @@ async fn max_steps_is_a_normal_result() {
 #[tokio::test]
 async fn cancelled_before_turn_skips_model_and_user_message() {
     let harness = harness(Vec::new());
-    let session = harness.agent.create_session(Stage::HrScreen).await.unwrap();
+    let session = harness.sessions.create(Stage::HrScreen).await.unwrap();
     let cancel = CancellationToken::new();
     cancel.cancel();
 
@@ -278,7 +283,7 @@ async fn cancelled_before_turn_skips_model_and_user_message() {
     assert_eq!(result.steps, 0);
     assert!(harness.llm.requests().is_empty());
 
-    let session = harness.agent.load_session(session.id).await.unwrap();
+    let session = harness.sessions.load(session.id).await.unwrap();
     assert_eq!(session.events.len(), 3);
     assert!(matches!(
         session.events[1].kind,
@@ -299,14 +304,15 @@ async fn cancelled_before_turn_skips_model_and_user_message() {
 async fn cancellation_during_model_call_ends_turn_as_interrupted() {
     let llm = Arc::new(MockLlmClient::wait_for_cancel());
     let store = Arc::new(MemorySessionStore::new());
+    let sessions = Arc::new(StoreSessionService::new(store.clone()));
     let agent = Arc::new(AgentLoop::new(
         llm.clone(),
         Arc::new(DefaultContextBuilder),
         Arc::new(ToolRegistry::new()),
-        store.clone(),
+        sessions.clone(),
         LoopConfig { max_steps: 8 },
     ));
-    let session = agent.create_session(Stage::HrScreen).await.unwrap();
+    let session = sessions.create(Stage::HrScreen).await.unwrap();
     let cancel = CancellationToken::new();
 
     let handle = tokio::spawn({
@@ -323,7 +329,7 @@ async fn cancellation_during_model_call_ends_turn_as_interrupted() {
     assert_eq!(result.reason, TurnEndReason::Interrupted);
     assert_eq!(result.steps, 0);
 
-    let session = agent.load_session(session.id).await.unwrap();
+    let session = sessions.load(session.id).await.unwrap();
     assert!(matches!(
         session.events.last().unwrap().kind,
         SessionEventKind::TurnEnded {
@@ -336,7 +342,7 @@ async fn cancellation_during_model_call_ends_turn_as_interrupted() {
 #[tokio::test]
 async fn empty_response_is_an_error() {
     let harness = harness(vec![reply("")]);
-    let session = harness.agent.create_session(Stage::HrScreen).await.unwrap();
+    let session = harness.sessions.create(Stage::HrScreen).await.unwrap();
 
     let result = harness
         .agent
@@ -348,7 +354,7 @@ async fn empty_response_is_an_error() {
     assert_eq!(result.steps, 1);
     assert_eq!(result.error.as_deref(), Some("empty response"));
 
-    let session = harness.agent.load_session(session.id).await.unwrap();
+    let session = harness.sessions.load(session.id).await.unwrap();
     assert_eq!(
         session.events.last().unwrap().kind,
         SessionEventKind::TurnEnded {
@@ -366,14 +372,15 @@ async fn model_error_keeps_partial_events() {
         "boom".to_owned(),
     ))]));
     let store = Arc::new(MemorySessionStore::new());
+    let sessions = Arc::new(StoreSessionService::new(store));
     let agent = AgentLoop::new(
         llm,
         Arc::new(DefaultContextBuilder),
         Arc::new(ToolRegistry::new()),
-        store,
+        sessions.clone(),
         LoopConfig { max_steps: 8 },
     );
-    let session = agent.create_session(Stage::HrScreen).await.unwrap();
+    let session = sessions.create(Stage::HrScreen).await.unwrap();
 
     let result = agent
         .run_turn(session.id, "你好", CancellationToken::new())
@@ -384,7 +391,7 @@ async fn model_error_keeps_partial_events() {
     assert_eq!(result.steps, 0);
     assert!(result.error.as_deref().unwrap().contains("boom"));
 
-    let session = agent.load_session(session.id).await.unwrap();
+    let session = sessions.load(session.id).await.unwrap();
     assert!(matches!(
         session.events[1].kind,
         SessionEventKind::TurnStarted { .. }
@@ -406,8 +413,8 @@ async fn model_error_keeps_partial_events() {
 #[tokio::test]
 async fn busy_session_rejects_second_turn_and_finish_stage() {
     let harness = harness(vec![reply("ok"), reply("ok")]);
-    let first = harness.agent.create_session(Stage::HrScreen).await.unwrap();
-    let second = harness.agent.create_session(Stage::HrScreen).await.unwrap();
+    let first = harness.sessions.create(Stage::HrScreen).await.unwrap();
+    let second = harness.sessions.create(Stage::HrScreen).await.unwrap();
 
     let lock = harness.agent.session_lock(first.id);
     let guard = lock.lock().await;
@@ -443,7 +450,7 @@ async fn busy_session_rejects_second_turn_and_finish_stage() {
 #[tokio::test]
 async fn finish_stage_advances_without_model_call() {
     let harness = harness(vec![reply("HR 回复"), reply("笔试回复")]);
-    let session = harness.agent.create_session(Stage::HrScreen).await.unwrap();
+    let session = harness.sessions.create(Stage::HrScreen).await.unwrap();
     harness
         .agent
         .run_turn(session.id, "你好", CancellationToken::new())
@@ -456,7 +463,7 @@ async fn finish_stage_advances_without_model_call() {
     assert_eq!(completion.turn_id, TurnId(2));
     assert_eq!(harness.llm.requests().len(), requests_before);
 
-    let session = harness.agent.load_session(session.id).await.unwrap();
+    let session = harness.sessions.load(session.id).await.unwrap();
     assert_eq!(session.stage, Stage::Exam);
     assert_eq!(session.role(), Role::ExamAuthor);
     assert_eq!(
@@ -498,7 +505,7 @@ async fn finish_stage_advances_without_model_call() {
 #[tokio::test]
 async fn review_stage_cannot_advance_but_can_chat() {
     let harness = harness(vec![reply("复盘回复")]);
-    let session = harness.agent.create_session(Stage::Review).await.unwrap();
+    let session = harness.sessions.create(Stage::Review).await.unwrap();
     let events_before = session.events.len();
 
     assert!(matches!(
@@ -506,7 +513,7 @@ async fn review_stage_cannot_advance_but_can_chat() {
         Err(LoopError::NoNextStage)
     ));
 
-    let session = harness.agent.load_session(session.id).await.unwrap();
+    let session = harness.sessions.load(session.id).await.unwrap();
     assert_eq!(session.stage, Stage::Review);
     assert_eq!(session.events.len(), events_before);
 
@@ -527,11 +534,11 @@ async fn review_stage_cannot_advance_but_can_chat() {
 #[tokio::test]
 async fn dangling_turn_is_repaired_before_new_turn() {
     let harness = harness(vec![reply("ok")]);
-    let session = harness.agent.create_session(Stage::HrScreen).await.unwrap();
+    let mut session = harness.sessions.create(Stage::HrScreen).await.unwrap();
     harness
-        .store
+        .sessions
         .append(
-            session.id,
+            &mut session,
             &[SessionEventKind::TurnStarted { turn_id: TurnId(1) }],
         )
         .await
@@ -544,7 +551,7 @@ async fn dangling_turn_is_repaired_before_new_turn() {
         .unwrap();
     assert_eq!(result.turn_id, TurnId(2));
 
-    let session = harness.agent.load_session(session.id).await.unwrap();
+    let session = harness.sessions.load(session.id).await.unwrap();
     assert!(session.events.iter().any(|event| matches!(
         &event.kind,
         SessionEventKind::TurnEnded {
@@ -560,11 +567,11 @@ async fn dangling_turn_is_repaired_before_new_turn() {
 
 #[tokio::test]
 async fn context_fills_missing_tool_results_and_ignores_orphans() {
-    let store = MemorySessionStore::new();
-    let session = store.create(Stage::HrScreen).await.unwrap();
-    store
+    let sessions = StoreSessionService::new(Arc::new(MemorySessionStore::new()));
+    let mut session = sessions.create(Stage::HrScreen).await.unwrap();
+    sessions
         .append(
-            session.id,
+            &mut session,
             &[
                 SessionEventKind::TurnStarted { turn_id: TurnId(1) },
                 SessionEventKind::UserMessage {
@@ -606,7 +613,7 @@ async fn context_fills_missing_tool_results_and_ignores_orphans() {
         .await
         .unwrap();
 
-    let session = store.load(session.id).await.unwrap();
+    let session = sessions.load(session.id).await.unwrap();
     let request = DefaultContextBuilder
         .build(&session, &[], BuildOptions::default())
         .await
@@ -673,15 +680,16 @@ impl Tool for BlockingTool {
 async fn in_flight_turn_rejects_same_session_but_other_sessions_run() {
     let llm = Arc::new(MockLlmClient::wait_once_then(vec![reply("第二个会话")]));
     let store = Arc::new(MemorySessionStore::new());
+    let sessions = Arc::new(StoreSessionService::new(store));
     let agent = Arc::new(AgentLoop::new(
         llm.clone(),
         Arc::new(DefaultContextBuilder),
         Arc::new(ToolRegistry::new()),
-        store,
+        sessions.clone(),
         LoopConfig { max_steps: 8 },
     ));
-    let busy = agent.create_session(Stage::HrScreen).await.unwrap();
-    let other = agent.create_session(Stage::HrScreen).await.unwrap();
+    let busy = sessions.create(Stage::HrScreen).await.unwrap();
+    let other = sessions.create(Stage::HrScreen).await.unwrap();
     let cancel = CancellationToken::new();
 
     let handle = tokio::spawn({
@@ -720,14 +728,17 @@ async fn in_flight_turn_rejects_same_session_but_other_sessions_run() {
 #[tokio::test]
 async fn api_error_after_cancel_is_reported_as_interrupted() {
     let llm = Arc::new(MockLlmClient::wait_for_cancel_api());
+    let sessions = Arc::new(StoreSessionService::new(
+        Arc::new(MemorySessionStore::new()),
+    ));
     let agent = Arc::new(AgentLoop::new(
         llm.clone(),
         Arc::new(DefaultContextBuilder),
         Arc::new(ToolRegistry::new()),
-        Arc::new(MemorySessionStore::new()),
+        sessions.clone(),
         LoopConfig { max_steps: 8 },
     ));
-    let session = agent.create_session(Stage::HrScreen).await.unwrap();
+    let session = sessions.create(Stage::HrScreen).await.unwrap();
     let cancel = CancellationToken::new();
 
     let handle = tokio::spawn({
@@ -745,7 +756,7 @@ async fn api_error_after_cancel_is_reported_as_interrupted() {
     assert_eq!(result.steps, 0);
     assert!(result.error.is_none());
 
-    let session = agent.load_session(session.id).await.unwrap();
+    let session = sessions.load(session.id).await.unwrap();
     assert_eq!(
         session.events.last().unwrap().kind,
         SessionEventKind::TurnEnded {
@@ -760,11 +771,11 @@ async fn api_error_after_cancel_is_reported_as_interrupted() {
 #[tokio::test]
 async fn finish_stage_repairs_dangling_turn_before_advancing() {
     let harness = harness(Vec::new());
-    let session = harness.agent.create_session(Stage::HrScreen).await.unwrap();
+    let mut session = harness.sessions.create(Stage::HrScreen).await.unwrap();
     harness
-        .store
+        .sessions
         .append(
-            session.id,
+            &mut session,
             &[SessionEventKind::TurnStarted { turn_id: TurnId(1) }],
         )
         .await
@@ -775,7 +786,7 @@ async fn finish_stage_repairs_dangling_turn_before_advancing() {
     assert_eq!(completion.turn_id, TurnId(2));
     assert!(harness.llm.requests().is_empty());
 
-    let session = harness.agent.load_session(session.id).await.unwrap();
+    let session = harness.sessions.load(session.id).await.unwrap();
     assert_eq!(
         session.events[session.events.len() - 4..]
             .iter()
@@ -806,11 +817,11 @@ async fn finish_stage_repairs_dangling_turn_before_advancing() {
 #[tokio::test]
 async fn finish_stage_repairs_dangling_turn_at_review_but_does_not_advance() {
     let harness = harness(Vec::new());
-    let session = harness.agent.create_session(Stage::Review).await.unwrap();
+    let mut session = harness.sessions.create(Stage::Review).await.unwrap();
     harness
-        .store
+        .sessions
         .append(
-            session.id,
+            &mut session,
             &[SessionEventKind::TurnStarted { turn_id: TurnId(1) }],
         )
         .await
@@ -821,7 +832,7 @@ async fn finish_stage_repairs_dangling_turn_at_review_but_does_not_advance() {
         Err(LoopError::NoNextStage)
     ));
 
-    let session = harness.agent.load_session(session.id).await.unwrap();
+    let session = harness.sessions.load(session.id).await.unwrap();
     assert_eq!(session.stage, Stage::Review);
     assert!(session.dangling_turn().is_none());
     assert_eq!(
@@ -854,14 +865,17 @@ async fn cancellation_during_tool_wins_over_max_steps() {
         },
         entered: entered.clone(),
     }));
+    let sessions = Arc::new(StoreSessionService::new(
+        Arc::new(MemorySessionStore::new()),
+    ));
     let agent = Arc::new(AgentLoop::new(
         llm.clone(),
         Arc::new(DefaultContextBuilder),
         Arc::new(tools),
-        Arc::new(MemorySessionStore::new()),
+        sessions.clone(),
         LoopConfig { max_steps: 1 },
     ));
-    let session = agent.create_session(Stage::Exam).await.unwrap();
+    let session = sessions.create(Stage::Exam).await.unwrap();
     let cancel = CancellationToken::new();
 
     let handle = tokio::spawn({
@@ -879,7 +893,7 @@ async fn cancellation_during_tool_wins_over_max_steps() {
     assert_eq!(result.reason, TurnEndReason::Interrupted);
     assert_eq!(result.steps, 1);
 
-    let session = agent.load_session(session.id).await.unwrap();
+    let session = sessions.load(session.id).await.unwrap();
     assert!(session.events.iter().any(|event| matches!(
         &event.kind,
         SessionEventKind::ToolResult {

@@ -2,17 +2,18 @@
 
 use std::sync::Arc;
 
+use careersim::agent::SessionError;
 use careersim::agent::SessionEventKind;
+use careersim::agent::SessionService;
 use careersim::agent::Stage;
+use careersim::agent::StoreSessionService;
 use careersim::agent::TurnEndReason;
 use careersim::agent::TurnId;
 use careersim::agent::UserMessageSource;
-use careersim::store::PostgresSessionStore;
-use careersim::store::SessionStore;
-use careersim::store::StoreError;
+use careersim::postgres_session_service;
 use sqlx::postgres::PgPoolOptions;
 
-async fn store() -> Option<PostgresSessionStore> {
+async fn service() -> Option<StoreSessionService> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
         return None;
     };
@@ -25,17 +26,17 @@ async fn store() -> Option<PostgresSessionStore> {
         .run(&pool)
         .await
         .expect("run migrations");
-    Some(PostgresSessionStore::new(pool))
+    Some(postgres_session_service(pool))
 }
 
 #[tokio::test]
 async fn create_load_list_delete_roundtrip() {
-    let Some(store) = store().await else {
+    let Some(sessions) = service().await else {
         return;
     };
-    let session = store.create(Stage::Exam).await.unwrap();
+    let session = sessions.create(Stage::Exam).await.unwrap();
 
-    let loaded = store.load(session.id).await.unwrap();
+    let loaded = sessions.load(session.id).await.unwrap();
     assert_eq!(loaded.id, session.id);
     assert_eq!(loaded.stage, Stage::Exam);
     assert_eq!(loaded.events.len(), 1);
@@ -48,26 +49,26 @@ async fn create_load_list_delete_roundtrip() {
     assert_eq!(loaded.last_seq, 0);
     assert_eq!(loaded.last_turn_id, TurnId(0));
 
-    let summaries = store.list(100).await.unwrap();
+    let summaries = sessions.list(100).await.unwrap();
     assert!(summaries.iter().any(|summary| summary.id == session.id));
 
-    store.delete(session.id).await.unwrap();
+    sessions.delete(session.id).await.unwrap();
     assert!(matches!(
-        store.load(session.id).await,
-        Err(StoreError::NotFound)
+        sessions.load(session.id).await,
+        Err(SessionError::NotFound)
     ));
 }
 
 #[tokio::test]
 async fn append_allocates_seq_and_advances_stage() {
-    let Some(store) = store().await else {
+    let Some(sessions) = service().await else {
         return;
     };
-    let session = store.create(Stage::HrScreen).await.unwrap();
+    let mut session = sessions.create(Stage::HrScreen).await.unwrap();
 
-    let events = store
+    sessions
         .append(
-            session.id,
+            &mut session,
             &[
                 SessionEventKind::TurnStarted { turn_id: TurnId(1) },
                 SessionEventKind::UserMessage {
@@ -93,13 +94,18 @@ async fn append_allocates_seq_and_advances_stage() {
         .unwrap();
 
     assert_eq!(
-        events.iter().map(|event| event.seq).collect::<Vec<_>>(),
-        vec![1, 2, 3, 4]
+        session
+            .events
+            .iter()
+            .map(|event| event.seq)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2, 3, 4]
     );
 
-    let transition = store
+    let mut stale = session.clone();
+    sessions
         .append(
-            session.id,
+            &mut session,
             &[
                 SessionEventKind::TurnStarted { turn_id: TurnId(2) },
                 SessionEventKind::TurnEnded {
@@ -117,20 +123,23 @@ async fn append_allocates_seq_and_advances_stage() {
         .await
         .unwrap();
     assert_eq!(
-        transition.iter().map(|event| event.seq).collect::<Vec<_>>(),
+        session.events[5..]
+            .iter()
+            .map(|event| event.seq)
+            .collect::<Vec<_>>(),
         vec![5, 6, 7]
     );
 
-    let loaded = store.load(session.id).await.unwrap();
+    let loaded = sessions.load(session.id).await.unwrap();
     assert_eq!(loaded.stage, Stage::Exam);
     assert_eq!(loaded.last_seq, 7);
     assert_eq!(loaded.last_turn_id, TurnId(2));
     assert_eq!(loaded.events.len(), 8);
 
-    // 旧阶段不能再被结束。
-    let stale = store
+    // 旧投影尝试结束旧阶段，由 CAS 拒绝。
+    let conflict = sessions
         .append(
-            session.id,
+            &mut stale,
             &[SessionEventKind::StageCompleted {
                 turn_id: TurnId(3),
                 stage: Stage::HrScreen,
@@ -138,36 +147,37 @@ async fn append_allocates_seq_and_advances_stage() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(stale, StoreError::InvalidEvent(_)));
+    assert!(matches!(conflict, SessionError::Conflict));
 
-    let loaded = store.load(session.id).await.unwrap();
+    let loaded = sessions.load(session.id).await.unwrap();
     assert_eq!(loaded.stage, Stage::Exam);
 
-    store.delete(session.id).await.unwrap();
+    sessions.delete(session.id).await.unwrap();
 }
 
 #[tokio::test]
 async fn append_rejects_invalid_batches() {
-    let Some(store) = store().await else {
+    let Some(sessions) = service().await else {
         return;
     };
-    let session = store.create(Stage::HrScreen).await.unwrap();
+    let mut session = sessions.create(Stage::HrScreen).await.unwrap();
+    let id = session.id;
 
-    let meta = store
+    let meta = sessions
         .append(
-            session.id,
+            &mut session,
             &[SessionEventKind::SessionMeta {
-                session_id: session.id,
+                session_id: id,
                 stage: Stage::Exam,
             }],
         )
         .await
         .unwrap_err();
-    assert!(matches!(meta, StoreError::InvalidEvent(_)));
+    assert!(matches!(meta, SessionError::InvalidEvent(_)));
 
-    let not_last = store
+    let not_last = sessions
         .append(
-            session.id,
+            &mut session,
             &[
                 SessionEventKind::StageCompleted {
                     turn_id: TurnId(1),
@@ -178,12 +188,12 @@ async fn append_rejects_invalid_batches() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(not_last, StoreError::InvalidEvent(_)));
+    assert!(matches!(not_last, SessionError::InvalidEvent(_)));
 
-    let review = store.create(Stage::Review).await.unwrap();
-    let final_stage = store
+    let mut review = sessions.create(Stage::Review).await.unwrap();
+    let final_stage = sessions
         .append(
-            review.id,
+            &mut review,
             &[SessionEventKind::StageCompleted {
                 turn_id: TurnId(1),
                 stage: Stage::Review,
@@ -191,49 +201,56 @@ async fn append_rejects_invalid_batches() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(final_stage, StoreError::InvalidEvent(_)));
+    assert!(matches!(final_stage, SessionError::InvalidEvent(_)));
 
-    store.delete(session.id).await.unwrap();
-    store.delete(review.id).await.unwrap();
+    sessions.delete(session.id).await.unwrap();
+    sessions.delete(review.id).await.unwrap();
 }
 
 #[tokio::test]
-async fn concurrent_appends_receive_unique_contiguous_seq() {
-    let Some(store) = store().await else {
+async fn concurrent_appends_receive_conflict_for_stale_writer() {
+    let Some(sessions) = service().await else {
         return;
     };
-    let store = Arc::new(store);
-    let session = store.create(Stage::HrScreen).await.unwrap();
+    let sessions = Arc::new(sessions);
+    let session = sessions.create(Stage::HrScreen).await.unwrap();
+
+    let mut first_session = sessions.load(session.id).await.unwrap();
+    let mut second_session = sessions.load(session.id).await.unwrap();
 
     let first = {
-        let store = store.clone();
-        let id = session.id;
+        let sessions = sessions.clone();
         tokio::spawn(async move {
-            store
-                .append(id, &[SessionEventKind::TurnStarted { turn_id: TurnId(1) }])
+            sessions
+                .append(
+                    &mut first_session,
+                    &[SessionEventKind::TurnStarted { turn_id: TurnId(1) }],
+                )
                 .await
         })
     };
     let second = {
-        let store = store.clone();
-        let id = session.id;
+        let sessions = sessions.clone();
         tokio::spawn(async move {
-            store
-                .append(id, &[SessionEventKind::TurnStarted { turn_id: TurnId(2) }])
+            sessions
+                .append(
+                    &mut second_session,
+                    &[SessionEventKind::TurnStarted { turn_id: TurnId(2) }],
+                )
                 .await
         })
     };
 
-    let mut seqs = vec![
-        first.await.unwrap().unwrap()[0].seq,
-        second.await.unwrap().unwrap()[0].seq,
-    ];
-    seqs.sort_unstable();
-    assert_eq!(seqs, vec![1, 2]);
+    let first = first.await.unwrap();
+    let second = second.await.unwrap();
+    assert!(matches!(
+        (first.is_ok(), second.is_ok()),
+        (true, false) | (false, true)
+    ));
 
-    let loaded = store.load(session.id).await.unwrap();
-    assert_eq!(loaded.last_seq, 2);
-    assert_eq!(loaded.last_turn_id, TurnId(2));
+    let loaded = sessions.load(session.id).await.unwrap();
+    assert_eq!(loaded.last_seq, 1);
+    assert_eq!(loaded.events.len(), 2);
 
-    store.delete(session.id).await.unwrap();
+    sessions.delete(session.id).await.unwrap();
 }
