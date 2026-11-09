@@ -41,3 +41,33 @@
 求职这件事，运气占一部分，流程不熟占一部分，剩下才是能力。CareerSim 想帮你把前两部分先练掉。
 
 有想法、有真实招聘里的奇葩经历，欢迎来 Issues 聊聊。
+
+## 本地运行（演示模式）
+
+需要 Rust 1.99+ 与 Bun 1.4+。当前实现包含 AgentLoop、HTTP 服务与登录闭环；公司、岗位、投递等业务接口仍在后续阶段补齐。
+
+```bash
+# 终端一：后端，默认监听 127.0.0.1:3000
+cargo run -p careersim-server
+
+# 终端二：前端，开发服务器监听 5175，/api 代理到 3000
+cd frontend
+bun install
+bun run dev
+```
+
+打开 <http://localhost:5175>，使用演示账号 `admin` / `123456` 登录。登录页也提供“一键体验”。
+
+后端默认 `APP_MODE=demo`，演示账号只在 demo 模式下加载；`APP_MODE=live` 时不会读取 `DEMO_USERNAME` / `DEMO_PASSWORD`，登录接口返回 `AUTH_UNAVAILABLE`。完整配置项见 [.env.example](.env.example)。
+
+常用检查：
+
+```bash
+cargo fmt --all --check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+
+cd frontend
+bun run typecheck
+bun run build
+```
