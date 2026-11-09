@@ -102,7 +102,7 @@ impl LlmClient for MockLlmClient {
         if let Some(api_error) = wait {
             cancel.cancelled().await;
             return Err(if api_error {
-                LlmError::Api("request cancelled".to_owned())
+                LlmError::api("request cancelled")
             } else {
                 LlmError::Cancelled
             });
@@ -112,6 +112,6 @@ impl LlmClient for MockLlmClient {
         state
             .responses
             .pop_front()
-            .unwrap_or_else(|| Err(LlmError::Api("no scripted response left".to_owned())))
+            .unwrap_or_else(|| Err(LlmError::api("no scripted response left")))
     }
 }

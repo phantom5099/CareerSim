@@ -18,6 +18,7 @@ use super::ToolRegistry;
 use super::ToolStatus;
 use super::TurnEndReason;
 use super::TurnId;
+use crate::error::error_chain;
 use crate::llm::LlmClient;
 use crate::llm::LlmError;
 
@@ -38,24 +39,10 @@ pub struct TurnResult {
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoopError {
-    #[error("session not found")]
-    SessionNotFound,
     #[error("session is busy")]
     SessionBusy,
-    #[error("current stage has no next stage")]
-    NoNextStage,
     #[error(transparent)]
-    Session(SessionError),
-}
-
-impl From<SessionError> for LoopError {
-    fn from(err: SessionError) -> Self {
-        match err {
-            SessionError::NotFound => Self::SessionNotFound,
-            SessionError::NoNextStage => Self::NoNextStage,
-            other => Self::Session(other),
-        }
-    }
+    Session(#[from] SessionError),
 }
 
 pub struct AgentLoop {
@@ -171,7 +158,7 @@ impl AgentLoop {
                             TurnEndReason::Error,
                             steps,
                             output,
-                            Some(err.to_string()),
+                            Some(error_chain(&err)),
                         )
                         .await;
                 }
@@ -211,7 +198,7 @@ impl AgentLoop {
                             TurnEndReason::Error,
                             steps,
                             output,
-                            Some(err.to_string()),
+                            Some(error_chain(&err)),
                         )
                         .await;
                 }
@@ -305,7 +292,8 @@ impl AgentLoop {
         .await
     }
 
-    /// 结束当前阶段并推进到下一阶段；`Stage::Review` 没有下一阶段，返回 `NoNextStage`。
+    /// 结束当前阶段并推进到下一阶段；`Stage::Review` 没有下一阶段，返回
+    /// `SessionError::NoNextStage`。
     pub async fn finish_stage(&self, id: SessionId) -> Result<StageCompletion, LoopError> {
         let lock = self.session_lock(id);
         let _guard = match lock.try_lock() {

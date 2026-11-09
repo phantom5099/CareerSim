@@ -275,8 +275,10 @@ impl SessionStore for PostgresSessionStore {
 
         for (index, kind) in batch.events.iter().enumerate() {
             let seq = first_seq + index as u64;
-            let seq_i64 = i64::try_from(seq)
-                .map_err(|_| StoreError::Backend("event seq overflow".to_owned()))?;
+            let seq_i64 = i64::try_from(seq).map_err(|_| StoreError::Backend {
+                message: "event seq overflow".to_owned(),
+                source: None,
+            })?;
 
             sqlx::query(
                 "INSERT INTO session_events (session_id, seq, v, at, kind) \
@@ -300,8 +302,10 @@ impl SessionStore for PostgresSessionStore {
         }
 
         let new_last_seq = first_seq + batch.events.len() as u64 - 1;
-        let new_last_seq = i64::try_from(new_last_seq)
-            .map_err(|_| StoreError::Backend("event seq overflow".to_owned()))?;
+        let new_last_seq = i64::try_from(new_last_seq).map_err(|_| StoreError::Backend {
+            message: "event seq overflow".to_owned(),
+            source: None,
+        })?;
         let new_last_turn_id =
             i64::try_from(to_u64(last_turn_id, "last_turn_id")?.max(batch.last_turn_id))
                 .unwrap_or(i64::MAX);

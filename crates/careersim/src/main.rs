@@ -8,6 +8,7 @@ use careersim::agent::DefaultContextBuilder;
 use careersim::agent::LoopConfig;
 use careersim::agent::ToolRegistry;
 use careersim::config::AppConfig;
+use careersim::error::error_chain;
 use careersim::llm::OpenAiCompatibleClient;
 use careersim::postgres_session_service;
 use sqlx::postgres::PgPoolOptions;
@@ -25,7 +26,10 @@ async fn main() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(err) => {
             // 错误文本可能来自 sqlx 或 reqwest，不原样输出连接串。
-            tracing::error!(error = %redact_secrets(&err.to_string()), "startup failed");
+            tracing::error!(
+                error = %redact_secrets(&error_chain(err.as_ref())),
+                "startup failed"
+            );
             std::process::ExitCode::FAILURE
         }
     }

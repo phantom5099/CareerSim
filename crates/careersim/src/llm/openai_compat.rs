@@ -66,7 +66,7 @@ impl OpenAiCompatibleClient {
 
         builder
             .build()
-            .map_err(|err| LlmError::Api(format!("build request: {err}")))
+            .map_err(|err| LlmError::api_with_source("build request", err))
     }
 }
 
@@ -84,7 +84,7 @@ impl LlmClient for OpenAiCompatibleClient {
             biased;
             () = cancel.cancelled() => return Err(LlmError::Cancelled),
             result = chat.create(request) => {
-                result.map_err(|err| LlmError::Api(err.to_string()))?
+                result.map_err(|err| LlmError::api_with_source("send request", err))?
             }
         };
 
@@ -92,7 +92,7 @@ impl LlmClient for OpenAiCompatibleClient {
             .choices
             .into_iter()
             .next()
-            .ok_or_else(|| LlmError::Api("response contains no choices".to_owned()))?;
+            .ok_or_else(|| LlmError::api("response contains no choices"))?;
 
         let mut tool_calls = Vec::new();
         for call in choice.message.tool_calls.unwrap_or_default() {
@@ -103,9 +103,7 @@ impl LlmClient for OpenAiCompatibleClient {
                     arguments: call.function.arguments,
                 }),
                 ChatCompletionMessageToolCalls::Custom(_) => {
-                    return Err(LlmError::Api(
-                        "custom tool calls are not supported".to_owned(),
-                    ));
+                    return Err(LlmError::api("custom tool calls are not supported"));
                 }
             }
         }

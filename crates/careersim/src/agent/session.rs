@@ -228,8 +228,31 @@ pub enum SessionError {
     Corrupt(String),
     #[error("invalid event batch: {0}")]
     InvalidEvent(String),
-    #[error("store backend error: {0}")]
-    Backend(String),
+    #[error("store backend error: {message}")]
+    Backend {
+        message: String,
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+}
+
+impl SessionError {
+    fn backend(message: impl Into<String>) -> Self {
+        Self::Backend {
+            message: message.into(),
+            source: None,
+        }
+    }
+
+    fn backend_with_source(
+        message: impl Into<String>,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::Backend {
+            message: message.into(),
+            source: Some(Box::new(source)),
+        }
+    }
 }
 
 impl From<StoreError> for SessionError {
@@ -238,7 +261,7 @@ impl From<StoreError> for SessionError {
             StoreError::NotFound => Self::NotFound,
             StoreError::Conflict => Self::Conflict,
             StoreError::Corrupt(message) => Self::Corrupt(message),
-            StoreError::Backend(message) => Self::Backend(message),
+            StoreError::Backend { message, source } => Self::Backend { message, source },
         }
     }
 }
@@ -530,7 +553,7 @@ impl SessionService for StoreSessionService {
                 stage,
             };
             let payload = serde_json::to_value(&meta)
-                .map_err(|err| SessionError::Backend(format!("encode session_meta: {err}")))?;
+                .map_err(|err| SessionError::backend_with_source("encode session_meta", err))?;
 
             match self
                 .store
@@ -543,8 +566,8 @@ impl SessionService for StoreSessionService {
             }
         }
 
-        Err(SessionError::Backend(
-            "could not allocate a unique session id".to_owned(),
+        Err(SessionError::backend(
+            "could not allocate a unique session id",
         ))
     }
 
@@ -581,7 +604,7 @@ impl SessionService for StoreSessionService {
             .iter()
             .map(serde_json::to_value)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| SessionError::Backend(format!("encode event: {err}")))?;
+            .map_err(|err| SessionError::backend_with_source("encode event", err))?;
 
         let stored = self
             .store

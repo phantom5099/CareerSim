@@ -28,12 +28,35 @@ pub struct TokenUsage {
     pub output_tokens: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum LlmError {
     #[error("request cancelled")]
     Cancelled,
-    #[error("model request failed: {0}")]
-    Api(String),
+    #[error("model request failed: {message}")]
+    Api {
+        message: String,
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+}
+
+impl LlmError {
+    pub fn api(message: impl Into<String>) -> Self {
+        Self::Api {
+            message: message.into(),
+            source: None,
+        }
+    }
+
+    pub fn api_with_source(
+        message: impl Into<String>,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::Api {
+            message: message.into(),
+            source: Some(Box::new(source)),
+        }
+    }
 }
 
 #[async_trait]

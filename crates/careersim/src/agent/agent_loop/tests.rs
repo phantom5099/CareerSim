@@ -368,8 +368,8 @@ async fn empty_response_is_an_error() {
 
 #[tokio::test]
 async fn model_error_keeps_partial_events() {
-    let llm = Arc::new(MockLlmClient::from_results(vec![Err(LlmError::Api(
-        "boom".to_owned(),
+    let llm = Arc::new(MockLlmClient::from_results(vec![Err(LlmError::api(
+        "boom",
     ))]));
     let store = Arc::new(MemorySessionStore::new());
     let sessions = Arc::new(StoreSessionService::new(store));
@@ -510,7 +510,7 @@ async fn review_stage_cannot_advance_but_can_chat() {
 
     assert!(matches!(
         harness.agent.finish_stage(session.id).await,
-        Err(LoopError::NoNextStage)
+        Err(LoopError::Session(SessionError::NoNextStage))
     ));
 
     let session = harness.sessions.load(session.id).await.unwrap();
@@ -829,7 +829,7 @@ async fn finish_stage_repairs_dangling_turn_at_review_but_does_not_advance() {
 
     assert!(matches!(
         harness.agent.finish_stage(session.id).await,
-        Err(LoopError::NoNextStage)
+        Err(LoopError::Session(SessionError::NoNextStage))
     ));
 
     let session = harness.sessions.load(session.id).await.unwrap();

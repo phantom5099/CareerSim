@@ -79,7 +79,7 @@ pub(crate) trait SessionStore: Send + Sync {
     ) -> Result<Vec<StoredEvent>, StoreError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum StoreError {
     #[error("session not found")]
     NotFound,
@@ -87,14 +87,24 @@ pub(crate) enum StoreError {
     Conflict,
     #[error("corrupt session: {0}")]
     Corrupt(String),
-    #[error("store backend error: {0}")]
-    Backend(String),
+    #[error("store backend error: {message}")]
+    Backend {
+        message: String,
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
 }
 
 pub(crate) fn to_u64(value: i64, field: &str) -> Result<u64, StoreError> {
     u64::try_from(value).map_err(|_| StoreError::Corrupt(format!("{field} is negative: {value}")))
 }
 
-pub(crate) fn backend(operation: &str, err: impl std::fmt::Display) -> StoreError {
-    StoreError::Backend(format!("{operation}: {err}"))
+pub(crate) fn backend(
+    operation: &str,
+    err: impl std::error::Error + Send + Sync + 'static,
+) -> StoreError {
+    StoreError::Backend {
+        message: operation.to_owned(),
+        source: Some(Box::new(err)),
+    }
 }
