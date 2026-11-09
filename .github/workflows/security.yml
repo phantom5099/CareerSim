@@ -11,6 +11,7 @@ on:
       # 只在这些文件变化时重跑，依赖没变时扫描结果不会变化。
       - Cargo.lock
       - Cargo.toml
+      - crates/**/Cargo.toml
       - deny.toml
       - .github/workflows/security.yml
   workflow_dispatch:
