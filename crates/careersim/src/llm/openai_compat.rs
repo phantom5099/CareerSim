@@ -20,7 +20,6 @@ use super::client::LlmClient;
 use super::client::LlmError;
 use super::client::TokenUsage;
 use crate::agent::Message;
-use crate::agent::MessageRole;
 use crate::agent::ToolCall;
 use crate::agent::ToolSpec;
 use crate::config::LlmConfig;
@@ -46,7 +45,7 @@ impl OpenAiCompatibleClient {
             .messages
             .into_iter()
             .map(to_sdk_message)
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Vec<_>>();
 
         let mut builder = CreateChatCompletionRequestArgs::default();
         builder
@@ -122,25 +121,29 @@ impl LlmClient for OpenAiCompatibleClient {
     }
 }
 
-fn to_sdk_message(message: Message) -> Result<ChatCompletionRequestMessage, LlmError> {
-    Ok(match message.role {
-        MessageRole::System => {
+fn to_sdk_message(message: Message) -> ChatCompletionRequestMessage {
+    match message {
+        Message::System { content } => {
             ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage {
-                content: ChatCompletionRequestSystemMessageContent::Text(message.content),
+                content: ChatCompletionRequestSystemMessageContent::Text(content),
                 name: None,
             })
         }
-        MessageRole::User => ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
-            content: ChatCompletionRequestUserMessageContent::Text(message.content),
-            name: None,
-        }),
-        MessageRole::Assistant => {
-            let tool_calls = if message.tool_calls.is_empty() {
+        Message::User { content } => {
+            ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
+                content: ChatCompletionRequestUserMessageContent::Text(content),
+                name: None,
+            })
+        }
+        Message::Assistant {
+            content,
+            tool_calls,
+        } => {
+            let tool_calls = if tool_calls.is_empty() {
                 None
             } else {
                 Some(
-                    message
-                        .tool_calls
+                    tool_calls
                         .into_iter()
                         .map(|call| {
                             ChatCompletionMessageToolCalls::Function(
@@ -158,12 +161,10 @@ fn to_sdk_message(message: Message) -> Result<ChatCompletionRequestMessage, LlmE
             };
 
             // 只发起工具调用时，OpenAI 期望 assistant 的 content 为空。
-            let content = if message.content.is_empty() && tool_calls.is_some() {
+            let content = if content.is_empty() && tool_calls.is_some() {
                 None
             } else {
-                Some(ChatCompletionRequestAssistantMessageContent::Text(
-                    message.content,
-                ))
+                Some(ChatCompletionRequestAssistantMessageContent::Text(content))
             };
 
             ChatCompletionRequestMessage::Assistant(ChatCompletionRequestAssistantMessage {
@@ -172,16 +173,14 @@ fn to_sdk_message(message: Message) -> Result<ChatCompletionRequestMessage, LlmE
                 ..Default::default()
             })
         }
-        MessageRole::Tool => {
-            let tool_call_id = message
-                .tool_call_id
-                .ok_or_else(|| LlmError::Api("tool message without tool_call_id".to_owned()))?;
-            ChatCompletionRequestMessage::Tool(ChatCompletionRequestToolMessage {
-                content: ChatCompletionRequestToolMessageContent::Text(message.content),
-                tool_call_id,
-            })
-        }
-    })
+        Message::Tool {
+            content,
+            tool_call_id,
+        } => ChatCompletionRequestMessage::Tool(ChatCompletionRequestToolMessage {
+            content: ChatCompletionRequestToolMessageContent::Text(content),
+            tool_call_id,
+        }),
+    }
 }
 
 fn to_sdk_tool(spec: ToolSpec) -> ChatCompletionTools {

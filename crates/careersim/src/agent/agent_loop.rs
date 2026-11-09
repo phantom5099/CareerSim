@@ -480,7 +480,6 @@ fn tool_result(
     SessionEventKind::ToolResult {
         turn_id,
         tool_call_id: call.call_id.clone(),
-        tool_name: call.name.clone(),
         status,
         output,
     }

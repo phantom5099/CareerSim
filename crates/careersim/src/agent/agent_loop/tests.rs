@@ -9,7 +9,7 @@ use crate::agent::BuildOptions;
 use crate::agent::ContextBuilder;
 use crate::agent::ContextError;
 use crate::agent::DefaultContextBuilder;
-use crate::agent::MessageRole;
+use crate::agent::Message;
 use crate::agent::Role;
 use crate::agent::Session;
 use crate::agent::SessionEventKind;
@@ -186,19 +186,22 @@ async fn tool_calls_loop_until_text_reply() {
         &event.kind,
         SessionEventKind::ToolResult {
             tool_call_id,
-            tool_name,
             status: ToolStatus::Ok,
             output,
             ..
-        } if tool_call_id == "call_1" && tool_name == "lookup" && output == "42"
+        } if tool_call_id == "call_1" && output == "42"
     )));
 
     let requests = harness.llm.requests();
     assert_eq!(requests.len(), 2);
     assert!(requests[1].messages.iter().any(|message| {
-        message.role == MessageRole::Tool
-            && message.tool_call_id.as_deref() == Some("call_1")
-            && message.content == "42"
+        matches!(
+            message,
+            Message::Tool {
+                tool_call_id,
+                content,
+            } if tool_call_id == "call_1" && content == "42"
+        )
     }));
 }
 
@@ -222,11 +225,11 @@ async fn unknown_tool_becomes_error_result() {
     assert!(session.events.iter().any(|event| matches!(
         &event.kind,
         SessionEventKind::ToolResult {
-            tool_name,
+            tool_call_id,
             status: ToolStatus::Error,
             output,
             ..
-        } if tool_name == "missing" && output.contains("unknown tool")
+        } if tool_call_id == "call_x" && output.contains("unknown tool")
     )));
 }
 
@@ -482,8 +485,12 @@ async fn finish_stage_advances_without_model_call() {
 
     let requests = harness.llm.requests();
     let last = requests.last().unwrap();
-    assert_eq!(last.messages[0].role, MessageRole::System);
-    assert_eq!(last.messages[0].content, Role::ExamAuthor.system_prompt());
+    assert_eq!(
+        last.messages[0],
+        Message::System {
+            content: Role::ExamAuthor.system_prompt().to_owned(),
+        }
+    );
     // 完整历史跨阶段保留。
     assert_eq!(last.messages.len(), 4);
 }
@@ -510,8 +517,10 @@ async fn review_stage_cannot_advance_but_can_chat() {
         .unwrap();
     assert_eq!(result.reason, TurnEndReason::Done);
     assert_eq!(
-        harness.llm.requests()[0].messages[0].content,
-        Role::Coach.system_prompt()
+        harness.llm.requests()[0].messages[0],
+        Message::System {
+            content: Role::Coach.system_prompt().to_owned(),
+        }
     );
 }
 
@@ -583,14 +592,12 @@ async fn context_fills_missing_tool_results_and_ignores_orphans() {
                 SessionEventKind::ToolResult {
                     turn_id: TurnId(1),
                     tool_call_id: "call_1".to_owned(),
-                    tool_name: "a".to_owned(),
                     status: ToolStatus::Ok,
                     output: "first".to_owned(),
                 },
                 SessionEventKind::ToolResult {
                     turn_id: TurnId(1),
                     tool_call_id: "orphan".to_owned(),
-                    tool_name: "c".to_owned(),
                     status: ToolStatus::Ok,
                     output: "ignored".to_owned(),
                 },
@@ -605,25 +612,26 @@ async fn context_fills_missing_tool_results_and_ignores_orphans() {
         .await
         .unwrap();
 
-    let roles: Vec<MessageRole> = request
-        .messages
-        .iter()
-        .map(|message| message.role)
-        .collect();
+    assert!(matches!(&request.messages[0], Message::System { .. }));
+    assert!(matches!(&request.messages[1], Message::User { .. }));
+    assert!(matches!(
+        &request.messages[2],
+        Message::Assistant { tool_calls, .. } if tool_calls.len() == 2
+    ));
     assert_eq!(
-        roles,
-        vec![
-            MessageRole::System,
-            MessageRole::User,
-            MessageRole::Assistant,
-            MessageRole::Tool,
-            MessageRole::Tool,
-        ]
+        request.messages[3],
+        Message::Tool {
+            content: "first".to_owned(),
+            tool_call_id: "call_1".to_owned(),
+        }
     );
-    assert_eq!(request.messages[3].content, "first");
-    assert_eq!(request.messages[3].tool_call_id.as_deref(), Some("call_1"));
-    assert_eq!(request.messages[4].content, "aborted");
-    assert_eq!(request.messages[4].tool_call_id.as_deref(), Some("call_2"));
+    assert_eq!(
+        request.messages[4],
+        Message::Tool {
+            content: "aborted".to_owned(),
+            tool_call_id: "call_2".to_owned(),
+        }
+    );
 
     assert_eq!(
         DefaultContextBuilder

@@ -10,7 +10,7 @@ pub mod tool;
 
 pub use agent_loop::{AgentLoop, LoopConfig, LoopError, StageCompletion, TurnResult};
 pub use context::{BuildOptions, ContextBuilder, ContextError, DefaultContextBuilder};
-pub use message::{Message, MessageRole};
+pub use message::Message;
 pub use role::Role;
 pub use session::{
     Session, SessionEvent, SessionEventKind, SessionId, SessionSummary, ToolStatus, TurnEndReason,

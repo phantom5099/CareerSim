@@ -83,7 +83,6 @@ pub enum SessionEventKind {
     ToolResult {
         turn_id: TurnId,
         tool_call_id: String,
-        tool_name: String,
         status: ToolStatus,
         output: String,
     },
