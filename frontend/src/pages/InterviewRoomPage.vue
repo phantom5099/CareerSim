@@ -2,9 +2,10 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
+import { interviewsApi } from '@/api/endpoints/interviews'
+import type { InterviewSession } from '@/api/endpoints/interviews'
 import CompanyMark from '@/components/CompanyMark.vue'
 import StageRail from '@/components/StageRail.vue'
-import { screeningFor, scriptFor } from '@/data/interviews'
 import { STAGE_LABELS, STAGE_ORDER } from '@/domain/types'
 import type { StageKey } from '@/domain/types'
 import { useApplicationsStore } from '@/stores/applications'
@@ -30,17 +31,32 @@ const requestedStage = computed<StageKey | undefined>(() => {
 const stage = computed<StageKey | undefined>(
   () => requestedStage.value ?? application.value?.currentStage,
 )
-const script = computed(() =>
-  application.value && stage.value
-    ? scriptFor(application.value, stage.value, company.value)
-    : undefined,
+const session = ref<InterviewSession | null>(null)
+const loadingSession = ref(false)
+let loadToken = 0
+
+watch(
+  [application, stage, company],
+  async ([currentApplication, currentStage, currentCompany]) => {
+    const token = ++loadToken
+    if (!currentApplication || !currentStage) {
+      session.value = null
+      loadingSession.value = false
+      return
+    }
+    loadingSession.value = true
+    const result = await interviewsApi.load(currentApplication, currentStage, currentCompany)
+    if (token !== loadToken) {
+      return
+    }
+    session.value = result
+    loadingSession.value = false
+  },
+  { immediate: true },
 )
-const isScreening = computed(() => stage.value === 'hr_screen')
-const screening = computed(() =>
-  application.value && isScreening.value
-    ? screeningFor(application.value, company.value)
-    : undefined,
-)
+
+const script = computed(() => session.value?.script)
+const screening = computed(() => session.value?.screening)
 
 const answers = ref<string[]>([])
 const step = ref(0)
@@ -149,7 +165,15 @@ async function complete() {
     </div>
 
     <div
-      v-if="!application || !company || !script"
+      v-if="loadingSession"
+      class="mt-8 border border-line bg-paper-light px-6 py-12 text-center"
+    >
+      <p class="font-display text-2xl">正在准备面试记录</p>
+      <p class="mt-2 text-sm text-ink-soft">正在根据当前阶段整理面试问题。</p>
+    </div>
+
+    <div
+      v-else-if="!application || !company || !script"
       class="mt-8 border border-line bg-paper-light px-6 py-12 text-center"
     >
       <p class="font-display text-2xl">这场面试还没有安排</p>

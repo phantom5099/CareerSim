@@ -1,23 +1,25 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
+import { companiesApi } from '@/api/endpoints/companies'
 import CompanyMark from '@/components/CompanyMark.vue'
 import { PROJECT_STATUS_LABELS, formatDate } from '@/domain/types'
 import type { Company } from '@/domain/types'
-import { companyTemplateJson, validateCompanyTemplate } from '@/data/template'
-import { generateCompanyTemplate } from '@/data/templateGenerator'
 import { useCompanyCatalogStore } from '@/stores/companyCatalog'
 
 const router = useRouter()
 const catalog = useCompanyCatalogStore()
 
-const jsonText = ref(companyTemplateJson)
+const jsonText = ref('')
+const sampleJson = ref('')
+const loadingSample = ref(true)
 const preview = ref<Company | null>(null)
 const errors = ref<string[]>([])
 const notice = ref('')
 const prompt = ref('')
 const generating = ref(false)
+const validating = ref(false)
 const generateError = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 
@@ -44,8 +46,11 @@ function resetResult() {
   notice.value = ''
 }
 
-function validate() {
+async function validate() {
   resetResult()
+  if (validating.value) {
+    return
+  }
   let parsed: unknown
   try {
     parsed = JSON.parse(jsonText.value)
@@ -53,13 +58,20 @@ function validate() {
     errors.value = ['JSON 解析失败，请检查逗号、引号与括号是否完整。']
     return
   }
-  const result = validateCompanyTemplate(parsed)
-  if (result.ok) {
-    preview.value = result.company
-    notice.value = '模板校验通过，可以保存到公司列表。'
-    return
+  validating.value = true
+  try {
+    const result = await companiesApi.validateImport(parsed)
+    if (result.ok) {
+      preview.value = result.company
+      notice.value = '模板校验通过，可以保存到公司列表。'
+    } else {
+      errors.value = result.errors
+    }
+  } catch (error) {
+    errors.value = [error instanceof Error ? error.message : '模板校验失败，请稍后重试。']
+  } finally {
+    validating.value = false
   }
-  errors.value = result.errors
 }
 
 async function onFile(event: Event) {
@@ -69,18 +81,24 @@ async function onFile(event: Event) {
     return
   }
   jsonText.value = await file.text()
-  validate()
+  await validate()
   input.value = ''
 }
 
-function loadSample() {
-  jsonText.value = companyTemplateJson
-  validate()
+async function loadSample() {
+  if (!sampleJson.value) {
+    return
+  }
+  jsonText.value = sampleJson.value
+  await validate()
 }
 
 async function copySample() {
+  if (!sampleJson.value) {
+    return
+  }
   try {
-    await navigator.clipboard.writeText(companyTemplateJson)
+    await navigator.clipboard.writeText(sampleJson.value)
     notice.value = '示例模板已复制到剪贴板。'
   } catch {
     notice.value = '复制失败，可以手动选择示例文本。'
@@ -88,7 +106,10 @@ async function copySample() {
 }
 
 function downloadSample() {
-  const blob = new Blob([companyTemplateJson], { type: 'application/json' })
+  if (!sampleJson.value) {
+    return
+  }
+  const blob = new Blob([sampleJson.value], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
@@ -104,22 +125,34 @@ async function generate() {
   generating.value = true
   generateError.value = ''
   try {
-    await new Promise((resolve) => window.setTimeout(resolve, 900))
-    jsonText.value = JSON.stringify(generateCompanyTemplate(prompt.value), null, 2)
-    validate()
+    const draft = await companiesApi.generateTemplate(prompt.value)
+    jsonText.value = JSON.stringify(draft, null, 2)
+    await validate()
     if (!errors.value.length) {
       notice.value = '已生成模板草稿，请检查字段后保存。'
     }
-  } catch {
-    generateError.value = '生成失败，请调整提示词后重试。'
+  } catch (error) {
+    generateError.value =
+      error instanceof Error ? error.message : '生成失败，请调整提示词后重试。'
   } finally {
     generating.value = false
   }
 }
 
+onMounted(async () => {
+  try {
+    sampleJson.value = await companiesApi.templateSample()
+    jsonText.value = sampleJson.value
+  } catch {
+    errors.value = ['示例模板加载失败，请刷新页面重试。']
+  } finally {
+    loadingSample.value = false
+  }
+})
+
 async function save() {
   if (!preview.value) {
-    validate()
+    await validate()
     return
   }
   const company = preview.value
@@ -189,7 +222,12 @@ async function save() {
           <div class="flex flex-wrap items-center justify-between gap-2 border-b border-ink pb-2">
             <h2 class="font-display text-2xl">模板内容</h2>
             <div class="flex flex-wrap gap-1.5">
-              <button type="button" class="btn-line py-1.5 text-[0.66rem]" @click="loadSample">
+              <button
+                type="button"
+                class="btn-line py-1.5 text-[0.66rem]"
+                :disabled="!sampleJson"
+                @click="loadSample"
+              >
                 载入示例
               </button>
               <button
@@ -215,14 +253,20 @@ async function save() {
             rows="24"
             spellcheck="false"
             aria-label="公司模板 JSON"
+            :placeholder="loadingSample ? '正在加载示例模板…' : '粘贴公司模板 JSON'"
             @input="resetResult"
           />
           <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
             <p class="font-mono text-[0.56rem] tracking-[0.1em] text-ink-faint">
               COMPANY.JSON · UTF-8
             </p>
-            <button type="button" class="btn-solid py-1.5 text-[0.7rem]" @click="validate">
-              校验并预览 →
+            <button
+              type="button"
+              class="btn-solid py-1.5 text-[0.7rem]"
+              :disabled="validating"
+              @click="validate"
+            >
+              {{ validating ? '校验中…' : '校验并预览 →' }}
             </button>
           </div>
         </section>
@@ -355,10 +399,20 @@ async function save() {
             </li>
           </ol>
           <div class="mt-4 flex flex-col gap-1.5">
-            <button type="button" class="btn-line py-1.5 text-[0.66rem]" @click="copySample">
+            <button
+              type="button"
+              class="btn-line py-1.5 text-[0.66rem]"
+              :disabled="!sampleJson"
+              @click="copySample"
+            >
               复制示例模板
             </button>
-            <button type="button" class="btn-line py-1.5 text-[0.66rem]" @click="downloadSample">
+            <button
+              type="button"
+              class="btn-line py-1.5 text-[0.66rem]"
+              :disabled="!sampleJson"
+              @click="downloadSample"
+            >
               下载示例 JSON
             </button>
           </div>

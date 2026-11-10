@@ -5,8 +5,12 @@ import { RouterLink, useRoute } from 'vue-router'
 import CompanyMark from '@/components/CompanyMark.vue'
 import MultiSelect from '@/components/MultiSelect.vue'
 import StageRail from '@/components/StageRail.vue'
-import { actionableStage } from '@/data/interviews'
-import { APPLICATION_STATUS_LABELS, PROJECT_STATUS_LABELS, formatDate } from '@/domain/types'
+import {
+  APPLICATION_STATUS_LABELS,
+  PROJECT_STATUS_LABELS,
+  actionableStage,
+  formatDate,
+} from '@/domain/types'
 import type { ApplicationStatus, Job, ProjectStatus } from '@/domain/types'
 import { useApplicationsStore } from '@/stores/applications'
 import { useCompanyCatalogStore } from '@/stores/companyCatalog'

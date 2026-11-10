@@ -1,6 +1,6 @@
 import type { Job } from '@/domain/types'
 
-interface JobDraft {
+export interface JobDraft {
   title: string
   type: Job['type']
   salary: string
@@ -8,7 +8,7 @@ interface JobDraft {
   description: string
 }
 
-interface IndustryProfile {
+export interface IndustryProfile {
   keywords: string[]
   type: string
   industry: string
@@ -19,7 +19,7 @@ interface IndustryProfile {
   jobs: JobDraft[]
 }
 
-const profiles: IndustryProfile[] = [
+export const industryProfiles: IndustryProfile[] = [
   {
     keywords: ['ai', '人工智能', '大模型', '算法', '机器学习', '推理', '智能体', 'agent'],
     type: '人工智能 · 基础设施',
@@ -406,7 +406,7 @@ const profiles: IndustryProfile[] = [
   },
 ]
 
-const fallbackProfile: IndustryProfile = {
+export const fallbackProfile: IndustryProfile = {
   keywords: [],
   type: '软件工具 · 产品研发',
   industry: '计算机软件',
@@ -439,7 +439,7 @@ const fallbackProfile: IndustryProfile = {
   ],
 }
 
-const cities = [
+export const templateCities = [
   '北京',
   '上海',
   '广州',
@@ -459,115 +459,45 @@ const cities = [
   '远程',
 ]
 
-const namePrefixes = ['云岫', '知微', '栖野', '格物', '星澜', '澄明', '岱川', '自远', '未迟', '南枝']
-const nameSuffixes = ['科技', '智能', '实验室', '数据', '互动', '软件', '数字']
-const englishPrefixes = ['NOVA', 'ORBIT', 'LUMEN', 'ECHO', 'NORTH', 'VELLUM', 'ATLAS', 'KITE']
-const englishSuffixes = ['LABS', 'STUDIO', 'WORKS', 'DATA', 'SYSTEMS', 'TECH']
-const sizes = ['20–99 人', '100–499 人', '500–999 人', '1000–4999 人']
-const workStyles = ['双休 · 弹性工作', '导师制 · 每周复盘', '小团队闭环 · 决策快', '远程友好 · 异步协作']
+export const namePrefixes = ['云岫', '知微', '栖野', '格物', '星澜', '澄明', '岱川', '自远', '未迟', '南枝']
+export const nameSuffixes = ['科技', '智能', '实验室', '数据', '互动', '软件', '数字']
+export const englishPrefixes = ['NOVA', 'ORBIT', 'LUMEN', 'ECHO', 'NORTH', 'VELLUM', 'ATLAS', 'KITE']
+export const englishSuffixes = ['LABS', 'STUDIO', 'WORKS', 'DATA', 'SYSTEMS', 'TECH']
+export const companySizes = ['20–99 人', '100–499 人', '500–999 人', '1000–4999 人']
+export const workStyles = ['双休 · 弹性工作', '导师制 · 每周复盘', '小团队闭环 · 决策快', '远程友好 · 异步协作']
 
-function hash(text: string): number {
-  let value = 0
-  for (const char of text) {
-    value = (value * 31 + char.codePointAt(0)!) >>> 0
-  }
-  return value
+export const companyTemplateSample = {
+  name: '南风数据',
+  englishName: 'SOUTHWIND DATA',
+  industry: '数据服务',
+  city: '深圳',
+  size: '100–499 人',
+  tagline: '把报表做成一次真正的决策',
+  description: '南风数据为零售与消费品牌提供经营分析平台，团队由分析师、工程师与行业顾问组成。',
+  highlights: ['服务 200+ 消费品牌', '每周五下午固定研究时间', '深圳南山 · 地铁直达'],
+  logoText: '南风',
+  accent: '#3D5A45',
+  projects: [
+    {
+      name: '2026 秋季校园招聘',
+      season: '2026 秋招',
+      status: 'open',
+      deadline: '2026-12-20',
+      description: '面向 2026 届毕业生，开放数据分析与前端方向。',
+    },
+  ],
+  jobs: [
+    {
+      title: '数据分析师',
+      project: '2026 秋季校园招聘',
+      industry: '商业分析',
+      city: '深圳',
+      type: '校招',
+      salary: '16–24K · 14 薪',
+      tags: ['SQL', 'BI', '零售'],
+      description: '负责经营指标体系搭建与专题分析，和业务团队一起做决策。',
+    },
+  ],
 }
 
-function pick<T>(items: readonly T[], seed: number): T {
-  return items[seed % items.length]!
-}
 
-function detectProfile(prompt: string): IndustryProfile {
-  const lowered = prompt.toLowerCase()
-  let best: IndustryProfile | undefined
-  let bestHits = 0
-  for (const profile of profiles) {
-    const hits = profile.keywords.filter((keyword) => lowered.includes(keyword)).length
-    if (hits > bestHits) {
-      best = profile
-      bestHits = hits
-    }
-  }
-  return best ?? fallbackProfile
-}
-
-function detectCity(prompt: string): string {
-  return cities.find((city) => prompt.includes(city)) ?? '杭州'
-}
-
-function detectName(prompt: string, seed: number, profile: IndustryProfile): string {
-  const quoted = prompt.match(/[「“"]([^」”"]{2,12})[」”"]/)
-  if (quoted?.[1]) {
-    return quoted[1].trim()
-  }
-  const suffix =
-    profile === fallbackProfile
-      ? pick(nameSuffixes, seed)
-      : profile.type.split(' · ')[0]!.replace(/(与|和).*$/, '')
-  return `${pick(namePrefixes, seed)}${suffix}`
-}
-
-function futureDate(days: number): string {
-  const date = new Date()
-  date.setDate(date.getDate() + days)
-  return date.toISOString().slice(0, 10)
-}
-
-export function generateCompanyTemplate(prompt: string): Record<string, unknown> {
-  const trimmed = prompt.trim()
-  const seed = hash(trimmed)
-  const profile = detectProfile(trimmed)
-  const city = detectCity(trimmed)
-  const name = detectName(trimmed, seed, profile)
-  const size = pick(sizes, seed >>> 3)
-  const track = profile.type.split(' · ')[0]!
-  const campusProject = `${new Date().getFullYear()} 秋季校园招聘`
-  const internProject = '日常实习计划'
-
-  const campusJobs = profile.jobs.filter((job) => job.type !== '实习')
-  const internJobs = profile.jobs.filter((job) => job.type === '实习')
-
-  return {
-    name,
-    englishName: `${pick(englishPrefixes, seed >>> 5)} ${pick(englishSuffixes, seed >>> 7)}`,
-    industry: profile.industry,
-    city,
-    size,
-    tagline: profile.tagline,
-    description: `${name}是一家位于${city}的${profile.type}团队，专注${profile.field}。${profile.blurb}`,
-    highlights: [
-      `${city} · ${pick(workStyles, seed >>> 9)}`,
-      `专注${profile.field}`,
-      `${pick(['服务 200+ 客户', '产品用户 8 万+', '连续三年稳定增长', '核心团队共事 5 年'], seed >>> 11)}`,
-    ],
-    logoText: [...name].slice(0, 2).join(''),
-    accent: profile.accent,
-    projects: [
-      {
-        name: campusProject,
-        season: `${new Date().getFullYear()} 秋招`,
-        status: 'open',
-        deadline: futureDate(45),
-        description: `面向应届生，开放${campusJobs.map((job) => job.title).join('、')}方向。`,
-      },
-      {
-        name: internProject,
-        season: '日常实习',
-        status: 'closing',
-        deadline: futureDate(20),
-        description: `每周至少到岗 3 天，${internJobs.map((job) => job.title).join('、')}方向可转正。`,
-      },
-    ],
-    jobs: profile.jobs.map((job) => ({
-      title: job.title,
-      project: job.type === '实习' ? internProject : campusProject,
-      industry: track,
-      city,
-      type: job.type,
-      salary: job.salary,
-      tags: job.tags,
-      description: job.description,
-    })),
-  }
-}

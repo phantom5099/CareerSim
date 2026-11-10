@@ -122,6 +122,23 @@ export interface InterviewScript {
   turns: InterviewTurn[]
 }
 
+export interface ResumeDimension {
+  label: string
+  score: number
+  note: string
+}
+
+export interface ResumeScreening {
+  reviewer: string
+  reviewerTitle: string
+  score: number
+  verdict: string
+  summary: string
+  dimensions: ResumeDimension[]
+  highlights: string[]
+  concerns: string[]
+}
+
 export const APPLICATION_STATUS_LABELS: Record<ApplicationStatus, string> = {
   active: '进行中',
   rejected: '已结束',
@@ -137,6 +154,17 @@ export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
 
 export function stageIndex(stage: StageKey): number {
   return STAGE_ORDER.indexOf(stage)
+}
+
+/** 当前阶段是否由候选人操作（进行中），否则视为等待对方结果。 */
+export function actionableStage(application: Application): StageKey | undefined {
+  if (application.status !== 'active') {
+    return undefined
+  }
+  if (application.currentStage === 'hr_screen' || application.currentStage === 'offer') {
+    return undefined
+  }
+  return application.currentStage
 }
 
 export function formatDate(value: string): string {

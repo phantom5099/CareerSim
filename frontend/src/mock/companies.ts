@@ -3,7 +3,9 @@ import type { CompaniesApi } from '@/api/endpoints/companies'
 import type { IndustriesResponse } from '@/api/types'
 import type { Company } from '@/domain/types'
 
+import { generateCompanyTemplate, parseCompanyTemplate } from './companyImports'
 import { seedCompanies } from './data/companies'
+import { companyTemplateSample } from './data/companyTemplates'
 
 // 后端公司与行业接口尚未接入：内存里保存导入的公司。
 const INDUSTRIES = [
@@ -42,5 +44,19 @@ export const mockCompaniesApi: CompaniesApi = {
     }
     imported = [company, ...imported]
     return company
+  },
+
+  async templateSample(): Promise<string> {
+    return JSON.stringify(companyTemplateSample, null, 2)
+  },
+
+  async validateImport(raw) {
+    return parseCompanyTemplate(raw)
+  },
+
+  async generateTemplate(prompt) {
+    // 模拟服务端生成耗时。
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    return generateCompanyTemplate(prompt)
   },
 }
