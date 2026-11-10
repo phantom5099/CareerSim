@@ -174,7 +174,7 @@ function reviewLink(application: Application) {
       <section
         v-for="(group, groupIndex) in groups"
         :key="group.company?.id ?? `group-${groupIndex}`"
-        class="border-b border-line py-6"
+        class="border-b border-line pt-6 pb-4"
       >
       <header class="flex flex-wrap items-start justify-between gap-3">
         <div class="flex min-w-0 items-start gap-3">
@@ -214,6 +214,7 @@ function reviewLink(application: Application) {
             <span class="text-[0.66rem] text-ink-faint">
               投递于 {{ formatDate(application.appliedAt) }}
             </span>
+            <span class="text-[0.66rem] text-ink-faint">简历 · {{ application.resumeTitle }}</span>
           </div>
           <div class="mt-4">
             <StageRail

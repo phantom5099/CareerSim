@@ -13,6 +13,7 @@ import { useApplicationsStore } from '@/stores/applications'
 import { useAuthStore } from '@/stores/auth'
 import { useCompanyCatalogStore } from '@/stores/companyCatalog'
 import { useOffersStore } from '@/stores/offers'
+import { useResumesStore } from '@/stores/resumes'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -55,7 +56,7 @@ const router = createRouter({
           path: 'resume',
           name: 'resume',
           component: ResumePage,
-          meta: { title: '简历优化' },
+          meta: { title: '简历管理' },
         },
         {
           path: 'interview/:applicationId',
@@ -99,6 +100,7 @@ router.beforeEach(async (to) => {
     useCompanyCatalogStore().init(),
     useApplicationsStore().init(),
     useOffersStore().init(),
+    useResumesStore().init(),
   ])
 
   return true
