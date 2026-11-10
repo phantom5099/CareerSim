@@ -329,7 +329,6 @@ impl AgentLoop {
             .clone()
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn finish_turn(
         &self,
         session: &mut Session,
