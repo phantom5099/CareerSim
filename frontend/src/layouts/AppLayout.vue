@@ -122,10 +122,24 @@ async function signOut() {
           </div>
           <button
             type="button"
-            class="border-b border-line-strong pb-0.5 text-[0.62rem] text-ink-soft transition hover:border-vermilion hover:text-vermilion"
+            class="shrink-0 text-ink-soft transition hover:text-vermilion"
+            aria-label="退出登录"
             @click="signOut"
           >
-            退出
+            <svg
+              viewBox="0 0 16 16"
+              class="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.4"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M6 2H3.5A1.5 1.5 0 0 0 2 3.5v9A1.5 1.5 0 0 0 3.5 14H6" />
+              <path d="M10 4.5 13.5 8 10 11.5" />
+              <path d="M13.5 8H6.5" />
+            </svg>
           </button>
         </div>
       </div>
@@ -147,10 +161,24 @@ async function signOut() {
             </span>
             <button
               type="button"
-              class="text-[0.68rem] text-ink-soft transition hover:text-vermilion"
+              class="text-ink-soft transition hover:text-vermilion"
+              aria-label="退出登录"
               @click="signOut"
             >
-              退出
+              <svg
+                viewBox="0 0 16 16"
+                class="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M6 2H3.5A1.5 1.5 0 0 0 2 3.5v9A1.5 1.5 0 0 0 3.5 14H6" />
+                <path d="M10 4.5 13.5 8 10 11.5" />
+                <path d="M13.5 8H6.5" />
+              </svg>
             </button>
           </div>
         </div>

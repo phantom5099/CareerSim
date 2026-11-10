@@ -207,7 +207,7 @@ function reviewLink(application: Application) {
       <div
         v-for="application in group.items"
         :key="application.id"
-        class="mt-4 grid gap-4 border-t border-line/70 pt-4 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start"
+        class="mt-4 grid gap-4 border-t border-line/70 pt-4 lg:grid-cols-[minmax(0,1fr)_14rem] lg:items-start"
       >
         <div class="min-w-0">
           <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -269,13 +269,6 @@ function reviewLink(application: Application) {
             >
               {{ application.currentStage === 'hr_screen' ? '等待初筛结果' : '等待面试安排' }}
             </span>
-            <RouterLink
-              v-if="group.company"
-              :to="{ name: 'companyDetail', params: { id: group.company.id } }"
-              class="btn-line py-1.5 text-[0.68rem]"
-            >
-              公司档案
-            </RouterLink>
           </div>
         </div>
       </div>

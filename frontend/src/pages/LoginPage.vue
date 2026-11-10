@@ -3,7 +3,7 @@ import { computed, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { demoConfig } from '@/config/demo'
-import { brand, stages } from '@/content/brand'
+import { brand } from '@/content/brand'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
@@ -45,32 +45,13 @@ async function submit() {
   }
 }
 
-async function useDemoAccount() {
-  form.username = demoConfig.username
-  form.password = demoConfig.password
-  touched.value = true
-  await submit()
-}
-
 const year = new Date().getFullYear()
-const dateLabel = new Intl.DateTimeFormat('zh-CN', {
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-}).format(new Date())
 </script>
 
 <template>
   <main class="min-h-dvh px-5 py-5 sm:px-8 lg:px-12 lg:py-7">
     <header class="border-b-[3px] border-double border-ink pb-4">
-      <div
-        class="flex flex-wrap items-center justify-between gap-2 text-[0.62rem] tracking-[0.08em] text-ink-faint"
-      >
-        <span>{{ brand.name }} · {{ brand.eyebrow }}</span>
-        <span class="hidden sm:inline">{{ brand.issue }} · {{ brand.issueNote }}</span>
-        <span>{{ dateLabel }}</span>
-      </div>
-      <div class="mt-4 flex items-end justify-between gap-4">
+      <div class="flex items-end justify-between gap-4">
         <div class="flex items-center gap-3">
           <span
             class="flex h-10 w-10 items-center justify-center bg-ink font-display text-xl leading-none text-paper-light"
@@ -84,20 +65,11 @@ const dateLabel = new Intl.DateTimeFormat('zh-CN', {
             </p>
           </div>
         </div>
-        <p class="hidden text-right text-[0.6rem] leading-5 text-ink-faint sm:block">
-          模拟招聘会<br />
-          所有公司与岗位均为虚构
-        </p>
       </div>
     </header>
 
     <div class="grid gap-9 pt-8 lg:grid-cols-[1.1fr_0.9fr] lg:gap-16 lg:pt-12">
       <section class="animate-rise">
-        <p class="eyebrow flex items-center gap-3">
-          <span class="h-px w-8 bg-vermilion" aria-hidden="true" />
-          卷首语 · 先练一遍，再上场
-        </p>
-
         <h1
           class="mt-5 font-display text-[clamp(3rem,7vw,5.3rem)] leading-[1.02] tracking-tight text-ink"
           aria-label="体验求职之乐"
@@ -112,32 +84,6 @@ const dateLabel = new Intl.DateTimeFormat('zh-CN', {
         <p class="mt-2 max-w-md text-sm leading-7 text-ink-soft">
           {{ brand.description }}
         </p>
-
-        <div class="mt-9 hidden sm:block">
-          <div
-            class="flex items-baseline justify-between border-b border-ink pb-2 text-[0.64rem] text-ink-faint"
-          >
-            <span>本期流程 / PROGRAMME</span>
-            <span>共 6 站</span>
-          </div>
-          <ol class="grid grid-cols-2 gap-x-9">
-            <li
-              v-for="(stage, index) in stages"
-              :key="stage.label"
-              class="flex gap-3 border-b border-line py-3"
-            >
-              <span class="font-mono text-[0.6rem] text-vermilion">
-                {{ String(index + 1).padStart(2, '0') }}
-              </span>
-              <span>
-                <span class="block font-display text-[0.95rem] leading-tight">{{ stage.label }}</span>
-                <span class="mt-0.5 block text-[0.62rem] tracking-wide text-ink-faint">
-                  {{ stage.note }}
-                </span>
-              </span>
-            </li>
-          </ol>
-        </div>
 
         <div class="mt-9 hidden items-end justify-between gap-6 sm:flex">
           <p class="max-w-xs text-[0.64rem] leading-5 text-ink-faint">
@@ -174,7 +120,6 @@ const dateLabel = new Intl.DateTimeFormat('zh-CN', {
                   class="mb-1.5 flex items-baseline justify-between text-[0.8rem] text-ink"
                 >
                   <span>账号</span>
-                  <span class="font-mono text-[0.54rem] tracking-[0.16em] text-ink-faint">01</span>
                 </label>
                 <input
                   id="username"
@@ -198,13 +143,12 @@ const dateLabel = new Intl.DateTimeFormat('zh-CN', {
                   class="mb-1.5 flex items-baseline justify-between text-[0.8rem] text-ink"
                 >
                   <span>密码</span>
-                  <span class="font-mono text-[0.54rem] tracking-[0.16em] text-ink-faint">02</span>
                 </label>
                 <div class="relative">
                   <input
                     id="password"
                     v-model="form.password"
-                    class="field pr-16"
+                    class="field pr-11"
                     :type="showPassword ? 'text' : 'password'"
                     name="password"
                     autocomplete="current-password"
@@ -214,11 +158,24 @@ const dateLabel = new Intl.DateTimeFormat('zh-CN', {
                   />
                   <button
                     type="button"
-                    class="absolute inset-y-0 right-0 px-3 text-[0.68rem] text-ink-faint transition hover:text-ink"
+                    class="absolute inset-y-0 right-0 flex items-center px-3 text-ink-faint transition hover:text-ink"
                     :aria-label="showPassword ? '隐藏密码' : '显示密码'"
                     @click="showPassword = !showPassword"
                   >
-                    {{ showPassword ? '隐藏' : '显示' }}
+                    <svg
+                      viewBox="0 0 16 16"
+                      class="h-4 w-4"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M1.5 8S4 3.9 8 3.9 14.5 8 14.5 8 12 12.1 8 12.1 1.5 8 1.5 8Z" />
+                      <circle cx="8" cy="8" r="2.1" />
+                      <path v-if="showPassword" d="M2.6 2.6l10.8 10.8" />
+                    </svg>
                   </button>
                 </div>
                 <p v-if="passwordError" id="password-error" class="mt-1.5 text-xs text-vermilion">
@@ -238,40 +195,7 @@ const dateLabel = new Intl.DateTimeFormat('zh-CN', {
                 {{ auth.loading ? '正在入场…' : '入场 →' }}
               </button>
             </form>
-
-            <template v-if="demoConfig.enabled">
-              <div
-                class="my-5 flex items-center gap-3 text-[0.64rem] tracking-[0.1em] text-ink-faint"
-              >
-                <span class="h-px flex-1 bg-line" aria-hidden="true" />
-                或 / OR
-                <span class="h-px flex-1 bg-line" aria-hidden="true" />
-              </div>
-
-              <div class="border border-dashed border-line-strong px-3 py-3">
-                <div class="flex items-baseline justify-between gap-3">
-                  <p class="text-[0.64rem] text-ink-faint">
-                    体验账号 / DEMO PASS
-                  </p>
-                  <p class="font-mono text-[0.68rem] text-ink-soft">
-                    {{ demoConfig.username }} / {{ demoConfig.password }}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  class="btn-line mt-3 w-full"
-                  :disabled="auth.loading"
-                  @click="useDemoAccount"
-                >
-                  一键入场
-                </button>
-              </div>
-            </template>
           </div>
-
-          <p class="border-t border-line px-5 py-3 text-[0.58rem] text-ink-faint sm:px-7">
-            登录即进入本地模拟环境，不会产生真实投递。
-          </p>
         </div>
 
         <p class="mt-4 text-center text-[0.6rem] leading-5 text-ink-faint sm:hidden">
@@ -284,7 +208,6 @@ const dateLabel = new Intl.DateTimeFormat('zh-CN', {
       class="mt-10 flex flex-wrap items-center justify-between gap-2 border-t border-line pb-2 pt-4 text-[0.62rem] text-ink-faint"
     >
       <span>© {{ year }} {{ brand.name }} · {{ brand.slogan }}</span>
-      <span v-if="demoConfig.enabled">DEMO · {{ demoConfig.username }}</span>
     </footer>
   </main>
 </template>
