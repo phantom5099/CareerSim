@@ -17,7 +17,7 @@
 | 前端 | Vue 3 + Vite + TypeScript + Pinia + Tailwind，当前以 mock 数据运行 |
 | 部署假设 | 单活部署（约束见 §5） |
 | 当前边界 | 没有 HTTP 层；`main` 只做装配并等待退出信号 |
-| 许可证 | 仓库当前未声明 `LICENSE`；依赖许可证由 `deny.toml` 白名单约束 |
+| 许可证 | MIT；依赖许可证由 `deny.toml` 白名单约束 |
 
 工具链、edition、格式化与依赖版本统一以配置文件为准，不要凭记忆引用。
 
