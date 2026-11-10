@@ -90,8 +90,7 @@ config          → error / llm::provider
 
 - 格式以 `rustfmt.toml` 为准，不手工重排。
 - Clippy 必须零警告（`-D warnings`）；命令见 §8。
-- 新增 `#[allow(...)]` 必须说明原因并优先重构；现有 `#[allow(clippy::too_many_arguments)]`
-  是已知例外，不要扩散。
+- 新增 `#[allow(...)]` 必须说明原因并优先重构。
 - 不新增 `unsafe`；确需使用时必须由用户明确要求，并在注释中写明安全前提。
 
 ### 4.2 命名与可见性
