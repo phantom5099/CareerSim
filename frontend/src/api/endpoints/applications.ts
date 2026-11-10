@@ -4,7 +4,7 @@ import type { Application, Company, Job } from '@/domain/types'
 
 export interface ApplicationsApi {
   list(): Promise<Application[]>
-  apply(company: Company, job: Job): Promise<Application>
+  apply(company: Company, job: Job, resumeId: string): Promise<Application>
   advance(id: string): Promise<Application>
 }
 

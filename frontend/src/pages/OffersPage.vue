@@ -88,7 +88,7 @@ function deadlinePassed(offer: Offer): boolean {
       <article
         v-for="card in cards"
         :key="card.offer.id"
-        class="grid gap-5 border-b border-line py-7 lg:grid-cols-[minmax(0,1fr)_17rem] lg:items-start"
+        class="grid gap-5 border-b border-line pt-7 pb-5 lg:grid-cols-[minmax(0,1fr)_17rem] lg:items-start"
       >
         <div class="min-w-0">
           <div class="flex items-start gap-3">
@@ -113,7 +113,9 @@ function deadlinePassed(offer: Offer): boolean {
                 </span>
               </div>
               <p class="mt-1 text-[0.66rem] text-ink-faint">
-                {{ card.offer.city }} · 发出于 {{ formatDate(card.offer.issuedAt) }}
+                {{ card.offer.city }} · 发出于 {{ formatDate(card.offer.issuedAt) }} · 答复截止
+                {{ formatDateLong(card.offer.deadline) }}
+                <span v-if="deadlinePassed(card.offer)" class="text-vermilion">· 已过答复期</span>
               </p>
             </div>
           </div>
@@ -140,14 +142,9 @@ function deadlinePassed(offer: Offer): boolean {
               <dd class="mt-1 text-[0.74rem] leading-5">{{ card.offer.bonus }}</dd>
             </div>
           </dl>
-
-          <p class="mt-4 text-[0.66rem] leading-5 text-ink-faint">
-            答复截止 {{ formatDateLong(card.offer.deadline) }}
-            <span v-if="deadlinePassed(card.offer)" class="text-vermilion">· 已过答复期</span>
-          </p>
         </div>
 
-        <aside class="border border-line p-4">
+        <aside class="border border-line p-3.5">
           <div class="flex items-center justify-between gap-2">
             <p class="text-[0.64rem] text-ink-faint">答复状态</p>
             <span
@@ -159,10 +156,10 @@ function deadlinePassed(offer: Offer): boolean {
           </div>
 
           <div v-if="card.offer.status === 'pending'" class="mt-4 flex flex-col gap-2">
-            <button type="button" class="btn-solid w-full" @click="respond(card.offer, 'accepted')">
+            <button type="button" class="btn-solid w-full py-1.5 text-[0.7rem]" @click="respond(card.offer, 'accepted')">
               接受这份 Offer
             </button>
-            <button type="button" class="btn-line w-full" @click="respond(card.offer, 'declined')">
+            <button type="button" class="btn-line w-full py-1.5 text-[0.7rem]" @click="respond(card.offer, 'declined')">
               回绝
             </button>
           </div>

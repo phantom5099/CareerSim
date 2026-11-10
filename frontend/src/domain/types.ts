@@ -84,6 +84,8 @@ export interface Application {
   companyId: string
   jobId: string
   jobTitle: string
+  resumeId: string
+  resumeTitle: string
   appliedAt: string
   status: ApplicationStatus
   currentStage: StageKey

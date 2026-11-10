@@ -4,6 +4,7 @@ import type { Application, Company, Job } from '@/domain/types'
 import { STAGE_LABELS, STAGE_ORDER, stageIndex } from '@/domain/types'
 
 import { seedApplications } from './data/applications'
+import { resumeTitleFor } from './resume'
 
 // 后端投递接口尚未接入：内存里维护投递与阶段推进。
 let applications: Application[] = structuredClone(seedApplications)
@@ -13,7 +14,7 @@ export const mockApplicationsApi: ApplicationsApi = {
     return structuredClone(applications)
   },
 
-  async apply(company: Company, job: Job): Promise<Application> {
+  async apply(company: Company, job: Job, resumeId: string): Promise<Application> {
     const existing = applications.find(
       (application) => application.companyId === company.id && application.jobId === job.id,
     )
@@ -21,11 +22,18 @@ export const mockApplicationsApi: ApplicationsApi = {
       return structuredClone(existing)
     }
 
+    const resumeTitle = resumeTitleFor(resumeId)
+    if (!resumeTitle) {
+      throw new ApiError('请选择一份有效的简历', 404, 'RESUME_NOT_FOUND')
+    }
+
     const application: Application = {
       id: `app-${Date.now().toString(36)}`,
       companyId: company.id,
       jobId: job.id,
       jobTitle: job.title,
+      resumeId,
+      resumeTitle,
       appliedAt: new Date().toISOString(),
       status: 'active',
       currentStage: 'hr_screen',

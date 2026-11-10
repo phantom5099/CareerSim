@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
+import type { ResumeDocument } from '@/api/types'
 import CompanyMark from '@/components/CompanyMark.vue'
 import MultiSelect from '@/components/MultiSelect.vue'
 import StageRail from '@/components/StageRail.vue'
@@ -14,10 +15,12 @@ import {
 import type { ApplicationStatus, Job, ProjectStatus } from '@/domain/types'
 import { useApplicationsStore } from '@/stores/applications'
 import { useCompanyCatalogStore } from '@/stores/companyCatalog'
+import { useResumesStore } from '@/stores/resumes'
 
 const route = useRoute()
 const catalog = useCompanyCatalogStore()
 const applications = useApplicationsStore()
+const resumes = useResumesStore()
 
 const companyId = computed(() => String(route.params.id ?? ''))
 const company = computed(() => catalog.findCompany(companyId.value))
@@ -145,18 +148,69 @@ function clearJobFilters() {
   jobQuery.value = ''
 }
 
-async function apply(job: Job) {
-  if (!company.value) {
+const applyTarget = ref<Job | null>(null)
+const selectedResumeId = ref('')
+const applying = ref(false)
+const applyError = ref('')
+
+function describeResume(resume: ResumeDocument): string {
+  if (resume.kind === 'online') {
+    const education = resume.payload.educations[0]
+    return [
+      resume.payload.targetRole,
+      resume.payload.targetCity,
+      education ? `${education.school} · ${education.degree}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ')
+  }
+  return resume.attachment.fileName
+}
+
+function openApply(job: Job) {
+  applyTarget.value = job
+  applyError.value = ''
+  selectedResumeId.value = resumes.defaultResume?.id ?? ''
+}
+
+function closeApply() {
+  if (applying.value) {
     return
   }
-  await applications.applyToJob(company.value, job)
-  flash.value = `已投递「${job.title}」· 流程从 HR 初筛开始`
-  if (flashTimer !== undefined) {
-    window.clearTimeout(flashTimer)
+  applyTarget.value = null
+  applyError.value = ''
+}
+
+async function confirmApply() {
+  if (!company.value || !applyTarget.value) {
+    return
   }
-  flashTimer = window.setTimeout(() => {
-    flash.value = ''
-  }, 3200)
+  if (!selectedResumeId.value) {
+    applyError.value = '请先选择一份简历，或前往简历管理创建。'
+    return
+  }
+  const resume = resumes.byId(selectedResumeId.value)
+  if (!resume) {
+    applyError.value = '所选简历已失效，请重新选择。'
+    return
+  }
+  applying.value = true
+  applyError.value = ''
+  try {
+    await applications.applyToJob(company.value, applyTarget.value, resume.id)
+    flash.value = `已投递「${applyTarget.value.title}」· 使用简历「${resume.title}」· 流程从 HR 初筛开始`
+    applyTarget.value = null
+    if (flashTimer !== undefined) {
+      window.clearTimeout(flashTimer)
+    }
+    flashTimer = window.setTimeout(() => {
+      flash.value = ''
+    }, 3200)
+  } catch (error) {
+    applyError.value = error instanceof Error ? error.message : '投递失败，请稍后重试。'
+  } finally {
+    applying.value = false
+  }
 }
 
 onBeforeUnmount(() => {
@@ -439,7 +493,7 @@ onBeforeUnmount(() => {
                       v-else
                       type="button"
                       class="btn-solid py-1.5 text-[0.7rem]"
-                      @click="apply(job)"
+                      @click="openApply(job)"
                     >
                       投递这份岗位
                     </button>
@@ -500,7 +554,7 @@ onBeforeUnmount(() => {
                   />
                 </div>
                 <p class="mt-2 text-[0.62rem] leading-4 text-ink-faint">
-                  {{ application.nextAction }}
+                  {{ application.resumeTitle }} · {{ application.nextAction }}
                 </p>
               </div>
             </div>
@@ -516,6 +570,112 @@ onBeforeUnmount(() => {
             </RouterLink>
           </section>
         </aside>
+      </div>
+
+      <div
+        v-if="applyTarget"
+        class="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 p-4 sm:items-center"
+        role="presentation"
+        @click.self="closeApply"
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="apply-dialog-title"
+          class="w-full max-w-lg border border-ink bg-paper-light shadow-xl"
+        >
+          <div class="flex items-baseline justify-between border-b border-ink px-5 py-3">
+            <h2 id="apply-dialog-title" class="font-display text-xl">
+              投递「{{ applyTarget.title }}」
+            </h2>
+            <button
+              type="button"
+              class="text-lg leading-none text-ink-faint transition hover:text-vermilion"
+              aria-label="关闭投递窗口"
+              @click="closeApply"
+            >
+              ×
+            </button>
+          </div>
+
+          <div class="px-5 py-4">
+            <p class="text-[0.68rem] text-ink-faint">
+              选择一份简历投递，默认简历已为你选中。
+            </p>
+
+            <div v-if="resumes.resumes.length" class="mt-3 space-y-2">
+              <label
+                v-for="resume in resumes.resumes"
+                :key="resume.id"
+                class="flex cursor-pointer items-start gap-2.5 border px-3 py-2.5 transition"
+                :class="
+                  selectedResumeId === resume.id
+                    ? 'border-ink bg-paper'
+                    : 'border-line hover:border-ink'
+                "
+              >
+                <input
+                  v-model="selectedResumeId"
+                  type="radio"
+                  name="application-resume"
+                  :value="resume.id"
+                  class="mt-1 accent-vermilion"
+                />
+                <span class="min-w-0">
+                  <span class="flex flex-wrap items-baseline gap-1.5">
+                    <span class="text-[0.8rem] font-medium">{{ resume.title }}</span>
+                    <span class="chip">{{ resume.kind === 'online' ? '在线简历' : '附件简历' }}</span>
+                    <span v-if="resume.isDefault" class="text-[0.62rem] text-vermilion">默认</span>
+                  </span>
+                  <span class="mt-1 block text-[0.66rem] leading-4 text-ink-soft">
+                    {{ describeResume(resume) }}
+                  </span>
+                  <span class="mt-0.5 block text-[0.6rem] text-ink-faint">
+                    更新于 {{ formatDate(resume.updatedAt) }}
+                  </span>
+                </span>
+              </label>
+            </div>
+
+            <div v-else class="mt-3 border border-dashed border-line-strong px-4 py-6 text-center">
+              <p class="text-[0.72rem] text-ink-soft">还没有简历，先创建一份再投递。</p>
+              <RouterLink
+                :to="{ name: 'resume' }"
+                class="btn-line mt-3 py-1.5 text-[0.68rem]"
+                @click="closeApply"
+              >
+                前往简历管理
+              </RouterLink>
+            </div>
+
+            <p
+              v-if="applyError"
+              role="alert"
+              class="mt-3 border border-vermilion/40 bg-vermilion/5 px-3 py-2 text-[0.68rem] text-vermilion"
+            >
+              {{ applyError }}
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-center justify-end gap-2 border-t border-line px-5 py-3">
+            <button
+              type="button"
+              class="btn-line py-1.5 text-[0.7rem]"
+              :disabled="applying"
+              @click="closeApply"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              class="btn-solid py-1.5 text-[0.7rem]"
+              :disabled="applying || !selectedResumeId"
+              @click="confirmApply"
+            >
+              {{ applying ? '投递中…' : '确认投递 →' }}
+            </button>
+          </div>
+        </div>
       </div>
     </template>
   </div>

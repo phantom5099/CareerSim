@@ -29,8 +29,8 @@ const navItems = [
     matches: ['offers'],
   },
   {
-    label: '简历优化',
-    hint: '生成与补足',
+    label: '简历管理',
+    hint: '多份简历与优化',
     to: { name: 'resume' },
     matches: ['resume'],
   },

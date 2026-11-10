@@ -1,47 +1,96 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
-import { resumeApi } from '@/api/endpoints/resume'
-import type { ResumePayload } from '@/api/types'
+import { RESUME_LIMIT } from '@/api/types'
+import type {
+  ResumeCertificate,
+  ResumeDocument,
+  ResumeEducation,
+  ResumeExperience,
+  ResumeHonor,
+  ResumePayload,
+  ResumePractice,
+  ResumeProject,
+  ResumeSkill,
+} from '@/api/types'
+import { formatDate } from '@/domain/types'
 import { useAuthStore } from '@/stores/auth'
-
-type ResumeDraft = ResumePayload
+import { useResumesStore } from '@/stores/resumes'
 
 const auth = useAuthStore()
+const resumes = useResumesStore()
 
-function blankDraft(): ResumeDraft {
-  return {
-    name: auth.user?.displayName ?? '林同学',
-    school: auth.user?.school ?? '南山大学',
-    major: auth.user?.major ?? '计算机科学',
-    targetRole: auth.user?.targetRoles[0] ?? '前端工程师',
-    city: auth.user?.targetCities[0] ?? '杭州',
-    contact: 'lin@example.com',
-    experiences:
-      '负责公司官网改版，首屏加载从 1.2s 降到 0.8s，转化率提升 12%\n搭建内部组件库，覆盖 30+ 业务页面，减少重复开发约 40%',
-    skills: 'Vue 3, TypeScript, Vite, Pinia, Tailwind CSS',
-  }
-}
-
-const draft = ref<ResumeDraft>(blankDraft())
-const preview = ref<ResumeDraft>({ ...draft.value })
+const fileInput = ref<HTMLInputElement | null>(null)
 const notice = ref<{ tone: 'ok' | 'warn'; text: string } | null>(null)
+const attachNotice = ref<{ tone: 'ok' | 'warn'; text: string } | null>(null)
+const pendingDeleteId = ref('')
+const aiDemoOpen = ref(false)
 
-onMounted(async () => {
-  const saved = await resumeApi.load()
-  if (saved) {
-    draft.value = { ...saved }
-    preview.value = { ...saved }
-  }
+const editingId = ref<string | null>(null)
+const creating = ref(false)
+const editorOpen = computed(() => creating.value || editingId.value !== null)
+const editorTitle = computed(() => (creating.value ? '新建在线简历' : '编辑在线简历'))
+const title = ref('')
+const draft = ref<ResumePayload>(blankPayload())
+const saving = ref(false)
+const editorError = ref('')
+
+const atLimit = computed(() => resumes.resumes.length >= RESUME_LIMIT)
+
+onMounted(() => {
+  void resumes.init()
 })
 
-watch(
-  draft,
-  (value) => {
-    void resumeApi.save({ ...value })
-  },
-  { deep: true },
-)
+function blankEducation(): ResumeEducation {
+  return { school: '', degree: '本科', major: '', startDate: '', endDate: '', ranking: '' }
+}
+
+function blankExperience(): ResumeExperience {
+  return { company: '', role: '', type: '实习', startDate: '', endDate: '', description: '' }
+}
+
+function blankProject(): ResumeProject {
+  return { name: '', role: '', startDate: '', endDate: '', description: '' }
+}
+
+function blankPractice(): ResumePractice {
+  return { name: '', role: '', startDate: '', endDate: '', description: '' }
+}
+
+function blankSkill(): ResumeSkill {
+  return { name: '', level: '掌握' }
+}
+
+function blankCertificate(): ResumeCertificate {
+  return { name: '', date: '' }
+}
+
+function blankHonor(): ResumeHonor {
+  return { name: '', level: '校级', date: '' }
+}
+
+function blankPayload(): ResumePayload {
+  const role = auth.user?.targetRoles[0] ?? '前端工程师'
+  const city = auth.user?.targetCities[0] ?? '杭州'
+  return {
+    name: auth.user?.displayName ?? '林同学',
+    phone: '',
+    email: '',
+    city,
+    targetRole: role,
+    targetCity: city,
+    jobType: '校招',
+    availableDate: '',
+    educations: [blankEducation()],
+    experiences: [],
+    projects: [],
+    practices: [],
+    skills: [],
+    certificates: [],
+    honors: [],
+    summary: '',
+  }
+}
 
 function lines(value: string): string[] {
   return value
@@ -50,278 +99,1395 @@ function lines(value: string): string[] {
     .filter(Boolean)
 }
 
-function keywords(value: string): string[] {
-  return value
-    .split(/[,，、/]/)
-    .map((item) => item.trim())
-    .filter(Boolean)
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`
+  }
+  if (bytes < 1024 * 1024) {
+    return `${Math.round(bytes / 1024)} KB`
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-const previewExperiences = computed(() => lines(preview.value.experiences))
-const previewSkills = computed(() => keywords(preview.value.skills))
+function resumeMeta(resume: ResumeDocument): string {
+  if (resume.kind === 'online') {
+    const education = resume.payload.educations[0]
+    return [
+      resume.payload.targetRole,
+      resume.payload.targetCity,
+      education ? `${education.school} · ${education.degree}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ')
+  }
+  return `${resume.attachment.fileName} · ${formatFileSize(resume.attachment.fileSize)}`
+}
 
-function generate() {
-  const missing: string[] = []
-  if (!draft.value.name.trim()) {
-    missing.push('姓名')
+function dateRange(start: string, end: string): string {
+  const from = start.trim()
+  const to = end.trim()
+  if (!from && !to) {
+    return ''
   }
-  if (!draft.value.school.trim()) {
-    missing.push('学校')
-  }
-  if (!draft.value.targetRole.trim()) {
-    missing.push('求职方向')
-  }
-  if (!lines(draft.value.experiences).length) {
-    missing.push('项目或实习经历')
-  }
-  if (missing.length) {
-    notice.value = { tone: 'warn', text: `请先补全：${missing.join('、')}。` }
+  return `${from || '—'} – ${to || '至今'}`
+}
+
+function togglePresent(item: { endDate: string }, event: Event) {
+  item.endDate = (event.target as HTMLInputElement).checked ? '至今' : ''
+}
+
+function warn(text: string) {
+  notice.value = { tone: 'warn', text }
+}
+
+function startOnline() {
+  if (atLimit.value) {
+    warn(`最多保存 ${RESUME_LIMIT} 份简历，请先删除一份。`)
     return
   }
-  preview.value = { ...draft.value }
-  notice.value = { tone: 'ok', text: '简历已生成，可复制文本或直接对照修改。' }
-}
-
-function resumeText(value: ResumeDraft): string {
-  const target = [value.targetRole, value.city].filter(Boolean).join(' · ')
-  const sections = [
-    [value.name, [value.school, value.major].filter(Boolean).join(' · ')].join('\n'),
-    target ? `求职方向：${target}` : '',
-    value.contact ? `联系方式：${value.contact}` : '',
-    ['项目与实习经历', ...lines(value.experiences).map((line) => `- ${line}`)].join('\n'),
-    keywords(value.skills).length ? ['技能', ...keywords(value.skills)].join(' · ') : '',
-  ]
-  return sections.filter(Boolean).join('\n\n')
-}
-
-async function copyResume() {
-  try {
-    await navigator.clipboard.writeText(resumeText(preview.value))
-    notice.value = { tone: 'ok', text: '简历文本已复制到剪贴板。' }
-  } catch {
-    notice.value = { tone: 'warn', text: '复制失败，可直接选中预览内容手动复制。' }
-  }
-}
-
-function resetDraft() {
-  draft.value = blankDraft()
-  preview.value = { ...draft.value }
+  creating.value = true
+  editingId.value = null
+  title.value = auth.user?.targetRoles[0] ?? '求职简历'
+  draft.value = blankPayload()
+  pendingDeleteId.value = ''
+  editorError.value = ''
+  attachNotice.value = null
   notice.value = null
 }
 
-const tips = computed(() => {
-  const items: { tone: 'ok' | 'warn'; text: string }[] = []
-  const experienceLines = lines(draft.value.experiences)
-  if (experienceLines.length < 2) {
-    items.push({ tone: 'warn', text: '项目与实习经历至少写两条，每条一句背景、一句结果。' })
-  } else if (!experienceLines.every((line) => /\d/.test(line))) {
-    items.push({ tone: 'warn', text: '部分经历缺少数字，补上人数、耗时或提升比例。' })
-  } else {
-    items.push({ tone: 'ok', text: '经历描述已包含可量化的结果。' })
+function editResume(resume: ResumeDocument) {
+  if (resume.kind !== 'online') {
+    return
   }
-  if (keywords(draft.value.skills).length < 3) {
-    items.push({ tone: 'warn', text: '技能关键词建议补到 3 个以上，覆盖语言、框架与工具。' })
-  } else {
-    items.push({ tone: 'ok', text: '技能关键词数量足够，注意与目标岗位对齐。' })
+  creating.value = false
+  editingId.value = resume.id
+  title.value = resume.title
+  // Pinia 的 payload 是响应式 Proxy，structuredClone 会抛 DataCloneError。
+  draft.value = JSON.parse(JSON.stringify(resume.payload)) as ResumePayload
+  pendingDeleteId.value = ''
+  editorError.value = ''
+  attachNotice.value = null
+  notice.value = null
+}
+
+function closeEditor() {
+  if (saving.value) {
+    return
   }
-  if (!draft.value.targetRole.trim()) {
-    items.push({ tone: 'warn', text: '填写求职方向，招聘方才能快速判断匹配度。' })
+  creating.value = false
+  editingId.value = null
+  editorError.value = ''
+  aiDemoOpen.value = false
+}
+
+function addEducation() {
+  draft.value.educations.push(blankEducation())
+}
+
+function removeEducation(index: number) {
+  draft.value.educations.splice(index, 1)
+}
+
+function addExperience() {
+  draft.value.experiences.push(blankExperience())
+}
+
+function removeExperience(index: number) {
+  draft.value.experiences.splice(index, 1)
+}
+
+function addProject() {
+  draft.value.projects.push(blankProject())
+}
+
+function removeProject(index: number) {
+  draft.value.projects.splice(index, 1)
+}
+
+function addPractice() {
+  draft.value.practices.push(blankPractice())
+}
+
+function removePractice(index: number) {
+  draft.value.practices.splice(index, 1)
+}
+
+function addSkill() {
+  draft.value.skills.push(blankSkill())
+}
+
+function removeSkill(index: number) {
+  draft.value.skills.splice(index, 1)
+}
+
+function addCertificate() {
+  draft.value.certificates.push(blankCertificate())
+}
+
+function removeCertificate(index: number) {
+  draft.value.certificates.splice(index, 1)
+}
+
+function addHonor() {
+  draft.value.honors.push(blankHonor())
+}
+
+function removeHonor(index: number) {
+  draft.value.honors.splice(index, 1)
+}
+
+function cleanedPayload(): ResumePayload {
+  const text = (value: string) => value.trim()
+  return {
+    name: text(draft.value.name),
+    phone: text(draft.value.phone),
+    email: text(draft.value.email),
+    city: text(draft.value.city),
+    targetRole: text(draft.value.targetRole),
+    targetCity: text(draft.value.targetCity),
+    jobType: text(draft.value.jobType),
+    availableDate: text(draft.value.availableDate),
+    educations: draft.value.educations
+      .map((item) => ({
+        school: text(item.school),
+        degree: text(item.degree),
+        major: text(item.major),
+        startDate: text(item.startDate),
+        endDate: text(item.endDate),
+        ranking: text(item.ranking),
+      }))
+      .filter((item) => item.school || item.major || item.degree),
+    experiences: draft.value.experiences
+      .map((item) => ({
+        company: text(item.company),
+        role: text(item.role),
+        type: text(item.type),
+        startDate: text(item.startDate),
+        endDate: text(item.endDate),
+        description: item.description.trim(),
+      }))
+      .filter((item) => item.company || item.role || item.description),
+    projects: draft.value.projects
+      .map((item) => ({
+        name: text(item.name),
+        role: text(item.role),
+        startDate: text(item.startDate),
+        endDate: text(item.endDate),
+        description: item.description.trim(),
+      }))
+      .filter((item) => item.name || item.role || item.description),
+    practices: draft.value.practices
+      .map((item) => ({
+        name: text(item.name),
+        role: text(item.role),
+        startDate: text(item.startDate),
+        endDate: text(item.endDate),
+        description: item.description.trim(),
+      }))
+      .filter((item) => item.name || item.role || item.description),
+    skills: draft.value.skills
+      .map((item) => ({ name: text(item.name), level: text(item.level) }))
+      .filter((item) => item.name),
+    certificates: draft.value.certificates
+      .map((item) => ({ name: text(item.name), date: text(item.date) }))
+      .filter((item) => item.name),
+    honors: draft.value.honors
+      .map((item) => ({ name: text(item.name), level: text(item.level), date: text(item.date) }))
+      .filter((item) => item.name),
+    summary: draft.value.summary.trim(),
   }
-  if (!draft.value.contact.trim()) {
-    items.push({ tone: 'warn', text: '补上邮箱或手机号，方便招聘方联系。' })
+}
+
+async function saveEditor() {
+  if (saving.value) {
+    return
   }
-  return items
-})
+  const payload = cleanedPayload()
+  if (!title.value.trim()) {
+    editorError.value = '请先填写简历名称。'
+    return
+  }
+  if (!payload.name) {
+    editorError.value = '姓名不能为空。'
+    return
+  }
+  if (!payload.targetRole) {
+    editorError.value = '求职方向不能为空。'
+    return
+  }
+  if (!payload.phone && !payload.email) {
+    editorError.value = '请至少填写手机号或邮箱，招聘方需要能联系到你。'
+    return
+  }
+  if (!payload.educations.length) {
+    editorError.value = '请至少填写一段教育经历。'
+    return
+  }
+  const dateSections = [
+    { label: '教育经历', items: payload.educations },
+    { label: '实习与工作经历', items: payload.experiences },
+    { label: '项目经历', items: payload.projects },
+    { label: '在校实践', items: payload.practices },
+  ]
+  for (const section of dateSections) {
+    for (const [index, item] of section.items.entries()) {
+      const name = `${section.label}第 ${index + 1} 条`
+      if (!item.startDate) {
+        editorError.value = `${name}缺少开始时间。`
+        return
+      }
+      if (!item.endDate) {
+        editorError.value = `${name}缺少结束时间，进行中的请勾选“至今”。`
+        return
+      }
+      if (item.endDate !== '至今' && item.endDate < item.startDate) {
+        editorError.value = `${name}的结束时间早于开始时间。`
+        return
+      }
+    }
+  }
+  saving.value = true
+  editorError.value = ''
+  const input = { title: title.value.trim(), kind: 'online' as const, payload }
+  try {
+    if (creating.value) {
+      await resumes.create(input)
+      notice.value = { tone: 'ok', text: '在线简历已创建，投递时可直接选用。' }
+    } else if (editingId.value) {
+      await resumes.update(editingId.value, input)
+      notice.value = { tone: 'ok', text: '简历修改已保存。' }
+    }
+    creating.value = false
+    editingId.value = null
+  } catch (error) {
+    editorError.value = error instanceof Error ? error.message : '保存失败，请稍后重试。'
+  } finally {
+    saving.value = false
+  }
+}
+
+async function onFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) {
+    return
+  }
+  if (atLimit.value) {
+    const text = `最多保存 ${RESUME_LIMIT} 份简历，请先删除一份。`
+    warn(text)
+    attachNotice.value = { tone: 'warn', text }
+    return
+  }
+  try {
+    await resumes.create({
+      title: file.name.replace(/\.[^.]+$/, '') || file.name,
+      kind: 'attachment',
+      attachment: { fileName: file.name, fileSize: file.size },
+    })
+    notice.value = { tone: 'ok', text: `已添加附件简历「${file.name}」。` }
+    attachNotice.value = {
+      tone: 'ok',
+      text: `已添加附件简历「${file.name}」，投递时可单独选用。`,
+    }
+  } catch (error) {
+    const text = error instanceof Error ? error.message : '添加失败，请稍后重试。'
+    warn(text)
+    attachNotice.value = { tone: 'warn', text }
+  }
+}
+
+async function makeDefault(id: string) {
+  if (resumes.byId(id)?.isDefault) {
+    return
+  }
+  try {
+    await resumes.setDefault(id)
+  } catch (error) {
+    warn(error instanceof Error ? error.message : '设置失败，请稍后重试。')
+  }
+}
+
+async function requestDelete(id: string) {
+  if (pendingDeleteId.value !== id) {
+    pendingDeleteId.value = id
+    return
+  }
+  pendingDeleteId.value = ''
+  try {
+    await resumes.remove(id)
+    if (editingId.value === id) {
+      closeEditor()
+    }
+    notice.value = { tone: 'ok', text: '简历已删除。' }
+  } catch (error) {
+    warn(error instanceof Error ? error.message : '删除失败，请稍后重试。')
+  }
+}
+
+const previewEducations = computed(() =>
+  draft.value.educations.filter((item) => item.school || item.major || item.degree),
+)
+const previewExperiences = computed(() =>
+  draft.value.experiences.filter((item) => item.company || item.role || item.description),
+)
+const previewProjects = computed(() =>
+  draft.value.projects.filter((item) => item.name || item.role || item.description),
+)
+const previewPractices = computed(() =>
+  draft.value.practices.filter((item) => item.name || item.role || item.description),
+)
+const previewSkills = computed(() => draft.value.skills.filter((item) => item.name.trim()))
+const previewCertificates = computed(() => draft.value.certificates.filter((item) => item.name.trim()))
+const previewHonors = computed(() => draft.value.honors.filter((item) => item.name.trim()))
+
 </script>
 
 <template>
   <div>
-    <h1 class="sr-only">简历优化</h1>
+    <h1 class="sr-only">简历管理</h1>
 
-    <div class="mt-1 grid gap-9 lg:grid-cols-[minmax(0,1fr)_21rem]">
-      <div class="space-y-9">
-        <section>
-          <div class="flex items-baseline justify-between border-b border-ink pb-2">
-            <h2 class="font-display text-2xl">简历信息</h2>
-          </div>
-
-          <form class="mt-4" @submit.prevent="generate">
-            <div class="grid gap-4 sm:grid-cols-2">
-              <label class="block">
-                <span class="text-[0.62rem] text-ink-faint">姓名</span>
-                <input
-                  v-model="draft.name"
-                  type="text"
-                  class="field mt-1.5 text-sm"
-                  placeholder="你的姓名"
-                  autocomplete="off"
-                />
-              </label>
-              <label class="block">
-                <span class="text-[0.62rem] text-ink-faint">学校</span>
-                <input
-                  v-model="draft.school"
-                  type="text"
-                  class="field mt-1.5 text-sm"
-                  placeholder="学校名称"
-                  autocomplete="off"
-                />
-              </label>
-              <label class="block">
-                <span class="text-[0.62rem] text-ink-faint">专业</span>
-                <input
-                  v-model="draft.major"
-                  type="text"
-                  class="field mt-1.5 text-sm"
-                  placeholder="专业方向"
-                  autocomplete="off"
-                />
-              </label>
-              <label class="block">
-                <span class="text-[0.62rem] text-ink-faint">求职方向</span>
-                <input
-                  v-model="draft.targetRole"
-                  type="text"
-                  class="field mt-1.5 text-sm"
-                  placeholder="如：前端工程师"
-                  autocomplete="off"
-                />
-              </label>
-              <label class="block">
-                <span class="text-[0.62rem] text-ink-faint">意向城市</span>
-                <input
-                  v-model="draft.city"
-                  type="text"
-                  class="field mt-1.5 text-sm"
-                  placeholder="如：杭州"
-                  autocomplete="off"
-                />
-              </label>
-              <label class="block">
-                <span class="text-[0.62rem] text-ink-faint">联系方式</span>
-                <input
-                  v-model="draft.contact"
-                  type="text"
-                  class="field mt-1.5 text-sm"
-                  placeholder="邮箱或手机号"
-                  autocomplete="off"
-                />
-              </label>
-            </div>
-
-            <label class="mt-4 block">
-              <span class="text-[0.62rem] text-ink-faint">项目与实习经历 · 一行一条</span>
-              <textarea
-                v-model="draft.experiences"
-                class="field mt-1.5 text-sm leading-6"
-                rows="6"
-                placeholder="一句话写清背景、动作和结果，尽量带上数字。"
-              />
-            </label>
-
-            <label class="mt-4 block">
-              <span class="text-[0.62rem] text-ink-faint">技能与证书 · 用逗号分隔</span>
-              <input
-                v-model="draft.skills"
-                type="text"
-                class="field mt-1.5 text-sm"
-                placeholder="如：Vue 3, TypeScript, Vite"
-                autocomplete="off"
-              />
-            </label>
-
-            <div class="mt-5 flex flex-wrap items-center gap-3">
-              <button type="submit" class="btn-solid py-2 text-[0.78rem]">生成简历 →</button>
-              <button type="button" class="btn-line py-2 text-[0.76rem]" @click="copyResume">
-                复制文本
-              </button>
-              <button
-                type="button"
-                class="border-b border-line-strong pb-0.5 text-[0.68rem] text-ink-soft transition hover:border-vermilion hover:text-vermilion"
-                @click="resetDraft"
-              >
-                重置
-              </button>
-            </div>
-
-            <p
-              v-if="notice"
-              role="status"
-              class="mt-4 border px-3 py-2 text-[0.7rem]"
-              :class="
-                notice.tone === 'ok'
-                  ? 'border-moss/40 bg-moss/5 text-moss'
-                  : 'border-vermilion/40 bg-vermilion/5 text-vermilion'
-              "
-            >
-              {{ notice.text }}
-            </p>
-          </form>
-        </section>
-
-        <section>
-          <div class="border-b border-ink pb-2">
-            <h2 class="font-display text-2xl">优化提示</h2>
-          </div>
-          <ul class="mt-3 space-y-2.5">
-            <li
-              v-for="tip in tips"
-              :key="tip.text"
-              class="flex gap-2 text-[0.72rem] leading-6 text-ink-soft"
-            >
-              <span :class="tip.tone === 'ok' ? 'text-moss' : 'text-vermilion'" aria-hidden="true">
-                —
-              </span>
-              <span>{{ tip.text }}</span>
-            </li>
-          </ul>
-        </section>
+    <div class="mt-1 flex flex-wrap items-end justify-between gap-4 border-b border-ink pb-3">
+      <div>
+        <h2 class="font-display text-3xl leading-none">简历管理</h2>
       </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          class="flex h-9 w-9 items-center justify-center rounded-full border border-ink text-xl leading-none transition hover:border-vermilion hover:text-vermilion disabled:cursor-not-allowed disabled:opacity-40"
+          :disabled="atLimit"
+          aria-label="新建在线简历"
+          title="新建在线简历"
+          @click="startOnline"
+        >
+          +
+        </button>
+        <input
+          ref="fileInput"
+          type="file"
+          accept=".pdf,.doc,.docx"
+          class="hidden"
+          @change="onFile"
+        />
+        <span class="font-mono text-sm text-ink-faint">
+          {{ resumes.resumes.length }} / {{ RESUME_LIMIT }}
+        </span>
+      </div>
+    </div>
 
-      <aside class="lg:sticky lg:top-6 lg:self-start">
-        <div class="flex items-baseline justify-between border-b border-ink pb-2">
-          <h2 class="font-display text-lg">简历预览</h2>
-          <span class="text-[0.62rem] text-ink-faint">单页 · A4</span>
-        </div>
+    <p
+      v-if="notice && !editorOpen"
+      role="status"
+      class="mt-4 border px-3 py-2 text-[0.7rem]"
+      :class="
+        notice.tone === 'ok'
+          ? 'border-moss/40 bg-moss/5 text-moss'
+          : 'border-vermilion/40 bg-vermilion/5 text-vermilion'
+      "
+    >
+      {{ notice.text }}
+    </p>
 
-        <div class="mt-3 border border-line bg-paper-light p-5">
-          <p class="font-mono text-[0.54rem] tracking-[0.22em] text-ink-faint">RESUME / 2026</p>
-          <p class="mt-2 font-display text-3xl leading-none">{{ preview.name || '姓名' }}</p>
-          <p class="mt-2 text-[0.74rem] text-ink-soft">
-            {{ [preview.school, preview.major].filter(Boolean).join(' · ') || '学校 · 专业' }}
-          </p>
-          <p class="mt-1 text-[0.68rem] text-ink-faint">
-            {{ [preview.targetRole, preview.city].filter(Boolean).join(' · ') || '求职方向' }}
-          </p>
-          <p v-if="preview.contact" class="mt-1 font-mono text-[0.58rem] text-ink-faint">
-            {{ preview.contact }}
-          </p>
-
-          <div class="mt-4 border-t border-ink pt-2">
-            <p class="text-[0.62rem] text-ink-faint">项目与实习经历</p>
-            <ul v-if="previewExperiences.length" class="mt-2 space-y-2">
-              <li
-                v-for="line in previewExperiences"
-                :key="line"
-                class="flex gap-2 text-[0.72rem] leading-5"
-              >
-                <span class="text-vermilion" aria-hidden="true">—</span>
-                <span>{{ line }}</span>
-              </li>
-            </ul>
-            <p v-else class="mt-2 text-[0.66rem] text-ink-faint">暂无经历。</p>
+    <ul class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <li
+        v-for="resume in resumes.resumes"
+        :key="resume.id"
+        class="flex flex-col border border-line bg-paper-light p-4"
+      >
+        <div class="flex items-start gap-2.5">
+          <input
+            type="radio"
+            name="default-resume"
+            class="mt-1.5 h-3.5 w-3.5 shrink-0 accent-vermilion"
+            :checked="resume.isDefault"
+            :aria-label="`将「${resume.title}」设为默认简历`"
+            :title="resume.isDefault ? '当前默认简历' : '设为默认简历'"
+            @change="makeDefault(resume.id)"
+          />
+          <div class="min-w-0 flex-1">
+            <h3 class="min-w-0 font-display text-lg leading-tight">{{ resume.title }}</h3>
+            <p class="mt-1.5 text-[0.68rem] leading-5 text-ink-soft">{{ resumeMeta(resume) }}</p>
+            <p class="mt-1 text-[0.6rem] text-ink-faint">更新于 {{ formatDate(resume.updatedAt) }}</p>
           </div>
+        </div>
+        <div
+          class="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-line/70 pt-3 text-[0.64rem]"
+        >
+          <button
+            v-if="resume.kind === 'online'"
+            type="button"
+            class="text-ink-soft transition hover:text-vermilion"
+            @click="editResume(resume)"
+          >
+            编辑
+          </button>
+          <button
+            type="button"
+            class="ml-auto text-ink-faint transition hover:text-vermilion"
+            @click="requestDelete(resume.id)"
+          >
+            {{ pendingDeleteId === resume.id ? '确认删除' : '删除' }}
+          </button>
+          <button
+            v-if="pendingDeleteId === resume.id"
+            type="button"
+            class="text-ink-faint transition hover:text-ink"
+            @click="pendingDeleteId = ''"
+          >
+            取消
+          </button>
+        </div>
+      </li>
+    </ul>
 
-          <div class="mt-4 border-t border-line pt-2">
-            <p class="text-[0.62rem] text-ink-faint">技能</p>
-            <div class="mt-2 flex flex-wrap gap-1.5">
-              <span v-for="skill in previewSkills" :key="skill" class="chip">{{ skill }}</span>
-              <span v-if="!previewSkills.length" class="text-[0.62rem] text-ink-faint">暂无</span>
+    <div
+      v-if="editorOpen"
+      class="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 sm:items-center sm:p-6"
+      role="presentation"
+      @click.self="closeEditor"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="resume-editor-title"
+        class="flex max-h-[94dvh] w-full max-w-6xl flex-col border border-ink bg-paper-light shadow-xl"
+      >
+        <header class="flex items-start justify-between gap-4 border-b border-ink px-5 py-3">
+          <div class="min-w-0">
+            <h2 id="resume-editor-title" class="font-display text-xl leading-tight">
+              {{ editorTitle }}
+            </h2>
+            <p class="mt-1 text-[0.62rem] leading-4 text-ink-faint">
+              按招聘官网申请表的顺序填写：基本信息、求职意向、教育、经历、项目与技能。
+            </p>
+          </div>
+          <button
+            type="button"
+            class="text-lg leading-none text-ink-faint transition hover:text-vermilion"
+            aria-label="关闭简历编辑"
+            @click="closeEditor"
+          >
+            ×
+          </button>
+        </header>
+
+        <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="saveEditor">
+          <div class="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+            <div class="grid gap-8 lg:grid-cols-[minmax(0,1fr)_19rem] lg:items-start">
+              <div class="space-y-8">
+                <section>
+                  <div class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink pb-2">
+                    <h3 class="shrink-0 font-display text-lg">简历名称</h3>
+                    <input
+                      v-model="title"
+                      type="text"
+                      class="field min-w-0 flex-1 text-sm"
+                      placeholder="如：前端工程师"
+                      aria-label="简历名称"
+                      autocomplete="off"
+                    />
+                    <span class="shrink-0 font-mono text-[0.54rem] tracking-[0.14em] text-ink-faint">
+                      TITLE
+                    </span>
+                  </div>
+                </section>
+
+                <section>
+                  <div class="flex items-baseline justify-between border-b border-ink pb-1.5">
+                    <h3 class="font-display text-lg">附件简历</h3>
+                    <span class="font-mono text-[0.54rem] tracking-[0.14em] text-ink-faint">
+                      ATTACHMENT
+                    </span>
+                  </div>
+                  <div class="mt-3 border border-dashed border-line-strong px-4 py-4">
+                    <p class="text-[0.68rem] leading-5 text-ink-soft">
+                      支持 PDF / Word，上传后作为独立附件简历保存，投递时可与在线简历分别选用。
+                    </p>
+                    <div class="mt-3 flex flex-wrap items-center gap-3">
+                      <button
+                        v-if="!atLimit"
+                        type="button"
+                        class="btn-line py-1.5 text-[0.68rem]"
+                        @click="fileInput?.click()"
+                      >
+                        选择文件上传
+                      </button>
+                      <span v-else class="text-[0.62rem] text-ink-faint">
+                        已保存 {{ RESUME_LIMIT }} 份，删除一份后可继续上传。
+                      </span>
+                      <span class="font-mono text-[0.58rem] text-ink-faint">
+                        {{ resumes.resumes.length }} / {{ RESUME_LIMIT }}
+                      </span>
+                    </div>
+                    <p
+                      v-if="attachNotice"
+                      class="mt-2 text-[0.62rem]"
+                      :class="attachNotice.tone === 'ok' ? 'text-moss' : 'text-vermilion'"
+                    >
+                      {{ attachNotice.text }}
+                    </p>
+                  </div>
+                </section>
+
+                <section>
+                  <div class="flex items-baseline justify-between border-b border-ink pb-1.5">
+                    <h3 class="font-display text-lg">基本信息</h3>
+                    <span class="font-mono text-[0.54rem] tracking-[0.14em] text-ink-faint">
+                      BASIC
+                    </span>
+                  </div>
+                  <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                    <label class="block">
+                      <span class="text-[0.62rem] text-ink-faint">姓名 *</span>
+                      <input
+                        v-model="draft.name"
+                        type="text"
+                        class="field mt-1.5 text-sm"
+                        placeholder="你的姓名"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <label class="block">
+                      <span class="text-[0.62rem] text-ink-faint">手机号 *</span>
+                      <input
+                        v-model="draft.phone"
+                        type="tel"
+                        class="field mt-1.5 text-sm"
+                        placeholder="138-0000-0000"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <label class="block">
+                      <span class="text-[0.62rem] text-ink-faint">邮箱 *</span>
+                      <input
+                        v-model="draft.email"
+                        type="email"
+                        class="field mt-1.5 text-sm"
+                        placeholder="name@example.com"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <label class="block">
+                      <span class="text-[0.62rem] text-ink-faint">现居城市</span>
+                      <input
+                        v-model="draft.city"
+                        type="text"
+                        class="field mt-1.5 text-sm"
+                        placeholder="如：杭州"
+                        autocomplete="off"
+                      />
+                    </label>
+                  </div>
+                  <p class="mt-1.5 text-[0.58rem] text-ink-faint">手机号与邮箱至少填写一个。</p>
+                </section>
+
+                <section>
+                  <div class="flex items-baseline justify-between border-b border-ink pb-1.5">
+                    <h3 class="font-display text-lg">求职意向</h3>
+                    <span class="font-mono text-[0.54rem] tracking-[0.14em] text-ink-faint">
+                      INTENTION
+                    </span>
+                  </div>
+                  <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                    <label class="block">
+                      <span class="text-[0.62rem] text-ink-faint">期望职位 *</span>
+                      <input
+                        v-model="draft.targetRole"
+                        type="text"
+                        class="field mt-1.5 text-sm"
+                        placeholder="如：前端工程师"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <label class="block">
+                      <span class="text-[0.62rem] text-ink-faint">期望城市</span>
+                      <input
+                        v-model="draft.targetCity"
+                        type="text"
+                        class="field mt-1.5 text-sm"
+                        placeholder="如：杭州"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <label class="block">
+                      <span class="text-[0.62rem] text-ink-faint">工作类型</span>
+                      <select v-model="draft.jobType" class="field mt-1.5 text-sm">
+                        <option>校招</option>
+                        <option>实习</option>
+                        <option>社招</option>
+                      </select>
+                    </label>
+                    <label class="block">
+                      <span class="text-[0.62rem] text-ink-faint">可到岗时间</span>
+                      <input
+                        v-model="draft.availableDate"
+                        type="month"
+                        class="field mt-1.5 text-sm"
+                      />
+                    </label>
+                  </div>
+                </section>
+
+                <section>
+                  <div class="flex items-baseline justify-between border-b border-ink pb-1.5">
+                    <h3 class="font-display text-lg">教育经历</h3>
+                    <button
+                      type="button"
+                      class="text-[0.64rem] text-ink-soft transition hover:text-vermilion"
+                      @click="addEducation"
+                    >
+                      + 添加教育经历
+                    </button>
+                  </div>
+                  <p
+                    v-if="!draft.educations.length"
+                    class="mt-3 border border-dashed border-line-strong px-3 py-4 text-[0.68rem] text-ink-faint"
+                  >
+                    至少填写一段教育经历，校招筛选会重点看学校、专业与毕业时间。
+                  </p>
+                  <div
+                    v-for="(education, index) in draft.educations"
+                    :key="`education-${index}`"
+                    class="mt-3 border border-line p-3"
+                  >
+                    <div class="flex items-center justify-between">
+                      <p class="text-[0.62rem] text-ink-faint">教育经历 {{ index + 1 }}</p>
+                      <button
+                        type="button"
+                        class="text-[0.62rem] text-ink-faint transition hover:text-vermilion"
+                        @click="removeEducation(index)"
+                      >
+                        移除
+                      </button>
+                    </div>
+                    <div class="mt-2 grid gap-3 sm:grid-cols-2">
+                      <label class="block">
+                        <span class="text-[0.6rem] text-ink-faint">学校</span>
+                        <input
+                          v-model="education.school"
+                          type="text"
+                          class="field mt-1 text-sm"
+                          placeholder="学校名称"
+                          autocomplete="off"
+                        />
+                      </label>
+                      <label class="block">
+                        <span class="text-[0.6rem] text-ink-faint">学历</span>
+                        <select v-model="education.degree" class="field mt-1 text-sm">
+                          <option>本科</option>
+                          <option>硕士</option>
+                          <option>博士</option>
+                          <option>大专</option>
+                          <option>其他</option>
+                        </select>
+                      </label>
+                      <label class="block">
+                        <span class="text-[0.6rem] text-ink-faint">专业</span>
+                        <input
+                          v-model="education.major"
+                          type="text"
+                          class="field mt-1 text-sm"
+                          placeholder="专业名称"
+                          autocomplete="off"
+                        />
+                      </label>
+                      <label class="block">
+                        <span class="text-[0.6rem] text-ink-faint">成绩排名</span>
+                        <select v-model="education.ranking" class="field mt-1 text-sm">
+                          <option value="">未填写</option>
+                          <option>前 5%</option>
+                          <option>前 10%</option>
+                          <option>前 20%</option>
+                          <option>前 30%</option>
+                          <option>前 50%</option>
+                        </select>
+                      </label>
+                      <label class="block">
+                        <span class="text-[0.6rem] text-ink-faint">入学时间</span>
+                        <input
+                          v-model="education.startDate"
+                          type="month"
+                          class="field mt-1 text-sm"
+                        />
+                      </label>
+                      <div class="block">
+                        <span class="text-[0.6rem] text-ink-faint">毕业时间</span>
+                        <div class="mt-1 flex items-center gap-2">
+                          <input
+                            v-if="education.endDate !== '至今'"
+                            v-model="education.endDate"
+                            type="month"
+                            class="field min-w-0 flex-1 text-sm"
+                          />
+                          <span v-else class="flex-1 text-sm text-ink-soft">至今</span>
+                          <label class="flex shrink-0 items-center gap-1 text-[0.6rem] text-ink-faint">
+                            <input
+                              type="checkbox"
+                              class="h-3 w-3 accent-vermilion"
+                              :checked="education.endDate === '至今'"
+                              @change="togglePresent(education, $event)"
+                            />
+                            至今
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section>
+                  <div class="flex items-baseline justify-between border-b border-ink pb-1.5">
+                    <h3 class="font-display text-lg">实习与工作经历</h3>
+                    <button
+                      type="button"
+                      class="text-[0.64rem] text-ink-soft transition hover:text-vermilion"
+                      @click="addExperience"
+                    >
+                      + 添加经历
+                    </button>
+                  </div>
+                  <div
+                    v-for="(experience, index) in draft.experiences"
+                    :key="`experience-${index}`"
+                    class="mt-3 border border-line p-3"
+                  >
+                    <div class="flex items-center justify-between">
+                      <p class="text-[0.62rem] text-ink-faint">经历 {{ index + 1 }}</p>
+                      <button
+                        type="button"
+                        class="text-[0.62rem] text-ink-faint transition hover:text-vermilion"
+                        @click="removeExperience(index)"
+                      >
+                        移除
+                      </button>
+                    </div>
+                    <div class="mt-2 grid gap-3 sm:grid-cols-2">
+                      <label class="block">
+                        <span class="text-[0.6rem] text-ink-faint">公司</span>
+                        <input
+                          v-model="experience.company"
+                          type="text"
+                          class="field mt-1 text-sm"
+                          placeholder="公司名称"
+                          autocomplete="off"
+                        />
+                      </label>
+                      <label class="block">
+                        <span class="text-[0.6rem] text-ink-faint">职位</span>
+                        <input
+                          v-model="experience.role"
+                          type="text"
+                          class="field mt-1 text-sm"
+                          placeholder="岗位名称"
+                          autocomplete="off"
+                        />
+                      </label>
+                      <label class="block">
+                        <span class="text-[0.6rem] text-ink-faint">类型</span>
+                        <select v-model="experience.type" class="field mt-1 text-sm">
+                          <option>实习</option>
+                          <option>全职</option>
+                          <option>兼职</option>
+                        </select>
+                      </label>
+                      <div class="block">
+                        <span class="text-[0.6rem] text-ink-faint">起止时间</span>
+                        <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                          <div class="flex min-w-0 flex-1 items-center gap-1.5">
+                            <input
+                              v-model="experience.startDate"
+                              type="month"
+                              class="field min-w-0 flex-1 text-sm"
+                            />
+                            <span class="shrink-0 text-[0.6rem] text-ink-faint">–</span>
+                            <input
+                              v-if="experience.endDate !== '至今'"
+                              v-model="experience.endDate"
+                              type="month"
+                              class="field min-w-0 flex-1 text-sm"
+                            />
+                            <span v-else class="shrink-0 text-sm text-ink-soft">至今</span>
+                          </div>
+                          <label class="flex shrink-0 items-center gap-1 text-[0.6rem] text-ink-faint">
+                            <input
+                              type="checkbox"
+                              class="h-3 w-3 accent-vermilion"
+                              :checked="experience.endDate === '至今'"
+                              @change="togglePresent(experience, $event)"
+                            />
+                            至今
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                    <label class="mt-3 block">
+                      <span class="text-[0.6rem] text-ink-faint">职责与业绩</span>
+                      <textarea
+                        v-model="experience.description"
+                        class="field mt-1 text-sm leading-6"
+                        rows="3"
+                        placeholder="交代背景、动作和结果，尽量带上数字。"
+                      />
+                    </label>
+                  </div>
+                </section>
+
+                <section>
+                  <div class="flex items-baseline justify-between border-b border-ink pb-1.5">
+                    <h3 class="font-display text-lg">项目经历</h3>
+                    <button
+                      type="button"
+                      class="text-[0.64rem] text-ink-soft transition hover:text-vermilion"
+                      @click="addProject"
+                    >
+                      + 添加项目
+                    </button>
+                  </div>
+                  <div
+                    v-for="(project, index) in draft.projects"
+                    :key="`project-${index}`"
+                    class="mt-3 border border-line p-3"
+                  >
+                    <div class="flex items-center justify-between">
+                      <p class="text-[0.62rem] text-ink-faint">项目 {{ index + 1 }}</p>
+                      <button
+                        type="button"
+                        class="text-[0.62rem] text-ink-faint transition hover:text-vermilion"
+                        @click="removeProject(index)"
+                      >
+                        移除
+                      </button>
+                    </div>
+                    <div class="mt-2 grid gap-3 sm:grid-cols-2">
+                      <label class="block">
+                        <span class="text-[0.6rem] text-ink-faint">项目名称</span>
+                        <input
+                          v-model="project.name"
+                          type="text"
+                          class="field mt-1 text-sm"
+                          placeholder="项目名称"
+                          autocomplete="off"
+                        />
+                      </label>
+                      <label class="block">
+                        <span class="text-[0.6rem] text-ink-faint">担任角色</span>
+                        <input
+                          v-model="project.role"
+                          type="text"
+                          class="field mt-1 text-sm"
+                          placeholder="如：前端负责人"
+                          autocomplete="off"
+                        />
+                      </label>
+                      <div class="block">
+                        <span class="text-[0.6rem] text-ink-faint">起止时间</span>
+                        <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                          <div class="flex min-w-0 flex-1 items-center gap-1.5">
+                            <input
+                              v-model="project.startDate"
+                              type="month"
+                              class="field min-w-0 flex-1 text-sm"
+                            />
+                            <span class="shrink-0 text-[0.6rem] text-ink-faint">–</span>
+                            <input
+                              v-if="project.endDate !== '至今'"
+                              v-model="project.endDate"
+                              type="month"
+                              class="field min-w-0 flex-1 text-sm"
+                            />
+                            <span v-else class="shrink-0 text-sm text-ink-soft">至今</span>
+                          </div>
+                          <label class="flex shrink-0 items-center gap-1 text-[0.6rem] text-ink-faint">
+                            <input
+                              type="checkbox"
+                              class="h-3 w-3 accent-vermilion"
+                              :checked="project.endDate === '至今'"
+                              @change="togglePresent(project, $event)"
+                            />
+                            至今
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                    <label class="mt-3 block">
+                      <span class="text-[0.6rem] text-ink-faint">项目职责与成果</span>
+                      <textarea
+                        v-model="project.description"
+                        class="field mt-1 text-sm leading-6"
+                        rows="3"
+                        placeholder="写清技术方案、个人贡献和量化结果。"
+                      />
+                    </label>
+                  </div>
+                </section>
+
+                <section>
+                  <div class="flex items-baseline justify-between border-b border-ink pb-1.5">
+                    <h3 class="font-display text-lg">在校实践</h3>
+                    <button
+                      type="button"
+                      class="text-[0.64rem] text-ink-soft transition hover:text-vermilion"
+                      @click="addPractice"
+                    >
+                      + 添加实践
+                    </button>
+                  </div>
+                  <div
+                    v-for="(practice, index) in draft.practices"
+                    :key="`practice-${index}`"
+                    class="mt-3 border border-line p-3"
+                  >
+                    <div class="flex items-center justify-between">
+                      <p class="text-[0.62rem] text-ink-faint">实践 {{ index + 1 }}</p>
+                      <button
+                        type="button"
+                        class="text-[0.62rem] text-ink-faint transition hover:text-vermilion"
+                        @click="removePractice(index)"
+                      >
+                        移除
+                      </button>
+                    </div>
+                    <div class="mt-2 grid gap-3 sm:grid-cols-2">
+                      <label class="block">
+                        <span class="text-[0.6rem] text-ink-faint">组织 / 活动</span>
+                        <input
+                          v-model="practice.name"
+                          type="text"
+                          class="field mt-1 text-sm"
+                          placeholder="如：校学生会技术部"
+                          autocomplete="off"
+                        />
+                      </label>
+                      <label class="block">
+                        <span class="text-[0.6rem] text-ink-faint">担任角色</span>
+                        <input
+                          v-model="practice.role"
+                          type="text"
+                          class="field mt-1 text-sm"
+                          placeholder="如：技术部负责人"
+                          autocomplete="off"
+                        />
+                      </label>
+                      <div class="block">
+                        <span class="text-[0.6rem] text-ink-faint">起止时间</span>
+                        <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                          <div class="flex min-w-0 flex-1 items-center gap-1.5">
+                            <input
+                              v-model="practice.startDate"
+                              type="month"
+                              class="field min-w-0 flex-1 text-sm"
+                            />
+                            <span class="shrink-0 text-[0.6rem] text-ink-faint">–</span>
+                            <input
+                              v-if="practice.endDate !== '至今'"
+                              v-model="practice.endDate"
+                              type="month"
+                              class="field min-w-0 flex-1 text-sm"
+                            />
+                            <span v-else class="shrink-0 text-sm text-ink-soft">至今</span>
+                          </div>
+                          <label class="flex shrink-0 items-center gap-1 text-[0.6rem] text-ink-faint">
+                            <input
+                              type="checkbox"
+                              class="h-3 w-3 accent-vermilion"
+                              :checked="practice.endDate === '至今'"
+                              @change="togglePresent(practice, $event)"
+                            />
+                            至今
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                    <label class="mt-3 block">
+                      <span class="text-[0.6rem] text-ink-faint">实践内容与成果</span>
+                      <textarea
+                        v-model="practice.description"
+                        class="field mt-1 text-sm leading-6"
+                        rows="3"
+                        placeholder="写清职责、规模和结果。"
+                      />
+                    </label>
+                  </div>
+                </section>
+
+                <section>
+                  <div class="flex items-baseline justify-between border-b border-ink pb-1.5">
+                    <h3 class="font-display text-lg">技能与证书</h3>
+                    <span class="font-mono text-[0.54rem] tracking-[0.14em] text-ink-faint">
+                      SKILLS
+                    </span>
+                  </div>
+                  <div class="mt-3 flex items-center justify-between">
+                    <p class="text-[0.62rem] text-ink-faint">专业技能</p>
+                    <button
+                      type="button"
+                      class="text-[0.64rem] text-ink-soft transition hover:text-vermilion"
+                      @click="addSkill"
+                    >
+                      + 添加技能
+                    </button>
+                  </div>
+                  <div
+                    v-for="(skill, index) in draft.skills"
+                    :key="`skill-${index}`"
+                    class="mt-2 flex items-center gap-2"
+                  >
+                    <input
+                      v-model="skill.name"
+                      type="text"
+                      class="field text-sm"
+                      placeholder="如：Vue 3"
+                      autocomplete="off"
+                    />
+                    <select v-model="skill.level" class="field w-24 shrink-0 text-sm">
+                      <option>熟练</option>
+                      <option>掌握</option>
+                      <option>了解</option>
+                    </select>
+                    <button
+                      type="button"
+                      class="shrink-0 text-[0.62rem] text-ink-faint transition hover:text-vermilion"
+                      @click="removeSkill(index)"
+                    >
+                      移除
+                    </button>
+                  </div>
+
+                  <div class="mt-4 flex items-center justify-between">
+                    <p class="text-[0.62rem] text-ink-faint">资格证书</p>
+                    <button
+                      type="button"
+                      class="text-[0.64rem] text-ink-soft transition hover:text-vermilion"
+                      @click="addCertificate"
+                    >
+                      + 添加证书
+                    </button>
+                  </div>
+                  <div
+                    v-for="(certificate, index) in draft.certificates"
+                    :key="`certificate-${index}`"
+                    class="mt-2 flex items-center gap-2"
+                  >
+                    <input
+                      v-model="certificate.name"
+                      type="text"
+                      class="field text-sm"
+                      placeholder="如：CET-6"
+                      autocomplete="off"
+                    />
+                    <input
+                      v-model="certificate.date"
+                      type="month"
+                      class="field w-28 shrink-0 text-sm"
+                    />
+                    <button
+                      type="button"
+                      class="shrink-0 text-[0.62rem] text-ink-faint transition hover:text-vermilion"
+                      @click="removeCertificate(index)"
+                    >
+                      移除
+                    </button>
+                  </div>
+
+                  <div class="mt-4 flex items-center justify-between">
+                    <p class="text-[0.62rem] text-ink-faint">校内荣誉</p>
+                    <button
+                      type="button"
+                      class="text-[0.64rem] text-ink-soft transition hover:text-vermilion"
+                      @click="addHonor"
+                    >
+                      + 添加荣誉
+                    </button>
+                  </div>
+                  <div
+                    v-for="(honor, index) in draft.honors"
+                    :key="`honor-${index}`"
+                    class="mt-2 flex items-center gap-2"
+                  >
+                    <input
+                      v-model="honor.name"
+                      type="text"
+                      class="field text-sm"
+                      placeholder="如：校级一等奖学金"
+                      autocomplete="off"
+                    />
+                    <select v-model="honor.level" class="field w-24 shrink-0 text-sm">
+                      <option>国家级</option>
+                      <option>省级</option>
+                      <option>校级</option>
+                      <option>其他</option>
+                    </select>
+                    <input
+                      v-model="honor.date"
+                      type="month"
+                      class="field w-28 shrink-0 text-sm"
+                    />
+                    <button
+                      type="button"
+                      class="shrink-0 text-[0.62rem] text-ink-faint transition hover:text-vermilion"
+                      @click="removeHonor(index)"
+                    >
+                      移除
+                    </button>
+                  </div>
+                </section>
+
+                <section>
+                  <div class="flex items-baseline justify-between border-b border-ink pb-1.5">
+                    <h3 class="font-display text-lg">个人优势</h3>
+                    <span class="font-mono text-[0.54rem] tracking-[0.14em] text-ink-faint">
+                      SUMMARY
+                    </span>
+                  </div>
+                  <label class="mt-3 block">
+                    <textarea
+                      v-model="draft.summary"
+                      class="field text-sm leading-6"
+                      rows="4"
+                      placeholder="如：关注前端工程化与交互细节，有 6 个月实习经验，能独立推进需求落地。"
+                    />
+                  </label>
+                </section>
+              </div>
+
+              <aside class="lg:sticky lg:top-0 lg:self-start">
+                <div class="flex items-baseline justify-between border-b border-ink pb-2">
+                  <h3 class="font-display text-lg">简历预览</h3>
+                  <span class="text-[0.6rem] text-ink-faint">A4</span>
+                </div>
+
+                <div class="mt-3 border border-line bg-paper p-4">
+                  <p class="font-mono text-[0.52rem] tracking-[0.22em] text-ink-faint">
+                    RESUME / 2026
+                  </p>
+                  <p class="mt-2 font-display text-2xl leading-none">
+                    {{ draft.name || '姓名' }}
+                  </p>
+                  <p class="mt-1.5 text-[0.64rem] text-ink-soft">
+                    {{
+                      [draft.targetRole, draft.targetCity, draft.jobType].filter(Boolean).join(' · ') ||
+                      '求职意向'
+                    }}
+                  </p>
+                  <p v-if="draft.availableDate" class="mt-0.5 text-[0.6rem] text-ink-faint">
+                    {{ draft.availableDate }} 可到岗
+                  </p>
+                  <p class="mt-1 text-[0.6rem] text-ink-faint">
+                    {{ [draft.phone, draft.email].filter(Boolean).join(' · ') }}
+                  </p>
+                  <p v-if="draft.city" class="mt-0.5 text-[0.6rem] text-ink-faint">
+                    现居 {{ draft.city }}
+                  </p>
+
+                  <div v-if="previewEducations.length" class="mt-3 border-t border-line pt-2">
+                    <p class="text-[0.58rem] text-ink-faint">教育经历</p>
+                    <div
+                      v-for="(education, index) in previewEducations"
+                      :key="`preview-education-${index}`"
+                      class="mt-1.5"
+                    >
+                      <p class="text-[0.68rem] leading-4">
+                        {{
+                          [education.school, education.degree, education.major]
+                            .filter(Boolean)
+                            .join(' · ')
+                        }}
+                      </p>
+                      <p class="text-[0.58rem] text-ink-faint">
+                        {{ dateRange(education.startDate, education.endDate) }}
+                        <span v-if="education.ranking"> · {{ education.ranking }}</span>
+                      </p>
+                    </div>
+                  </div>
+
+                  <div v-if="previewExperiences.length" class="mt-3 border-t border-line pt-2">
+                    <p class="text-[0.58rem] text-ink-faint">实习与工作经历</p>
+                    <div
+                      v-for="(experience, index) in previewExperiences"
+                      :key="`preview-experience-${index}`"
+                      class="mt-1.5"
+                    >
+                      <p class="text-[0.68rem] leading-4">
+                        {{ [experience.company, experience.role].filter(Boolean).join(' · ') }}
+                      </p>
+                      <p class="text-[0.58rem] text-ink-faint">
+                        {{
+                          [experience.type, dateRange(experience.startDate, experience.endDate)]
+                            .filter(Boolean)
+                            .join(' · ')
+                        }}
+                      </p>
+                      <ul v-if="lines(experience.description).length" class="mt-0.5 space-y-0.5">
+                        <li
+                          v-for="line in lines(experience.description)"
+                          :key="line"
+                          class="flex gap-1.5 text-[0.64rem] leading-4"
+                        >
+                          <span class="text-vermilion" aria-hidden="true">—</span>
+                          <span>{{ line }}</span>
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+
+                  <div v-if="previewProjects.length" class="mt-3 border-t border-line pt-2">
+                    <p class="text-[0.58rem] text-ink-faint">项目经历</p>
+                    <div
+                      v-for="(project, index) in previewProjects"
+                      :key="`preview-project-${index}`"
+                      class="mt-1.5"
+                    >
+                      <p class="text-[0.68rem] leading-4">
+                        {{ [project.name, project.role].filter(Boolean).join(' · ') }}
+                      </p>
+                      <p class="text-[0.58rem] text-ink-faint">
+                        {{ dateRange(project.startDate, project.endDate) }}
+                      </p>
+                      <ul v-if="lines(project.description).length" class="mt-0.5 space-y-0.5">
+                        <li
+                          v-for="line in lines(project.description)"
+                          :key="line"
+                          class="flex gap-1.5 text-[0.64rem] leading-4"
+                        >
+                          <span class="text-vermilion" aria-hidden="true">—</span>
+                          <span>{{ line }}</span>
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+
+                  <div v-if="previewPractices.length" class="mt-3 border-t border-line pt-2">
+                    <p class="text-[0.58rem] text-ink-faint">在校实践</p>
+                    <div
+                      v-for="(practice, index) in previewPractices"
+                      :key="`preview-practice-${index}`"
+                      class="mt-1.5"
+                    >
+                      <p class="text-[0.68rem] leading-4">
+                        {{ [practice.name, practice.role].filter(Boolean).join(' · ') }}
+                      </p>
+                      <p class="text-[0.58rem] text-ink-faint">
+                        {{ dateRange(practice.startDate, practice.endDate) }}
+                      </p>
+                      <ul v-if="lines(practice.description).length" class="mt-0.5 space-y-0.5">
+                        <li
+                          v-for="line in lines(practice.description)"
+                          :key="line"
+                          class="flex gap-1.5 text-[0.64rem] leading-4"
+                        >
+                          <span class="text-vermilion" aria-hidden="true">—</span>
+                          <span>{{ line }}</span>
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+
+                  <div v-if="previewSkills.length" class="mt-3 border-t border-line pt-2">
+                    <p class="text-[0.58rem] text-ink-faint">技能</p>
+                    <div class="mt-1 flex flex-wrap gap-1">
+                      <span
+                        v-for="skill in previewSkills"
+                        :key="skill.name"
+                        class="chip text-[0.58rem]"
+                      >
+                        {{ skill.name }}<span v-if="skill.level"> · {{ skill.level }}</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  <div
+                    v-if="previewCertificates.length || previewHonors.length"
+                    class="mt-3 border-t border-line pt-2"
+                  >
+                    <p v-if="previewCertificates.length" class="text-[0.58rem] text-ink-faint">
+                      证书 · {{ previewCertificates.map((item) => item.name).join('、') }}
+                    </p>
+                    <p v-if="previewHonors.length" class="mt-1 text-[0.58rem] text-ink-faint">
+                      荣誉 ·
+                      {{
+                        previewHonors
+                          .map((item) => `${item.name}${item.level ? `（${item.level}）` : ''}`)
+                          .join('、')
+                      }}
+                    </p>
+                  </div>
+
+                  <div v-if="draft.summary.trim()" class="mt-3 border-t border-line pt-2">
+                    <p class="text-[0.58rem] text-ink-faint">个人优势</p>
+                    <p class="mt-1 text-[0.64rem] leading-4 text-ink-soft">{{ draft.summary }}</p>
+                  </div>
+                </div>
+
+                <section class="mt-4 border border-line bg-paper-light p-3">
+                  <div class="flex items-baseline justify-between border-b border-line pb-1.5">
+                    <h3 class="font-display text-base">简历优化</h3>
+                    <span class="font-mono text-[0.52rem] tracking-[0.14em] text-ink-faint">
+                      OPTIMIZE
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    class="btn-solid mt-3 w-full py-2 text-[0.7rem]"
+                    @click="aiDemoOpen = true"
+                  >
+                    AI 帮忙优化简历
+                  </button>
+                </section>
+              </aside>
             </div>
           </div>
-        </div>
 
-      </aside>
+          <footer class="flex flex-wrap items-center gap-3 border-t border-ink px-5 py-3">
+            <p
+              v-if="editorError"
+              role="alert"
+              class="min-w-0 flex-1 border border-vermilion/40 bg-vermilion/5 px-3 py-2 text-[0.68rem] text-vermilion"
+            >
+              {{ editorError }}
+            </p>
+            <p v-else class="min-w-0 flex-1 text-[0.6rem] text-ink-faint">
+              在线简历会用于投递；附件简历可在此一并上传，不参与在线编辑。
+            </p>
+            <div class="ml-auto flex items-center gap-2">
+              <button type="button" class="btn-line py-1.5 text-[0.7rem]" @click="closeEditor">
+                取消
+              </button>
+              <button type="submit" class="btn-solid py-1.5 text-[0.7rem]" :disabled="saving">
+                {{ saving ? '保存中…' : '保存简历 →' }}
+              </button>
+            </div>
+          </footer>
+        </form>
+      </div>
     </div>
+
+    <Teleport to="body">
+      <div
+        v-if="aiDemoOpen"
+        class="fixed inset-0 z-[60] flex items-center justify-center bg-ink/40 p-6"
+        role="presentation"
+        @click.self="aiDemoOpen = false"
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="ai-optimize-demo-title"
+          class="w-full max-w-md border border-ink bg-paper-light p-5 shadow-xl"
+        >
+          <div class="flex items-baseline justify-between border-b border-line pb-2">
+            <h3 id="ai-optimize-demo-title" class="font-display text-xl">AI 简历优化</h3>
+            <span class="font-mono text-[0.54rem] tracking-[0.14em] text-ink-faint">DEMO</span>
+          </div>
+          <p class="mt-3 text-sm leading-6 text-ink-soft">
+            演示占位：AI 优化页面尚未实现，具体交互会在后续版本规划。
+          </p>
+          <div class="mt-5 flex justify-end">
+            <button type="button" class="btn-line py-1.5 text-[0.7rem]" @click="aiDemoOpen = false">
+              知道了
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
