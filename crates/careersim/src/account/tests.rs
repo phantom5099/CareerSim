@@ -407,8 +407,7 @@ async fn login_unifies_error_and_runs_dummy_verify_for_unknown_user() {
         .service
         .login("alice", "wrong-password")
         .await
-        .err()
-        .expect("wrong password rejected");
+        .expect_err("wrong password rejected");
 
     assert!(matches!(
         unknown.expect_err("unknown user rejected"),
