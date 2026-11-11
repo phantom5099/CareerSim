@@ -6,12 +6,22 @@ license = "MIT"
 publish = false
 
 [dependencies]
+argon2 = { version = "0.6.0", features = ["password-hash"] }
 async-openai = { version = "0.43.0", features = ["chat-completion"] }
 async-trait = "0.1.92"
+axum = "0.8.9"
+axum-extra = { version = "0.12.6", features = ["cookie"] }
+base64 = "0.23.1"
 chrono = { version = "0.4.45", features = ["serde"] }
+docx-rs = "0.4.22"
+infer = "0.22.0"
+mime_guess = "2.0.5"
+pdf-extract = "0.12.1"
+rand = "0.10.3"
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.11.1"
 sqlx = { version = "0.9.0", features = [
     "postgres",
     "runtime-tokio",
@@ -22,14 +32,10 @@ sqlx = { version = "0.9.0", features = [
     "migrate",
 ] }
 thiserror = "2.0.21"
-tokio = { version = "1.54.1", features = [
-    "macros",
-    "rt-multi-thread",
-    "signal",
-    "sync",
-    "time",
-] }
+tokio = { version = "1.54.1", features = ["fs", "macros", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7.20", features = ["rt"] }
+tower = "0.5.3"
+tower-http = { version = "0.7.1", features = ["trace", "limit", "request-id"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.29.0", features = ["v4", "serde"] }

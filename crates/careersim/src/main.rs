@@ -1,20 +1,7 @@
-//! 服务启动入口：装配配置、数据库与 AgentLoop；当前不提供交互界面。
+//! 服务启动入口：初始化日志后交给组合根 `app::run`。
 
-use std::sync::Arc;
-use std::time::Duration;
-
-use careersim::agent::AgentLoop;
-use careersim::agent::DefaultContextBuilder;
-use careersim::agent::LoopConfig;
-use careersim::agent::ToolRegistry;
-use careersim::config::AppConfig;
 use careersim::error::error_chain;
-use careersim::llm::OpenAiCompatibleClient;
-use careersim::postgres_session_service;
-use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::EnvFilter;
-
-const MODEL_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
@@ -22,7 +9,7 @@ async fn main() -> std::process::ExitCode {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    match run().await {
+    match careersim::app::run().await {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(err) => {
             // 错误文本可能来自 sqlx 或 reqwest，不原样输出连接串。
@@ -33,35 +20,6 @@ async fn main() -> std::process::ExitCode {
             std::process::ExitCode::FAILURE
         }
     }
-}
-
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let config = AppConfig::from_env()?;
-
-    let pool = PgPoolOptions::new()
-        .max_connections(config.db.max_connections)
-        .acquire_timeout(config.db.acquire_timeout)
-        .connect(&config.db.url)
-        .await?;
-
-    sqlx::migrate!("./migrations").run(&pool).await?;
-
-    let http = reqwest::Client::builder().timeout(MODEL_TIMEOUT).build()?;
-
-    let _agent = AgentLoop::new(
-        Arc::new(OpenAiCompatibleClient::new(config.llm, http)),
-        Arc::new(DefaultContextBuilder),
-        Arc::new(ToolRegistry::new()),
-        Arc::new(postgres_session_service(pool)),
-        LoopConfig {
-            max_steps: config.max_steps,
-        },
-    );
-
-    tracing::info!("agent loop initialized; waiting for shutdown");
-    tokio::signal::ctrl_c().await?;
-    tracing::info!("shutdown signal received");
-    Ok(())
 }
 
 /// 去掉错误信息中的连接串凭据，保留其余诊断内容。

@@ -8,6 +8,8 @@ import ImportCompanyPage from '@/pages/ImportCompanyPage.vue'
 import InterviewRoomPage from '@/pages/InterviewRoomPage.vue'
 import LoginPage from '@/pages/LoginPage.vue'
 import OffersPage from '@/pages/OffersPage.vue'
+import ProfilePage from '@/pages/ProfilePage.vue'
+import RegisterPage from '@/pages/RegisterPage.vue'
 import ResumePage from '@/pages/ResumePage.vue'
 import { useApplicationsStore } from '@/stores/applications'
 import { useAuthStore } from '@/stores/auth'
@@ -25,6 +27,12 @@ const router = createRouter({
       meta: { public: true, title: '登录' },
     },
     {
+      path: '/register',
+      name: 'register',
+      component: RegisterPage,
+      meta: { public: true, title: '注册' },
+    },
+    {
       path: '/',
       component: AppLayout,
       children: [
@@ -33,6 +41,12 @@ const router = createRouter({
           name: 'companies',
           component: CompaniesPage,
           meta: { title: '在招公司' },
+        },
+        {
+          path: 'me',
+          name: 'profile',
+          component: ProfilePage,
+          meta: { title: '个人资料' },
         },
         {
           path: 'companies/import',
@@ -83,12 +97,14 @@ router.beforeEach(async (to) => {
   const auth = useAuthStore()
 
   if (to.meta.public) {
-    if (auth.token && (await auth.bootstrap())) {
+    // 公开路由不主动探测登录态；已有缓存用户时直接进主界面。
+    if (auth.user) {
       return { name: 'companies' }
     }
     return true
   }
 
+  // 私有路由：用 Cookie 会话恢复登录态（内部有单飞去重）。
   if (!(await auth.bootstrap())) {
     return {
       name: 'login',

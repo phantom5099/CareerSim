@@ -108,18 +108,43 @@ async function signOut() {
 
       <div class="border-t border-line px-5 py-4">
         <div class="flex items-center gap-3">
-          <span
-            class="flex h-9 w-9 shrink-0 items-center justify-center font-display text-xs text-paper-light"
-            :style="{ backgroundColor: avatarColor }"
+          <RouterLink
+            :to="{ name: 'profile' }"
+            class="flex min-w-0 flex-1 items-center gap-3 transition hover:opacity-80"
+            aria-label="个人资料"
           >
-            {{ avatarText }}
-          </span>
-          <div class="min-w-0 flex-1">
-            <p class="truncate text-[0.82rem] font-medium text-ink">{{ displayName }}</p>
-            <p class="truncate text-[0.64rem] text-ink-faint">
-              {{ subtitle }}
-            </p>
-          </div>
+            <span
+              class="flex h-9 w-9 shrink-0 items-center justify-center font-display text-xs text-paper-light"
+              :style="{ backgroundColor: avatarColor }"
+            >
+              {{ avatarText }}
+            </span>
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-[0.82rem] font-medium text-ink">{{ displayName }}</p>
+              <p class="truncate text-[0.64rem] text-ink-faint">
+                {{ subtitle }}
+              </p>
+            </div>
+          </RouterLink>
+          <RouterLink
+            :to="{ name: 'profile' }"
+            class="shrink-0 text-ink-soft transition hover:text-vermilion"
+            aria-label="个人资料"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              class="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.4"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="8" cy="5.2" r="2.6" />
+              <path d="M2.8 13.6c.7-2.6 2.8-4 5.2-4s4.5 1.4 5.2 4" />
+            </svg>
+          </RouterLink>
           <button
             type="button"
             class="shrink-0 text-ink-soft transition hover:text-vermilion"
@@ -153,12 +178,14 @@ async function signOut() {
             <span class="font-mono text-[0.52rem] tracking-[0.18em] text-ink-faint">CAREERSIM</span>
           </RouterLink>
           <div class="flex items-center gap-3">
-            <span
-              class="flex h-7 w-7 items-center justify-center font-display text-[0.62rem] text-paper-light"
-              :style="{ backgroundColor: avatarColor }"
-            >
-              {{ avatarText }}
-            </span>
+            <RouterLink :to="{ name: 'profile' }" aria-label="个人资料">
+              <span
+                class="flex h-7 w-7 items-center justify-center font-display text-[0.62rem] text-paper-light"
+                :style="{ backgroundColor: avatarColor }"
+              >
+                {{ avatarText }}
+              </span>
+            </RouterLink>
             <button
               type="button"
               class="text-ink-soft transition hover:text-vermilion"
