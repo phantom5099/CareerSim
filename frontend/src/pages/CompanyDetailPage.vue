@@ -197,7 +197,7 @@ async function confirmApply() {
   applying.value = true
   applyError.value = ''
   try {
-    await applications.applyToJob(company.value, applyTarget.value, resume.id)
+    await applications.applyToJob(company.value, applyTarget.value, resume.id, resume.title)
     flash.value = `已投递「${applyTarget.value.title}」· 使用简历「${resume.title}」· 流程从 HR 初筛开始`
     applyTarget.value = null
     if (flashTimer !== undefined) {

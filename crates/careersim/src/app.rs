@@ -12,6 +12,7 @@ use crate::config::AppConfig;
 use crate::http::router::{AppState, router};
 use crate::llm::OpenAiCompatibleClient;
 use crate::postgres_session_service;
+use crate::resume::{LocalFsAttachmentStore, postgres_resume_service};
 
 const MODEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
@@ -45,10 +46,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         config.argon2.t_cost,
         config.argon2.p_cost,
     )?;
-    let account = postgres_account_service(pool, Arc::new(hasher));
+    let account = postgres_account_service(pool.clone(), Arc::new(hasher));
+    let resume = postgres_resume_service(
+        pool,
+        Arc::new(LocalFsAttachmentStore::new(&config.resume_storage_dir)),
+    );
 
     let state = AppState {
         account: Arc::new(account),
+        resume: Arc::new(resume),
         allowed_origins: config.http.allowed_origins.clone().into(),
         cookie_secure: config.http.cookie_secure,
     };

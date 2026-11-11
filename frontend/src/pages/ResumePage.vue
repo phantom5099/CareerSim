@@ -29,7 +29,7 @@ const aiDemoOpen = ref(false)
 const editingId = ref<string | null>(null)
 const creating = ref(false)
 const editorOpen = computed(() => creating.value || editingId.value !== null)
-const editorTitle = computed(() => (creating.value ? '新建在线简历' : '编辑在线简历'))
+const editorTitle = computed(() => (creating.value ? '新建在线简历' : '编辑简历'))
 const title = ref('')
 const draft = ref<ResumePayload>(blankPayload())
 const saving = ref(false)
@@ -120,7 +120,37 @@ function resumeMeta(resume: ResumeDocument): string {
       .filter(Boolean)
       .join(' · ')
   }
-  return `${resume.attachment.fileName} · ${formatFileSize(resume.attachment.fileSize)}`
+  const status = parseStatusText(resume.parseStatus, resume.parseErrorCode)
+  return [
+    resume.attachment.fileName,
+    formatFileSize(resume.attachment.fileSize),
+    status ? `· ${status}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+}
+
+/** 附件解析状态文案；failed 时给出按错误码细分的提示。 */
+function parseStatusText(status: 'pending' | 'ready' | 'failed', errorCode?: string): string {
+  switch (status) {
+    case 'pending':
+      return '解析中'
+    case 'ready':
+      return '解析完成'
+    case 'failed':
+      switch (errorCode) {
+        case 'empty_text':
+          return '解析失败：未找到文本（可能是扫描件），可编辑手填'
+        case 'unsupported_format':
+          return '解析失败：文件格式不受支持'
+        case 'timeout':
+          return '解析失败：解析超时，可重试上传'
+        default:
+          return '解析失败：文件可能已损坏，可编辑手填'
+      }
+    default:
+      return ''
+  }
 }
 
 function dateRange(start: string, end: string): string {
@@ -156,9 +186,6 @@ function startOnline() {
 }
 
 function editResume(resume: ResumeDocument) {
-  if (resume.kind !== 'online') {
-    return
-  }
   creating.value = false
   editingId.value = resume.id
   title.value = resume.title
@@ -348,10 +375,10 @@ async function saveEditor() {
   }
   saving.value = true
   editorError.value = ''
-  const input = { title: title.value.trim(), kind: 'online' as const, payload }
+  const input = { title: title.value.trim(), payload }
   try {
     if (creating.value) {
-      await resumes.create(input)
+      await resumes.createOnline(input)
       notice.value = { tone: 'ok', text: '在线简历已创建，投递时可直接选用。' }
     } else if (editingId.value) {
       await resumes.update(editingId.value, input)
@@ -379,16 +406,19 @@ async function onFile(event: Event) {
     attachNotice.value = { tone: 'warn', text }
     return
   }
+  const uploadTitle = file.name.replace(/\.[^.]+$/, '') || file.name
   try {
-    await resumes.create({
-      title: file.name.replace(/\.[^.]+$/, '') || file.name,
-      kind: 'attachment',
-      attachment: { fileName: file.name, fileSize: file.size },
-    })
-    notice.value = { tone: 'ok', text: `已添加附件简历「${file.name}」。` }
+    const created = await resumes.uploadAttachment(uploadTitle, file)
+    if (created.kind === 'attachment' && created.parseStatus === 'failed') {
+      const text = `已保存附件「${file.name}」，但解析未成功：${parseStatusText(created.parseStatus, created.parseErrorCode)}`
+      warn(text)
+      attachNotice.value = { tone: 'warn', text }
+      return
+    }
+    notice.value = { tone: 'ok', text: `已上传附件简历「${file.name}」，解析完成。` }
     attachNotice.value = {
       tone: 'ok',
-      text: `已添加附件简历「${file.name}」，投递时可单独选用。`,
+      text: `已上传附件简历「${file.name}」，已生成内容草稿，投递时可单独选用。`,
     }
   } catch (error) {
     const text = error instanceof Error ? error.message : '添加失败，请稍后重试。'

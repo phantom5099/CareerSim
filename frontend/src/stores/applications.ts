@@ -26,7 +26,12 @@ export const useApplicationsStore = defineStore('applications', () => {
     return applications.value.filter((application) => application.companyId === companyId)
   }
 
-  async function applyToJob(company: Company, job: Job, resumeId: string): Promise<Application> {
+  async function applyToJob(
+    company: Company,
+    job: Job,
+    resumeId: string,
+    resumeTitle: string,
+  ): Promise<Application> {
     const existing = applications.value.find(
       (application) => application.companyId === company.id && application.jobId === job.id,
     )
@@ -34,7 +39,7 @@ export const useApplicationsStore = defineStore('applications', () => {
       return existing
     }
 
-    const created = await applicationsApi.apply(company, job, resumeId)
+    const created = await applicationsApi.apply(company, job, resumeId, resumeTitle)
     applications.value = [created, ...applications.value]
     return created
   }

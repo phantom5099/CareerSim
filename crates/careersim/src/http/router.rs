@@ -12,9 +12,11 @@ use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetReques
 use tower_http::trace::TraceLayer;
 
 use crate::account::service::AccountService;
+use crate::resume::service::ResumeService;
 
 use super::account_routes;
 use super::auth::origin_check;
+use super::resume_routes;
 
 /// JSON 请求体上限：1 MiB。
 const BODY_LIMIT_BYTES: usize = 1024 * 1024;
@@ -22,6 +24,7 @@ const BODY_LIMIT_BYTES: usize = 1024 * 1024;
 #[derive(Clone)]
 pub struct AppState {
     pub account: Arc<AccountService>,
+    pub resume: Arc<ResumeService>,
     /// 非 GET/HEAD/OPTIONS 请求的允许 Origin 列表（plan/01 §7.2）。
     pub allowed_origins: Arc<[String]>,
     /// Cookie `Secure` 属性开关；HttpOnly 恒开启。
@@ -48,6 +51,8 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(public)
         .merge(private)
+        // 简历路由自带 1 MiB/12 MiB 分组限流，故在顶层合并（B2）。
+        .merge(resume_routes::router())
         .layer(middleware::from_fn_with_state(state.clone(), origin_check))
         .layer(
             // 请求 ID 最外层生成，trace 与响应头透传在内；日志可按请求聚合。

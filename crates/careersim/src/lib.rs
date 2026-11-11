@@ -12,6 +12,7 @@ pub mod error;
 pub mod http;
 pub mod llm;
 pub mod pipeline;
+pub mod resume;
 pub(crate) mod store;
 
 /// 构造基于 PostgreSQL 的会话服务；存储实现只通过这里对外暴露。
