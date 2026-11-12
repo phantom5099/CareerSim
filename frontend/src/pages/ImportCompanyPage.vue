@@ -4,9 +4,11 @@ import { RouterLink, useRouter } from 'vue-router'
 
 import { companiesApi } from '@/api/endpoints/companies'
 import CompanyMark from '@/components/CompanyMark.vue'
+import { useCompanyCatalogStore } from '@/stores/companyCatalog'
 import { PROJECT_STATUS_LABELS, formatDate } from '@/domain/types'
 import type { Company } from '@/domain/types'
 const router = useRouter()
+const catalog = useCompanyCatalogStore()
 
 const jsonText = ref('')
 const sampleJson = ref('')
@@ -160,6 +162,8 @@ async function save() {
     return
   }
   const saved = await companiesApi.importTemplate(parsed)
+  // 刷新目录缓存后再跳转，详情页立即可见，无需手动刷新。
+  await catalog.refresh()
   router.push({ name: 'companyDetail', params: { id: saved.id } })
 }
 </script>

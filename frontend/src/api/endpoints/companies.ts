@@ -199,7 +199,9 @@ function toCompany(dto: CompanyDetailResponse): Company {
       salary: salaryLabel(job.salaryMin, job.salaryMax, job.salaryMonths),
       tags: job.tags,
       description: job.description,
-      status: (job.status === 'draft' ? 'draft' : 'open') as JobStatus,
+      status: (job.status === 'draft' || job.status === 'closed'
+        ? job.status
+        : 'open') as JobStatus,
       salaryMin: job.salaryMin,
       salaryMax: job.salaryMax,
       salaryMonths: job.salaryMonths,
@@ -223,14 +225,14 @@ function templateErrorMessages(body: { errors?: { path: string; message: string 
 // ---------- HTTP 实现 ----------
 
 async function fetchDetail(id: string): Promise<Company> {
-  const dto = await apiFetch<CompanyDetailResponse>(`/api/v1/catalog/companies/${id}`)
+  const dto = await apiFetch<CompanyDetailResponse>(`/api/v1/companies/${id}`)
   return toCompany(dto)
 }
 
 export const companiesApi: CompaniesApi = {
   async list(): Promise<Company[]> {
     const list = await apiFetch<CompanyListResponse>(
-      '/api/v1/catalog/companies?scope=all&limit=50',
+      '/api/v1/companies?scope=all&limit=50',
     )
     // 概要列表不含项目与岗位；并行拉取详情补全（数量上限 50）。
     const details = await Promise.allSettled(list.items.map((item) => fetchDetail(item.id)))
@@ -261,7 +263,7 @@ export const companiesApi: CompaniesApi = {
       ok: boolean
       preview?: TemplateStats
       errors?: { path: string; message: string }[]
-    }>('/api/v1/catalog/templates/validate', {
+    }>('/api/v1/companies/import/validate', {
       method: 'POST',
       body: JSON.stringify(template),
     })
@@ -277,7 +279,7 @@ export const companiesApi: CompaniesApi = {
 
   async importTemplate(raw): Promise<Company> {
     const template = normalizeTemplate(raw)
-    const created = await apiFetch<{ companyId: string }>('/api/v1/catalog/templates/import', {
+    const created = await apiFetch<{ companyId: string }>('/api/v1/companies/import', {
       method: 'POST',
       body: JSON.stringify(template),
     })
@@ -290,7 +292,7 @@ export const companiesApi: CompaniesApi = {
   },
 
   async updateCompany(id: string, patch: CompanyPatchPayload): Promise<Company> {
-    await apiFetch(`/api/v1/catalog/companies/${id}`, {
+    await apiFetch(`/api/v1/companies/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     })
@@ -298,11 +300,11 @@ export const companiesApi: CompaniesApi = {
   },
 
   async deleteCompany(id: string): Promise<void> {
-    await apiFetch<void>(`/api/v1/catalog/companies/${id}`, { method: 'DELETE' })
+    await apiFetch<void>(`/api/v1/companies/${id}`, { method: 'DELETE' })
   },
 
   async createProject(companyId: string, input: ProjectPayload): Promise<void> {
-    await apiFetch(`/api/v1/catalog/companies/${companyId}/projects`, {
+    await apiFetch(`/api/v1/companies/${companyId}/projects`, {
       method: 'POST',
       body: JSON.stringify(input),
     })
@@ -313,14 +315,14 @@ export const companiesApi: CompaniesApi = {
     projectId: string,
     patch: ProjectPatchPayload,
   ): Promise<void> {
-    await apiFetch(`/api/v1/catalog/projects/${projectId}`, {
+    await apiFetch(`/api/v1/projects/${projectId}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     })
   },
 
   async deleteProject(_companyId: string, projectId: string): Promise<void> {
-    await apiFetch<void>(`/api/v1/catalog/projects/${projectId}`, { method: 'DELETE' })
+    await apiFetch<void>(`/api/v1/projects/${projectId}`, { method: 'DELETE' })
   },
 
   async createPipeline(
@@ -328,7 +330,7 @@ export const companiesApi: CompaniesApi = {
     projectId: string,
     input: PipelinePayload,
   ): Promise<void> {
-    await apiFetch(`/api/v1/catalog/projects/${projectId}/pipelines`, {
+    await apiFetch(`/api/v1/projects/${projectId}/pipelines`, {
       method: 'POST',
       body: JSON.stringify(input),
     })
@@ -339,31 +341,31 @@ export const companiesApi: CompaniesApi = {
     pipelineId: string,
     patch: PipelinePatchPayload,
   ): Promise<void> {
-    await apiFetch(`/api/v1/catalog/pipelines/${pipelineId}`, {
+    await apiFetch(`/api/v1/pipelines/${pipelineId}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     })
   },
 
   async deletePipeline(_companyId: string, pipelineId: string): Promise<void> {
-    await apiFetch<void>(`/api/v1/catalog/pipelines/${pipelineId}`, { method: 'DELETE' })
+    await apiFetch<void>(`/api/v1/pipelines/${pipelineId}`, { method: 'DELETE' })
   },
 
   async createJob(_companyId: string, projectId: string, input: JobPayload): Promise<void> {
-    await apiFetch(`/api/v1/catalog/projects/${projectId}/jobs`, {
+    await apiFetch(`/api/v1/projects/${projectId}/jobs`, {
       method: 'POST',
       body: JSON.stringify(input),
     })
   },
 
   async updateJob(_companyId: string, jobId: string, patch: JobPatchPayload): Promise<void> {
-    await apiFetch(`/api/v1/catalog/jobs/${jobId}`, {
+    await apiFetch(`/api/v1/jobs/${jobId}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     })
   },
 
   async deleteJob(_companyId: string, jobId: string): Promise<void> {
-    await apiFetch<void>(`/api/v1/catalog/jobs/${jobId}`, { method: 'DELETE' })
+    await apiFetch<void>(`/api/v1/jobs/${jobId}`, { method: 'DELETE' })
   },
 }

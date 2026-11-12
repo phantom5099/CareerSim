@@ -32,44 +32,35 @@ use super::router::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
-            "/api/v1/catalog/companies",
+            "/api/v1/companies",
             get(list_companies).post(create_company),
         )
         .route(
-            "/api/v1/catalog/companies/{companyId}",
+            "/api/v1/companies/{companyId}",
             get(get_company)
                 .patch(update_company)
                 .delete(delete_company),
         )
         .route(
-            "/api/v1/catalog/companies/{companyId}/projects",
+            "/api/v1/companies/{companyId}/projects",
             post(create_project),
         )
         .route(
-            "/api/v1/catalog/projects/{projectId}",
+            "/api/v1/projects/{projectId}",
             patch(update_project).delete(delete_project),
         )
         .route(
-            "/api/v1/catalog/projects/{projectId}/pipelines",
+            "/api/v1/projects/{projectId}/pipelines",
             post(create_pipeline),
         )
         .route(
-            "/api/v1/catalog/pipelines/{pipelineId}",
+            "/api/v1/pipelines/{pipelineId}",
             patch(update_pipeline).delete(delete_pipeline),
         )
-        .route(
-            "/api/v1/catalog/projects/{projectId}/jobs",
-            post(create_job),
-        )
-        .route(
-            "/api/v1/catalog/jobs/{jobId}",
-            patch(update_job).delete(delete_job),
-        )
-        .route(
-            "/api/v1/catalog/templates/validate",
-            post(validate_template),
-        )
-        .route("/api/v1/catalog/templates/import", post(import_template))
+        .route("/api/v1/projects/{projectId}/jobs", post(create_job))
+        .route("/api/v1/jobs/{jobId}", patch(update_job).delete(delete_job))
+        .route("/api/v1/companies/import/validate", post(validate_template))
+        .route("/api/v1/companies/import", post(import_template))
 }
 
 // ---------- 错误映射 ----------
@@ -94,8 +85,15 @@ impl From<CatalogError> for ApiError {
                 ApiError::conflict(format!("`{field}` already exists"))
             }
             // 后端错误细节只进日志；不透出 SQL 与连接信息。
-            CatalogError::Backend { message, .. } => {
-                tracing::error!(operation = %message, "catalog backend error");
+            CatalogError::Backend { message, source } => {
+                match source.as_deref() {
+                    Some(inner) => tracing::error!(
+                        operation = %message,
+                        error = %crate::error::error_chain(inner),
+                        "catalog backend error"
+                    ),
+                    None => tracing::error!(operation = %message, "catalog backend error"),
+                }
                 ApiError::internal_error()
             }
         }
@@ -784,6 +782,13 @@ async fn update_pipeline(
     Path(pipeline_id): Path<Uuid>,
     Json(request): Json<PipelineRequest>,
 ) -> Result<Json<PipelineDto>, ApiError> {
+    // 阶段修改未纳入本期语义；显式拒绝而非静默丢弃。
+    if request.stages.is_some() {
+        return Err(ApiError::validation_fields(
+            "pipeline stages cannot be modified",
+            vec!["stages".to_owned()],
+        ));
+    }
     let pipeline = state
         .catalog
         .update_pipeline(
@@ -857,7 +862,11 @@ async fn delete_job(
 }
 
 /// 导入 dry-run：只校验并返回全部错误；与创建共用同一校验函数。
-async fn validate_template(Json(body): Json<Value>) -> Result<Json<TemplateValidateDto>, ApiError> {
+/// 校验本身是纯函数，但登录态仍是本路由组的统一前提（plan/01 §7.3）。
+async fn validate_template(
+    _auth: AuthContext,
+    Json(body): Json<Value>,
+) -> Result<Json<TemplateValidateDto>, ApiError> {
     match CatalogService::validate_template(&body) {
         Ok(validated) => Ok(Json(TemplateValidateDto {
             ok: true,

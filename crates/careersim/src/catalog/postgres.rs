@@ -189,6 +189,15 @@ fn is_foreign_key_violation(err: &sqlx::Error) -> bool {
     matches!(err, sqlx::Error::Database(db) if db.is_foreign_key_violation())
 }
 
+/// CHECK 约束（23514）兜底被触发：PATCH 允许单侧更新字段，
+/// 新值与库内旧值组合可能越过 CHECK；应作为 422 返回而非 500。
+fn check_violation_constraint(err: &sqlx::Error) -> Option<&str> {
+    match err {
+        sqlx::Error::Database(db) if db.is_check_violation() => db.constraint(),
+        _ => None,
+    }
+}
+
 /// 插入/更新错误映射：唯一冲突转 `Conflict`，其余视为后端错误。
 fn write_error(err: sqlx::Error, conflict: Option<&'static str>, operation: &str) -> CatalogError {
     match (is_unique_violation(&err), conflict) {
@@ -205,6 +214,19 @@ fn job_write_error(err: sqlx::Error, operation: &str) -> CatalogError {
     if is_foreign_key_violation(&err) {
         return CatalogError::InvalidReference {
             field: "pipelineId",
+        };
+    }
+    if let Some(constraint) = check_violation_constraint(&err) {
+        // 约束名形如 jobs_salary_nonneg / jobs_salary_months / jobs_tags_len；
+        // 服务层已校验过其余字段，这里实际可触达的是 PATCH 单侧薪资组合。
+        let field = if constraint.contains("salary") {
+            "salaryMax"
+        } else {
+            "payload"
+        };
+        return CatalogError::InvalidInput {
+            field,
+            reason: format!("value violates database constraint `{constraint}`"),
         };
     }
     backend_error(operation, err)

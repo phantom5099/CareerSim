@@ -61,7 +61,7 @@ export interface PipelineInfo {
 
 export type JobType = 'campus' | 'internship' | 'experienced'
 
-export type JobStatus = 'draft' | 'open'
+export type JobStatus = 'draft' | 'open' | 'closed'
 
 export const JOB_TYPE_LABELS: Record<JobType, string> = {
   campus: '校招',
@@ -72,6 +72,7 @@ export const JOB_TYPE_LABELS: Record<JobType, string> = {
 export const JOB_STATUS_LABELS: Record<JobStatus, string> = {
   draft: '草稿',
   open: '开放中',
+  closed: '已关闭',
 }
 
 export function jobTypeLabel(value: string): string {
