@@ -33,8 +33,8 @@ src/
 ├── http/
 │   ├── router.rs      # Router 装配、公开/私有分组、AppState
 │   ├── auth.rs        # AuthContext 提取器与 Origin 校验
-│   ├── error.rs       # ApiError 与统一错误体映射
-│   ├── dto.rs         # 公共 DTO（分页、错误体）
+│   ├── error.rs       # ApiError、ErrorCode 枚举与统一错误体映射
+│   ├── dto.rs         # 公共 DTO（分页）
 │   └── account_routes.rs # 注册/登录/注销/me/改密路由
 ├── agent.rs           # agent 模块入口与公开类型聚合
 ├── agent/
@@ -139,6 +139,9 @@ config          → error / llm::provider
 - 错误文本同样受根 §10 的密钥红线约束；`ConfigError` 只包含变量名与非法值。
 - 可恢复与不可恢复要能区分：例如 `SessionBusy`、`NoNextStage`、`Conflict`、
   `Corrupt` 各有独立变体，不要合并成字符串。
+- HTTP 错误码是 `ErrorCode` 枚举，wire 字符串由 serde 推导；只能通过 `ApiError`
+  的具名构造函数产生错误，禁止手写错误码字面量，状态码由 `ErrorCode::status`
+  的穷尽 match 唯一推导。
 
 ### 4.4 异步、并发与取消
 
