@@ -89,7 +89,7 @@ impl IntoResponse for OriginRejection {
     fn into_response(self) -> Response {
         (
             StatusCode::FORBIDDEN,
-            Json(ApiError::new("forbidden", "origin not allowed".to_owned())),
+            Json(ApiError::forbidden("origin not allowed")),
         )
             .into_response()
     }
