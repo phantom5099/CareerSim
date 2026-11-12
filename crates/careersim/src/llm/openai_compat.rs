@@ -3,22 +3,25 @@
 use async_openai::Client;
 use async_openai::config::OpenAIConfig;
 use async_openai::types::chat::{
-    ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
+    ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls, ChatCompletionNamedToolChoice,
     ChatCompletionRequestAssistantMessage, ChatCompletionRequestAssistantMessageContent,
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
     ChatCompletionRequestSystemMessageContent, ChatCompletionRequestToolMessage,
     ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessage,
-    ChatCompletionRequestUserMessageContent, ChatCompletionTool, ChatCompletionTools,
-    CreateChatCompletionRequest, CreateChatCompletionRequestArgs, FunctionCall, FunctionObject,
+    ChatCompletionRequestUserMessageContent, ChatCompletionTool, ChatCompletionToolChoiceOption,
+    ChatCompletionTools, CreateChatCompletionRequest, CreateChatCompletionRequestArgs,
+    FunctionCall, FunctionName, FunctionObject, ToolChoiceOptions,
 };
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 
 use super::client::ChatRequest;
 use super::client::ChatResponse;
 use super::client::LlmClient;
 use super::client::LlmError;
 use super::client::TokenUsage;
+use super::client::ToolChoice;
 use crate::agent::Message;
 use crate::agent::ToolCall;
 use crate::agent::ToolSpec;
@@ -51,22 +54,44 @@ impl OpenAiCompatibleClient {
         builder
             .model(self.config.model.clone())
             .messages(messages)
-            .temperature(self.config.temperature)
-            .max_tokens(self.config.max_tokens);
+            .temperature(request.temperature.unwrap_or(self.config.temperature))
+            .max_tokens(request.max_tokens.unwrap_or(self.config.max_tokens));
 
         if !request.tools.is_empty() {
             builder.tools(
                 request
                     .tools
-                    .into_iter()
-                    .map(to_sdk_tool)
+                    .iter()
+                    .map(|spec| to_sdk_tool(spec.clone(), self.config.strict_schema))
                     .collect::<Vec<_>>(),
             );
+            builder.tool_choice(self.to_sdk_tool_choice(&request.tool_choice));
         }
 
         builder
             .build()
             .map_err(|err| LlmError::api_with_source("build request", err))
+    }
+
+    /// 领域 `ToolChoice` → SDK 映射；供应商不支持强制选择时按部署配置降级为
+    /// `Auto`（能力由配置决定，不在每次调用试错）。
+    fn to_sdk_tool_choice(&self, choice: &ToolChoice) -> ChatCompletionToolChoiceOption {
+        match choice {
+            ToolChoice::Auto => ChatCompletionToolChoiceOption::Mode(ToolChoiceOptions::Auto),
+            ToolChoice::Function { name } => {
+                if self.config.forced_tool_choice {
+                    ChatCompletionToolChoiceOption::Function(ChatCompletionNamedToolChoice {
+                        function: FunctionName { name: name.clone() },
+                    })
+                } else {
+                    debug!(
+                        tool = %name,
+                        "MODEL_FORCED_TOOL_CHOICE is disabled; falling back to auto tool choice"
+                    );
+                    ChatCompletionToolChoiceOption::Mode(ToolChoiceOptions::Auto)
+                }
+            }
+        }
     }
 }
 
@@ -181,13 +206,14 @@ fn to_sdk_message(message: Message) -> ChatCompletionRequestMessage {
     }
 }
 
-fn to_sdk_tool(spec: ToolSpec) -> ChatCompletionTools {
+fn to_sdk_tool(spec: ToolSpec, strict_schema: bool) -> ChatCompletionTools {
     ChatCompletionTools::Function(ChatCompletionTool {
         function: FunctionObject {
             name: spec.name,
             description: Some(spec.description),
             parameters: Some(spec.parameters),
-            strict: None,
+            // 严格 Schema 只在部署声明支持时发送；服务端始终完整校验。
+            strict: (spec.strict && strict_schema).then_some(true),
         },
     })
 }

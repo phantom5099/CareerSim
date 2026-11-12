@@ -2,16 +2,45 @@
 
 use std::sync::Arc;
 
+use careersim::agent::ApplicationId;
+use careersim::agent::SessionBinding;
 use careersim::agent::SessionError;
 use careersim::agent::SessionEventKind;
 use careersim::agent::SessionService;
-use careersim::agent::Stage;
+use careersim::agent::StageRef;
 use careersim::agent::StoreSessionService;
 use careersim::agent::TurnEndReason;
 use careersim::agent::TurnId;
 use careersim::agent::UserMessageSource;
+use careersim::pipeline::Score;
+use careersim::pipeline::StageEvaluation;
+use careersim::pipeline::StageKey;
+use careersim::pipeline::StageKind;
+use careersim::pipeline::StageOutcome;
 use careersim::postgres_session_service;
 use sqlx::postgres::PgPoolOptions;
+
+fn binding() -> SessionBinding {
+    SessionBinding::ApplicationStage {
+        application_id: ApplicationId::from_uuid(uuid::Uuid::new_v4()),
+    }
+}
+
+fn stage_ref(key: &str, kind: StageKind) -> StageRef {
+    StageRef {
+        key: StageKey::parse(key).unwrap(),
+        kind,
+    }
+}
+
+fn evaluation() -> StageEvaluation {
+    StageEvaluation {
+        dimensions: Vec::new(),
+        total: Score::new(75).unwrap(),
+        passed: true,
+        summary: "总评".to_owned(),
+    }
+}
 
 async fn service() -> Option<StoreSessionService> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
@@ -34,17 +63,23 @@ async fn create_load_list_delete_roundtrip() {
     let Some(sessions) = service().await else {
         return;
     };
-    let session = sessions.create(Stage::Exam).await.unwrap();
+    let expected_binding = binding();
+    let session = sessions
+        .create(expected_binding, stage_ref("exam", StageKind::Exam))
+        .await
+        .unwrap();
 
     let loaded = sessions.load(session.id).await.unwrap();
     assert_eq!(loaded.id, session.id);
-    assert_eq!(loaded.stage, Stage::Exam);
+    assert_eq!(loaded.current_stage, stage_ref("exam", StageKind::Exam));
     assert_eq!(loaded.events.len(), 1);
     assert_eq!(loaded.events[0].seq, 0);
     assert!(matches!(
-        loaded.events[0].kind,
-        SessionEventKind::SessionMeta { session_id, stage }
-            if session_id == session.id && stage == Stage::Exam
+        &loaded.events[0].kind,
+        SessionEventKind::SessionMeta { session_id, binding: event_binding, initial_stage }
+            if *session_id == session.id
+                && *event_binding == expected_binding
+                && *initial_stage == stage_ref("exam", StageKind::Exam)
     ));
     assert_eq!(loaded.last_seq, 0);
     assert_eq!(loaded.last_turn_id, TurnId(0));
@@ -64,7 +99,10 @@ async fn append_allocates_seq_and_advances_stage() {
     let Some(sessions) = service().await else {
         return;
     };
-    let mut session = sessions.create(Stage::HrScreen).await.unwrap();
+    let mut session = sessions
+        .create(binding(), stage_ref("hr_screen", StageKind::HrScreen))
+        .await
+        .unwrap();
 
     sessions
         .append(
@@ -116,7 +154,13 @@ async fn append_allocates_seq_and_advances_stage() {
                 },
                 SessionEventKind::StageCompleted {
                     turn_id: TurnId(2),
-                    stage: Stage::HrScreen,
+                    stage_key: StageKey::parse("hr_screen").unwrap(),
+                    stage_kind: StageKind::HrScreen,
+                    evaluation: evaluation(),
+                    outcome: StageOutcome::Advance {
+                        next_stage_key: StageKey::parse("exam").unwrap(),
+                        next_stage_kind: StageKind::Exam,
+                    },
                 },
             ],
         )
@@ -131,7 +175,7 @@ async fn append_allocates_seq_and_advances_stage() {
     );
 
     let loaded = sessions.load(session.id).await.unwrap();
-    assert_eq!(loaded.stage, Stage::Exam);
+    assert_eq!(loaded.current_stage, stage_ref("exam", StageKind::Exam));
     assert_eq!(loaded.last_seq, 7);
     assert_eq!(loaded.last_turn_id, TurnId(2));
     assert_eq!(loaded.events.len(), 8);
@@ -142,7 +186,13 @@ async fn append_allocates_seq_and_advances_stage() {
             &mut stale,
             &[SessionEventKind::StageCompleted {
                 turn_id: TurnId(3),
-                stage: Stage::HrScreen,
+                stage_key: StageKey::parse("hr_screen").unwrap(),
+                stage_kind: StageKind::HrScreen,
+                evaluation: evaluation(),
+                outcome: StageOutcome::Advance {
+                    next_stage_key: StageKey::parse("exam").unwrap(),
+                    next_stage_kind: StageKind::Exam,
+                },
             }],
         )
         .await
@@ -150,7 +200,7 @@ async fn append_allocates_seq_and_advances_stage() {
     assert!(matches!(conflict, SessionError::Conflict));
 
     let loaded = sessions.load(session.id).await.unwrap();
-    assert_eq!(loaded.stage, Stage::Exam);
+    assert_eq!(loaded.current_stage, stage_ref("exam", StageKind::Exam));
 
     sessions.delete(session.id).await.unwrap();
 }
@@ -160,7 +210,10 @@ async fn append_rejects_invalid_batches() {
     let Some(sessions) = service().await else {
         return;
     };
-    let mut session = sessions.create(Stage::HrScreen).await.unwrap();
+    let mut session = sessions
+        .create(binding(), stage_ref("hr_screen", StageKind::HrScreen))
+        .await
+        .unwrap();
     let id = session.id;
 
     let meta = sessions
@@ -168,7 +221,8 @@ async fn append_rejects_invalid_batches() {
             &mut session,
             &[SessionEventKind::SessionMeta {
                 session_id: id,
-                stage: Stage::Exam,
+                binding: binding(),
+                initial_stage: stage_ref("exam", StageKind::Exam),
             }],
         )
         .await
@@ -181,7 +235,13 @@ async fn append_rejects_invalid_batches() {
             &[
                 SessionEventKind::StageCompleted {
                     turn_id: TurnId(1),
-                    stage: Stage::HrScreen,
+                    stage_key: StageKey::parse("hr_screen").unwrap(),
+                    stage_kind: StageKind::HrScreen,
+                    evaluation: evaluation(),
+                    outcome: StageOutcome::Advance {
+                        next_stage_key: StageKey::parse("exam").unwrap(),
+                        next_stage_kind: StageKind::Exam,
+                    },
                 },
                 SessionEventKind::TurnStarted { turn_id: TurnId(1) },
             ],
@@ -190,21 +250,31 @@ async fn append_rejects_invalid_batches() {
         .unwrap_err();
     assert!(matches!(not_last, SessionError::InvalidEvent(_)));
 
-    let mut review = sessions.create(Stage::Review).await.unwrap();
-    let final_stage = sessions
+    // Advance 的下一阶段不得与当前阶段相同。
+    let mut offer = sessions
+        .create(binding(), stage_ref("offer", StageKind::Offer))
+        .await
+        .unwrap();
+    let self_advance = sessions
         .append(
-            &mut review,
+            &mut offer,
             &[SessionEventKind::StageCompleted {
                 turn_id: TurnId(1),
-                stage: Stage::Review,
+                stage_key: StageKey::parse("offer").unwrap(),
+                stage_kind: StageKind::Offer,
+                evaluation: evaluation(),
+                outcome: StageOutcome::Advance {
+                    next_stage_key: StageKey::parse("offer").unwrap(),
+                    next_stage_kind: StageKind::Offer,
+                },
             }],
         )
         .await
         .unwrap_err();
-    assert!(matches!(final_stage, SessionError::InvalidEvent(_)));
+    assert!(matches!(self_advance, SessionError::InvalidEvent(_)));
 
     sessions.delete(session.id).await.unwrap();
-    sessions.delete(review.id).await.unwrap();
+    sessions.delete(offer.id).await.unwrap();
 }
 
 #[tokio::test]
@@ -213,7 +283,10 @@ async fn concurrent_appends_receive_conflict_for_stale_writer() {
         return;
     };
     let sessions = Arc::new(sessions);
-    let session = sessions.create(Stage::HrScreen).await.unwrap();
+    let session = sessions
+        .create(binding(), stage_ref("hr_screen", StageKind::HrScreen))
+        .await
+        .unwrap();
 
     let mut first_session = sessions.load(session.id).await.unwrap();
     let mut second_session = sessions.load(session.id).await.unwrap();

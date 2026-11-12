@@ -1,8 +1,25 @@
 //! 流水线校验单测：覆盖 plan/01 §3.2 的校验规则与值对象边界。
 
+use chrono::Utc;
+
 use super::PipelineError;
-use super::model::{PipelineDefinition, StageDefinition, StageKey, StageKind};
-use super::rubric::{EvaluationRubric, RubricDimension, Score};
+use super::model::OfferError;
+use super::model::OfferPolicy;
+use super::model::OfferTermsInput;
+use super::model::PipelineDefinition;
+use super::model::StageDefinition;
+use super::model::StageKey;
+use super::model::StageKind;
+use super::model::StageOutcome;
+use super::model::TransitionError;
+use super::model::build_offer_terms;
+use super::model::plan_transition;
+use super::rubric::DimensionScore;
+use super::rubric::EvaluationError;
+use super::rubric::EvaluationRubric;
+use super::rubric::RubricDimension;
+use super::rubric::Score;
+use super::rubric::evaluate;
 
 fn dimension(key: &str, weight: u16) -> RubricDimension {
     RubricDimension {
@@ -229,4 +246,341 @@ fn score_enforces_range() {
     assert_eq!(Score::new(101), Err(PipelineError::ScoreOutOfRange(101)));
     assert_eq!(Score::new(0).expect("valid in test").value(), 0);
     assert_eq!(Score::new(100).expect("valid in test").value(), 100);
+}
+
+fn submitted(scores: &[(&str, u8)]) -> Vec<DimensionScore> {
+    scores
+        .iter()
+        .map(|(key, score)| DimensionScore {
+            key: (*key).to_owned(),
+            score: Score::new(*score).expect("valid in test"),
+            note: "评分依据".to_owned(),
+        })
+        .collect()
+}
+
+#[test]
+fn evaluate_computes_weighted_total_and_orders_dimensions() {
+    let rule = rubric(&[60, 40]);
+    let evaluation = evaluate(
+        &rule,
+        submitted(&[("d1", 90), ("d0", 70)]),
+        "整体不错".to_owned(),
+    )
+    .expect("valid submission");
+
+    // 0.6 * 70 + 0.4 * 90 = 78。
+    assert_eq!(evaluation.total.value(), 78);
+    assert!(evaluation.passed);
+    // 维度按 rubric 顺序输出，与提交顺序无关。
+    assert_eq!(
+        evaluation
+            .dimensions
+            .iter()
+            .map(|dimension| dimension.key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["d0", "d1"]
+    );
+}
+
+#[test]
+fn evaluate_equal_weights_round_half_up() {
+    let rule = rubric(&[0, 0]);
+    let evaluation = evaluate(
+        &rule,
+        submitted(&[("d0", 50), ("d1", 61)]),
+        "总评".to_owned(),
+    )
+    .expect("valid submission");
+
+    // (50 + 61) / 2 = 55.5 → 56（四舍五入）。
+    assert_eq!(evaluation.total.value(), 56);
+    assert!(!evaluation.passed);
+}
+
+#[test]
+fn evaluate_passes_at_pass_score_boundary() {
+    let rule = rubric(&[100]);
+    let evaluation =
+        evaluate(&rule, submitted(&[("d0", 60)]), "总评".to_owned()).expect("valid submission");
+    assert_eq!(evaluation.total.value(), 60);
+    assert!(evaluation.passed);
+}
+
+#[test]
+fn evaluate_rejects_incomplete_or_unknown_dimensions() {
+    let rule = rubric(&[50, 50]);
+
+    assert!(matches!(
+        evaluate(&rule, submitted(&[("d0", 70)]), "总评".to_owned()),
+        Err(EvaluationError::MissingDimension(key)) if key == "d1"
+    ));
+    assert!(matches!(
+        evaluate(
+            &rule,
+            submitted(&[("d0", 70), ("d1", 70), ("extra", 70)]),
+            "总评".to_owned(),
+        ),
+        Err(EvaluationError::UnknownDimension(key)) if key == "extra"
+    ));
+    assert!(matches!(
+        evaluate(
+            &rule,
+            submitted(&[("d0", 70), ("d0", 70)]),
+            "总评".to_owned(),
+        ),
+        Err(EvaluationError::DuplicateDimension(key)) if key == "d0"
+    ));
+}
+
+#[test]
+fn evaluate_rejects_overlong_text() {
+    let rule = rubric(&[100]);
+
+    assert!(matches!(
+        evaluate(&rule, submitted(&[("d0", 70)]), String::new()),
+        Err(EvaluationError::InvalidSummary)
+    ));
+    assert!(matches!(
+        evaluate(&rule, submitted(&[("d0", 70)]), "评".repeat(2001)),
+        Err(EvaluationError::InvalidSummary)
+    ));
+
+    let long_note = DimensionScore {
+        key: "d0".to_owned(),
+        score: Score::new(70).expect("valid in test"),
+        note: "据".repeat(501),
+    };
+    assert!(matches!(
+        evaluate(&rule, vec![long_note], "总评".to_owned()),
+        Err(EvaluationError::InvalidNote(key)) if key == "d0"
+    ));
+}
+
+#[test]
+fn plan_transition_advances_when_passed() {
+    let pipeline = PipelineDefinition::parse(valid_stages()).expect("valid in test");
+    let evaluation = evaluate(&rubric(&[0]), submitted(&[("d0", 80)]), "总评".to_owned())
+        .expect("valid submission");
+
+    let transition = plan_transition(
+        &pipeline,
+        &StageKey::parse("hr").expect("valid in test"),
+        evaluation,
+        None,
+    )
+    .expect("advance is decidable");
+
+    assert_eq!(transition.from.as_str(), "hr");
+    assert!(transition.evaluation.passed);
+    assert_eq!(
+        transition.outcome,
+        StageOutcome::Advance {
+            next_stage_key: StageKey::parse("tech_1").expect("valid in test"),
+            next_stage_kind: StageKind::TechInterview,
+        }
+    );
+}
+
+#[test]
+fn plan_transition_rejects_when_failed() {
+    let pipeline = PipelineDefinition::parse(valid_stages()).expect("valid in test");
+    let evaluation = evaluate(&rubric(&[0]), submitted(&[("d0", 30)]), "未达标".to_owned())
+        .expect("valid submission");
+
+    let transition = plan_transition(
+        &pipeline,
+        &StageKey::parse("hr").expect("valid in test"),
+        evaluation,
+        None,
+    )
+    .expect("rejection is decidable");
+
+    assert!(matches!(transition.outcome, StageOutcome::Rejected));
+}
+
+#[test]
+fn plan_transition_requires_offer_terms_at_last_stage() {
+    let pipeline = PipelineDefinition::parse(valid_stages()).expect("valid in test");
+    let evaluation = evaluate(
+        &rubric(&[100]),
+        submitted(&[("d0", 90)]),
+        "谈薪完成".to_owned(),
+    )
+    .expect("valid submission");
+    let offer_stage = StageKey::parse("offer").expect("valid in test");
+
+    assert!(matches!(
+        plan_transition(&pipeline, &offer_stage, evaluation.clone(), None),
+        Err(TransitionError::OfferTermsRequired)
+    ));
+
+    let offer = build_offer_terms(valid_offer_input(), &offer_policy(), Utc::now())
+        .expect("valid offer input");
+    let transition = plan_transition(&pipeline, &offer_stage, evaluation, Some(offer))
+        .expect("offer pending is decidable");
+    assert!(matches!(
+        transition.outcome,
+        StageOutcome::OfferPending { .. }
+    ));
+}
+
+#[test]
+fn plan_transition_reports_unknown_stage() {
+    let pipeline = PipelineDefinition::parse(valid_stages()).expect("valid in test");
+    let evaluation = evaluate(&rubric(&[0]), submitted(&[("d0", 80)]), "总评".to_owned())
+        .expect("valid submission");
+
+    assert!(matches!(
+        plan_transition(
+            &pipeline,
+            &StageKey::parse("ghost").expect("valid in test"),
+            evaluation,
+            None,
+        ),
+        Err(TransitionError::UnknownStage(stage)) if stage == "ghost"
+    ));
+}
+
+fn offer_policy() -> OfferPolicy {
+    OfferPolicy {
+        city: "杭州".to_owned(),
+        salary_min: Some(10_000),
+        salary_max: Some(30_000),
+        months: Some(12),
+        deadline_days: 7,
+    }
+}
+
+fn valid_offer_input() -> OfferTermsInput {
+    OfferTermsInput {
+        base_salary: 20_000,
+        months: 12,
+        bonus: "年终两个月".to_owned(),
+    }
+}
+
+#[test]
+fn build_offer_terms_applies_policy_fields() {
+    let now = Utc::now();
+    let terms =
+        build_offer_terms(valid_offer_input(), &offer_policy(), now).expect("valid offer input");
+
+    assert_eq!(terms.base_salary, 20_000);
+    assert_eq!(terms.months, 12);
+    assert_eq!(terms.city, "杭州");
+    assert_eq!(terms.issued_at, now);
+    assert_eq!((terms.deadline - now.date_naive()).num_days(), 7);
+}
+
+#[test]
+fn build_offer_terms_enforces_salary_and_months() {
+    let policy = offer_policy();
+    let now = Utc::now();
+
+    assert!(matches!(
+        build_offer_terms(
+            OfferTermsInput {
+                base_salary: 9_999,
+                ..valid_offer_input()
+            },
+            &policy,
+            now,
+        ),
+        Err(OfferError::SalaryBelowMinimum(9_999, 10_000))
+    ));
+    assert!(matches!(
+        build_offer_terms(
+            OfferTermsInput {
+                base_salary: 30_001,
+                ..valid_offer_input()
+            },
+            &policy,
+            now,
+        ),
+        Err(OfferError::SalaryAboveMaximum(30_001, 30_000))
+    ));
+    assert!(matches!(
+        build_offer_terms(
+            OfferTermsInput {
+                months: 11,
+                ..valid_offer_input()
+            },
+            &policy,
+            now,
+        ),
+        Err(OfferError::MonthsOutOfRange(11))
+    ));
+    assert!(matches!(
+        build_offer_terms(
+            OfferTermsInput {
+                months: 24,
+                bonus: String::new(),
+                ..valid_offer_input()
+            },
+            &policy,
+            now,
+        ),
+        Err(OfferError::MonthsMismatch(24, 12))
+    ));
+
+    // 薪资上下限为闭区间。
+    assert!(
+        build_offer_terms(
+            OfferTermsInput {
+                base_salary: 10_000,
+                ..valid_offer_input()
+            },
+            &policy,
+            now,
+        )
+        .is_ok()
+    );
+    assert!(
+        build_offer_terms(
+            OfferTermsInput {
+                base_salary: 30_000,
+                ..valid_offer_input()
+            },
+            &policy,
+            now,
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn build_offer_terms_limits_bonus_length() {
+    let policy = OfferPolicy {
+        city: "杭州".to_owned(),
+        salary_min: None,
+        salary_max: None,
+        months: None,
+        deadline_days: 7,
+    };
+
+    assert!(
+        build_offer_terms(
+            OfferTermsInput {
+                base_salary: 20_000,
+                months: 12,
+                bonus: "奖".repeat(120),
+            },
+            &policy,
+            Utc::now(),
+        )
+        .is_ok()
+    );
+    assert!(matches!(
+        build_offer_terms(
+            OfferTermsInput {
+                base_salary: 20_000,
+                months: 12,
+                bonus: "奖".repeat(121),
+            },
+            &policy,
+            Utc::now(),
+        ),
+        Err(OfferError::BonusTooLong)
+    ));
 }

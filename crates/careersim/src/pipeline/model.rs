@@ -1,11 +1,14 @@
-//! 流水线值类型：阶段键、阶段类型、阶段定义与流水线定义。
+//! 流水线值类型：阶段键、阶段类型、阶段定义、流水线定义、转移决策与 Offer 条款。
 
 use std::fmt;
 
+use chrono::{DateTime, Days, NaiveDate, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use thiserror::Error;
 
 use super::PipelineError;
 use super::rubric::EvaluationRubric;
+use super::rubric::StageEvaluation;
 use super::validate;
 
 /// 阶段稳定标识：`^[a-z][a-z0-9_]{1,31}$`，流水线内唯一。
@@ -155,4 +158,197 @@ impl PipelineDefinition {
     pub fn position(&self, key: &StageKey) -> Option<usize> {
         self.stages.iter().position(|stage| &stage.key == key)
     }
+}
+
+/// 阶段转移决策；由纯函数 `plan_transition` 产生，事件与投影共同消费。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StageOutcome {
+    /// 通过并进入下一阶段。
+    Advance {
+        next_stage_key: StageKey,
+        next_stage_kind: StageKind,
+    },
+    /// Offer 阶段通过且条款校验通过；等待候选人决定。
+    OfferPending { offer: OfferTerms },
+    /// 未通过；停留在当前阶段。
+    Rejected,
+}
+
+/// 一次阶段完成的完整转移记录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StageTransition {
+    /// 转移起点阶段键。
+    pub from: StageKey,
+    /// 服务端评估结论。
+    pub evaluation: StageEvaluation,
+    /// 转移决策。
+    pub outcome: StageOutcome,
+}
+
+/// 阶段转移决策失败。
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum TransitionError {
+    #[error("unknown stage `{0}`")]
+    UnknownStage(String),
+    #[error("offer terms are required when the offer stage passes")]
+    OfferTermsRequired,
+}
+
+/// 纯函数：根据评估结论与流水线定义决定转移结果。
+///
+/// 规则（plan/02 §4）：
+/// - 阶段不在流水线内 → `UnknownStage`；
+/// - 未达通过阈值 → `Rejected`，停留在当前阶段；
+/// - 通过且有下一阶段 → `Advance`；
+/// - 通过且为最后阶段（按不变量必为 Offer 阶段）→ 必须携带已通过
+///   `build_offer_terms` 校验的条款，否则 `OfferTermsRequired`。
+pub fn plan_transition(
+    pipeline: &PipelineDefinition,
+    from: &StageKey,
+    evaluation: StageEvaluation,
+    offer: Option<OfferTerms>,
+) -> Result<StageTransition, TransitionError> {
+    let Some(stage) = pipeline.get(from) else {
+        return Err(TransitionError::UnknownStage(from.to_string()));
+    };
+    if !evaluation.passed {
+        return Ok(StageTransition {
+            from: stage.key.clone(),
+            evaluation,
+            outcome: StageOutcome::Rejected,
+        });
+    }
+    let position = pipeline
+        .position(from)
+        .ok_or_else(|| TransitionError::UnknownStage(from.to_string()))?;
+    match pipeline.stages().get(position + 1) {
+        Some(next) => Ok(StageTransition {
+            from: stage.key.clone(),
+            evaluation,
+            outcome: StageOutcome::Advance {
+                next_stage_key: next.key.clone(),
+                next_stage_kind: next.kind,
+            },
+        }),
+        None => {
+            let offer = offer.ok_or(TransitionError::OfferTermsRequired)?;
+            Ok(StageTransition {
+                from: stage.key.clone(),
+                evaluation,
+                outcome: StageOutcome::OfferPending { offer },
+            })
+        }
+    }
+}
+
+/// Offer 奖金条款长度上限。
+pub(crate) const BONUS_MAX_CHARS: usize = 120;
+
+/// 模型提交的原始 Offer 条款；入库前必须通过 `build_offer_terms` 校验。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OfferTermsInput {
+    /// 月度基本薪资（元/月）。
+    pub base_salary: u32,
+    /// 合同月数。
+    pub months: u8,
+    /// 奖金条款描述；可为空串。
+    #[serde(default)]
+    pub bonus: String,
+}
+
+/// 校验后的 Offer 条款；服务端构建，事件中只出现该形态。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfferTerms {
+    /// 月度基本薪资（元/月）。
+    pub base_salary: u32,
+    /// 合同月数。
+    pub months: u8,
+    /// 奖金条款描述。
+    pub bonus: String,
+    /// 工作城市；取自策略，不信任模型。
+    pub city: String,
+    /// 签发时间。
+    pub issued_at: DateTime<Utc>,
+    /// 接受截止日期。
+    pub deadline: NaiveDate,
+}
+
+/// Offer 校验策略；由部署配置提供，不进事件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfferPolicy {
+    /// 统一工作城市。
+    pub city: String,
+    /// 月薪下限（含）；`None` 表示不校验。
+    pub salary_min: Option<u32>,
+    /// 月薪上限（含）；`None` 表示不校验。
+    pub salary_max: Option<u32>,
+    /// 要求的合同月数；`None` 表示仅受 12..=24 约束。
+    pub months: Option<u8>,
+    /// 接受截止天数。
+    pub deadline_days: u16,
+}
+
+/// Offer 条款校验失败。
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum OfferError {
+    #[error("base salary {0} is below the policy minimum {1}")]
+    SalaryBelowMinimum(u32, u32),
+    #[error("base salary {0} is above the policy maximum {1}")]
+    SalaryAboveMaximum(u32, u32),
+    #[error("contract months must be within 12..=24, got {0}")]
+    MonthsOutOfRange(u8),
+    #[error("contract months {0} do not match the policy requirement {1}")]
+    MonthsMismatch(u8, u8),
+    #[error("bonus description must be at most {BONUS_MAX_CHARS} characters")]
+    BonusTooLong,
+    #[error("offer deadline could not be computed from policy")]
+    DeadlineInvalid,
+}
+
+/// 纯函数：校验模型提交的 Offer 条款并构建最终形态。
+///
+/// 校验顺序（plan/02 §6.3）：薪资区间 → 月数范围 → 月数策略 → 奖金长度；
+/// 截止日期由策略天数推算，溢出即失败。`city` 与 `deadline` 一律来自服务端。
+pub fn build_offer_terms(
+    input: OfferTermsInput,
+    policy: &OfferPolicy,
+    now: DateTime<Utc>,
+) -> Result<OfferTerms, OfferError> {
+    if let Some(min) = policy.salary_min
+        && input.base_salary < min
+    {
+        return Err(OfferError::SalaryBelowMinimum(input.base_salary, min));
+    }
+    if let Some(max) = policy.salary_max
+        && input.base_salary > max
+    {
+        return Err(OfferError::SalaryAboveMaximum(input.base_salary, max));
+    }
+    if !(12..=24).contains(&input.months) {
+        return Err(OfferError::MonthsOutOfRange(input.months));
+    }
+    if let Some(months) = policy.months
+        && input.months != months
+    {
+        return Err(OfferError::MonthsMismatch(input.months, months));
+    }
+    let bonus_chars = input.bonus.chars().count();
+    if bonus_chars > BONUS_MAX_CHARS {
+        return Err(OfferError::BonusTooLong);
+    }
+    let deadline = now
+        .date_naive()
+        .checked_add_days(Days::new(u64::from(policy.deadline_days)))
+        .ok_or(OfferError::DeadlineInvalid)?;
+    Ok(OfferTerms {
+        base_salary: input.base_salary,
+        months: input.months,
+        bonus: input.bonus,
+        city: policy.city.clone(),
+        issued_at: now,
+        deadline,
+    })
 }

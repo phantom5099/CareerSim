@@ -20,6 +20,7 @@ impl FakeTool {
                 name: name.to_owned(),
                 description: format!("fake tool {name}"),
                 parameters: serde_json::json!({"type": "object"}),
+                strict: false,
             },
             output: output.to_owned(),
         }
