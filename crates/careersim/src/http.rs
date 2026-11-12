@@ -2,6 +2,7 @@
 
 pub mod account_routes;
 pub mod auth;
+pub mod catalog_routes;
 pub mod dto;
 pub mod error;
 pub mod router;

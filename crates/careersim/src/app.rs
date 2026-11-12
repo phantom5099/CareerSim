@@ -45,10 +45,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         config.argon2.t_cost,
         config.argon2.p_cost,
     )?;
-    let account = postgres_account_service(pool, Arc::new(hasher));
+    let account = postgres_account_service(pool.clone(), Arc::new(hasher));
+
+    // 公司模板目录（plan/01 §4.3）；PostgreSQL 适配。
+    let catalog = crate::catalog::postgres_catalog_service(pool);
 
     let state = AppState {
         account: Arc::new(account),
+        catalog: Arc::new(catalog),
         allowed_origins: config.http.allowed_origins.clone().into(),
         cookie_secure: config.http.cookie_secure,
     };

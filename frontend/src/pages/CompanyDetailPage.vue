@@ -259,7 +259,7 @@ onBeforeUnmount(() => {
                 {{ company.name }}
               </h1>
               <span
-                v-if="company.imported"
+                v-if="company.source === 'user'"
                 class="border border-vermilion/40 px-1.5 py-0.5 text-[0.62rem] text-vermilion"
               >
                 我的模板

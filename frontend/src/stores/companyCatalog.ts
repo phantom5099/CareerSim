@@ -26,17 +26,10 @@ export const useCompanyCatalogStore = defineStore('companyCatalog', () => {
     return companies.value.find((company) => company.id === id)
   }
 
-  async function addCompany(company: Company): Promise<Company> {
-    const created = await companiesApi.create(company)
-    companies.value = [created, ...companies.value]
-    return created
-  }
-
   return {
     companies,
     jobCount,
     init,
     findCompany,
-    addCompany,
   }
 })

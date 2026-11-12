@@ -6,10 +6,7 @@ import { companiesApi } from '@/api/endpoints/companies'
 import CompanyMark from '@/components/CompanyMark.vue'
 import { PROJECT_STATUS_LABELS, formatDate } from '@/domain/types'
 import type { Company } from '@/domain/types'
-import { useCompanyCatalogStore } from '@/stores/companyCatalog'
-
 const router = useRouter()
-const catalog = useCompanyCatalogStore()
 
 const jsonText = ref('')
 const sampleJson = ref('')
@@ -155,8 +152,14 @@ async function save() {
     await validate()
     return
   }
-  const company = preview.value
-  const saved = await catalog.addCompany(company)
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(jsonText.value)
+  } catch {
+    errors.value = ['JSON 解析失败，请检查逗号、引号与括号是否完整。']
+    return
+  }
+  const saved = await companiesApi.importTemplate(parsed)
   router.push({ name: 'companyDetail', params: { id: saved.id } })
 }
 </script>

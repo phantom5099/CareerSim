@@ -22,6 +22,8 @@ const BODY_LIMIT_BYTES: usize = 1024 * 1024;
 #[derive(Clone)]
 pub struct AppState {
     pub account: Arc<AccountService>,
+    /// 公司模板目录服务（plan/01 §4.3）。
+    pub catalog: Arc<crate::catalog::CatalogService>,
     /// 非 GET/HEAD/OPTIONS 请求的允许 Origin 列表（plan/01 §7.2）。
     pub allowed_origins: Arc<[String]>,
     /// Cookie `Secure` 属性开关；HttpOnly 恒开启。
@@ -45,9 +47,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/me/password", post(account_routes::change_password))
         .layer(RequestBodyLimitLayer::new(BODY_LIMIT_BYTES));
 
+    // catalog 路由组（plan/01 §6.2）；同样要求登录。
+    let catalog =
+        super::catalog_routes::router().layer(RequestBodyLimitLayer::new(BODY_LIMIT_BYTES));
+
     Router::new()
         .merge(public)
         .merge(private)
+        .merge(catalog)
         .layer(middleware::from_fn_with_state(state.clone(), origin_check))
         .layer(
             // 请求 ID 最外层生成，trace 与响应头透传在内；日志可按请求聚合。

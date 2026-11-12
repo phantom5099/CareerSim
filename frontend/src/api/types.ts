@@ -41,6 +41,90 @@ export interface IndustriesResponse {
   industries: string[]
 }
 
+// ---------- catalog（公司模板目录）payload ----------
+
+/** 公司补丁；省略 = 不修改。 */
+export interface CompanyPatchPayload {
+  name?: string
+  englishName?: string
+  industry?: string
+  city?: string
+  size?: string
+  tagline?: string
+  description?: string
+  highlights?: string[]
+  logoText?: string
+  accent?: string
+  isPrivate?: boolean
+}
+
+export interface ProjectPayload {
+  name: string
+  season?: string
+  status?: string
+  deadline?: string
+  description?: string
+}
+
+/** 截止日期省略 = 不修改，`null` = 清空。 */
+export interface ProjectPatchPayload {
+  name?: string
+  season?: string
+  status?: string
+  deadline?: string | null
+  description?: string
+}
+
+/** 阶段定义与后端 `StageDefinition` 同构；rubric 必填。 */
+export interface StageDefinitionPayload {
+  key: string
+  kind: string
+  title: string
+  minRounds?: number
+  maxRounds?: number
+  rubric?: {
+    passScore?: number
+    dimensions: { key: string; label: string; weight?: number; criteria?: string }[]
+  }
+}
+
+export interface PipelinePayload {
+  name: string
+  stages: StageDefinitionPayload[]
+}
+
+export interface PipelinePatchPayload {
+  name?: string
+  stages?: StageDefinitionPayload[]
+}
+
+export interface JobPayload {
+  pipelineId: string
+  title: string
+  city?: string
+  jobType?: string
+  salaryMin?: number
+  salaryMax?: number
+  salaryMonths?: number
+  tags?: string[]
+  description?: string
+  status?: string
+}
+
+/** 薪资字段省略 = 不修改，`null` = 清空。 */
+export interface JobPatchPayload {
+  pipelineId?: string
+  title?: string
+  city?: string
+  jobType?: string
+  salaryMin?: number | null
+  salaryMax?: number | null
+  salaryMonths?: number | null
+  tags?: string[]
+  description?: string
+  status?: string
+}
+
 export interface ResumeEducation {
   school: string
   degree: string
