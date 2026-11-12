@@ -206,6 +206,17 @@ fn parse_rejects_weights_not_summing_to_100() {
 }
 
 #[test]
+fn parse_rejects_zero_weight_in_weighted_rubric() {
+    // 部分零权重（如 [100, 0]）总和为 100，但评估器会把 0 权重当作 1 参与
+    // 计算，导致总分按 101 除算、翻转通过/拒绝判定；必须在校验期拒绝。
+    let stages = vec![stage("offer", StageKind::Offer, 1, 2, &[100, 0])];
+    assert!(matches!(
+        PipelineDefinition::parse(stages),
+        Err(PipelineError::InvalidRubric { .. })
+    ));
+}
+
+#[test]
 fn parse_rejects_empty_or_overlong_title() {
     let mut stages = stage("offer", StageKind::Offer, 1, 2, &[0]);
     stages.title = String::new();

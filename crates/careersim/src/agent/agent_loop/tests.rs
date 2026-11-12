@@ -271,6 +271,28 @@ async fn stage_mismatch_is_rejected_without_writing_events() {
 }
 
 #[tokio::test]
+async fn stage_kind_change_on_same_key_is_rejected() {
+    let harness = harness(vec![reply("不应被调用")]);
+    let session = harness.sessions.create(binding(), initial()).await.unwrap();
+    // 流水线版本把同名阶段 hr_screen 从 hr_screen 改成 exam：
+    // key 相同但 kind 不同，事件 kind 必须与实际所用 rubric 一致，必须拒绝。
+    let changed = PipelineDefinition::parse(vec![
+        stage("hr_screen", StageKind::Exam, 1, 4),
+        stage("offer", StageKind::Offer, 1, 2),
+    ])
+    .unwrap();
+    let ctx = turn_ctx(changed, "hr_screen");
+
+    let result = harness
+        .agent
+        .run_turn(session.id, "你好", &ctx, CancellationToken::new())
+        .await;
+
+    assert!(matches!(result, Err(LoopError::StageMismatch { .. })));
+    assert!(harness.llm.requests().is_empty());
+}
+
+#[tokio::test]
 async fn plain_turn_records_lifecycle_usage_and_context() {
     let harness = harness(vec![reply("你好，请介绍一下你的项目经历。")]);
     let session = harness.sessions.create(binding(), initial()).await.unwrap();

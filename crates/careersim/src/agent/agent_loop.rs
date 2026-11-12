@@ -121,13 +121,19 @@ impl AgentLoop {
         };
 
         let mut session = self.sessions.load(id).await?;
-        // §8.1：会话当前阶段必须与 TurnContext 一致；不猜测下一阶段。
+        // §8.1：会话当前阶段必须与 TurnContext 一致（key 与 kind 都要一致）；
+        // 同 key 改 kind 时事件 kind 必须反映实际所用 rubric 的阶段，不猜测。
         if session.current_stage.key != ctx.stage.key
+            || session.current_stage.kind != ctx.stage.kind
             || ctx.pipeline.get(&ctx.stage.key) != Some(&ctx.stage)
         {
             return Err(LoopError::StageMismatch {
-                context: ctx.stage.key.to_string(),
-                session: session.current_stage.key.to_string(),
+                context: format!("{}:{}", ctx.stage.key, ctx.stage.kind.as_str()),
+                session: format!(
+                    "{}:{}",
+                    session.current_stage.key,
+                    session.current_stage.kind.as_str()
+                ),
             });
         }
 
