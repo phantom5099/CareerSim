@@ -116,18 +116,16 @@ impl From<ResumeError> for ApiError {
             ResumeError::ContentTooLarge => {
                 ApiError::validation_failed("resume content is too large")
             }
-            ResumeError::NotFound => ApiError::new("not_found", "resume not found".to_owned()),
+            ResumeError::NotFound => ApiError::not_found("resume not found"),
             // plan/01 §9 的 `resume_limit_reached` 码未纳入 A0 冻结的错误码表，
             // 因此按通用冲突码 409 处理（偏差已在交付报告说明）。
             ResumeError::LimitReached => ApiError::conflict("resume limit reached"),
-            ResumeError::AttachmentTooLarge => ApiError::new(
-                "payload_too_large",
-                "attachment exceeds the 10 MiB size limit".to_owned(),
-            ),
-            ResumeError::UnsupportedAttachment => ApiError::new(
-                "unsupported_media_type",
-                "attachment must be a PDF or DOCX file".to_owned(),
-            ),
+            ResumeError::AttachmentTooLarge => {
+                ApiError::payload_too_large("attachment exceeds the 10 MiB size limit")
+            }
+            ResumeError::UnsupportedAttachment => {
+                ApiError::unsupported_media_type("attachment must be a PDF or DOCX file")
+            }
             ResumeError::Backend { message, source } => {
                 tracing::error!(message = %message, source = ?source, "resume backend error");
                 ApiError::internal_error()
@@ -184,12 +182,7 @@ pub async fn upload_attachment(
     let headers = request.headers().clone();
     let body = axum::body::to_bytes(request.into_body(), UPLOAD_BODY_LIMIT_BYTES)
         .await
-        .map_err(|_| {
-            ApiError::new(
-                "payload_too_large",
-                "multipart body exceeds the upload limit".to_owned(),
-            )
-        })?;
+        .map_err(|_| ApiError::payload_too_large("multipart body exceeds the upload limit"))?;
     let (title, file_name, file_bytes) = parse_multipart_upload(&headers, &body)?;
     let resume = state
         .resume
@@ -278,7 +271,7 @@ pub async fn download_attachment(
 fn parse_resume_id(raw: &str) -> Result<ResumeId, ApiError> {
     uuid::Uuid::parse_str(raw)
         .map(ResumeId::from_uuid)
-        .map_err(|_| ApiError::new("not_found", "resume not found".to_owned()))
+        .map_err(|_| ApiError::not_found("resume not found"))
 }
 
 /// RFC 5987 `filename*` 的百分号编码；输出保证为可见 ASCII。
