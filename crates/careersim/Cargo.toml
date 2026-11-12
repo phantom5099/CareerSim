@@ -33,7 +33,7 @@ sqlx = { version = "0.9.0", features = [
 ] }
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["fs", "macros", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-util = { version = "0.7.20", features = ["rt"] }
+tokio-util = { version = "0.7.20", features = ["io", "rt"] }
 tower = "0.5.3"
 tower-http = { version = "0.7.1", features = ["trace", "limit", "request-id"] }
 tracing = "0.1.44"

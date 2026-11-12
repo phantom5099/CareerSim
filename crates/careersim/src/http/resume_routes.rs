@@ -249,10 +249,6 @@ pub async fn download_attachment(
 ) -> Result<Response, ApiError> {
     let id = parse_resume_id(&raw_id)?;
     let opened: OpenedAttachment = state.resume.open_attachment(auth.user_id, id).await?;
-    let bytes = crate::resume::storage::read_attachment_bytes(opened.stream)
-        .await
-        .map_err(ResumeError::from)
-        .map_err(ApiError::from)?;
 
     // 文件名做 RFC 5987 百分号编码（CRLF/引号/非 ASCII 全部转义），防止头注入。
     let encoded = percent_encode_file_name(&opened.file_name);
@@ -262,14 +258,16 @@ pub async fn download_attachment(
         ApiError::internal_error()
     })?;
 
+    // 流式转发：附件不整体读入内存（plan/01 §8.3）。
+    let stream = tokio_util::io::ReaderStream::new(opened.stream);
     let response = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, opened.mime.as_str())
-        .header(CONTENT_LENGTH, bytes.len())
+        .header(CONTENT_LENGTH, opened.size)
         .header(CONTENT_DISPOSITION, disposition)
         .header(HeaderName::from_static("x-content-type-options"), "nosniff")
         .header(CACHE_CONTROL, "private, no-store")
-        .body(Body::from(bytes))
+        .body(Body::from_stream(stream))
         .map_err(|_| ApiError::internal_error())?;
     Ok(response)
 }
@@ -361,8 +359,12 @@ fn extract_boundary(content_type: &str) -> Option<String> {
     let lower = content_type.to_ascii_lowercase();
     let position = lower.find("boundary=")?;
     let raw = content_type[position + "boundary=".len()..].trim();
-    // boundary 值到下一个参数为止；可能被双引号包裹。
-    let raw = raw.split(';').next()?.trim();
+    // boundary 值到下一个参数为止；可能被双引号包裹（引号内的 `;` 属于值）。
+    let raw = split_disposition_params(raw)
+        .first()
+        .copied()
+        .unwrap_or(raw)
+        .trim();
     let raw = raw.trim_matches('"');
     // 合法 boundary 为可见 ASCII 且 ≤70 字符；防止病态输入拖垮扫描。
     if raw.is_empty() || raw.len() > 70 || !raw.chars().all(|ch| (0x20..0x7f).contains(&(ch as u8)))
@@ -435,9 +437,10 @@ fn parse_multipart_part(part: &[u8]) -> Result<MultipartField, ApiError> {
     })
 }
 
-/// 读取 `Content-Disposition` 中的参数；支持双引号与 `\` 转义。
+/// 读取 `Content-Disposition` 中的参数；支持双引号与 `\` 转义，
+/// 引号内的 `;` 不作为参数分隔符（如 `filename="a;b.pdf"`）。
 fn disposition_param(disposition: &str, key: &str) -> Option<String> {
-    for segment in disposition.split(';').skip(1) {
+    for segment in split_disposition_params(disposition) {
         let segment = segment.trim();
         let Some((k, v)) = segment.split_once('=') else {
             continue;
@@ -453,6 +456,32 @@ fn disposition_param(disposition: &str, key: &str) -> Option<String> {
         return Some(unescape_disposition_value(v));
     }
     None
+}
+
+/// 按 `;` 切分参数段，但双引号内的 `;` 视为字面值；`\` 转义保留原样，
+/// 由 `unescape_disposition_value` 统一处理。
+fn split_disposition_params(disposition: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut in_quotes = false;
+    let mut escaped = false;
+    let mut start = 0;
+    for (index, ch) in disposition.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '"' => in_quotes = !in_quotes,
+            ';' if !in_quotes => {
+                segments.push(&disposition[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    segments.push(&disposition[start..]);
+    segments
 }
 
 fn unescape_disposition_value(value: &str) -> String {

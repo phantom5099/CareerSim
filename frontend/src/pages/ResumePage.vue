@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 
 import { RESUME_LIMIT } from '@/api/types'
+import { resumeApi } from '@/api/endpoints/resume'
 import type {
   ResumeCertificate,
   ResumeDocument,
@@ -551,6 +552,13 @@ const previewHonors = computed(() => draft.value.honors.filter((item) => item.na
           >
             编辑
           </button>
+          <a
+            v-if="resume.kind === 'attachment'"
+            :href="resumeApi.attachmentDownloadUrl(resume.id)"
+            class="text-ink-soft transition hover:text-vermilion"
+          >
+            下载附件
+          </a>
           <button
             type="button"
             class="ml-auto text-ink-faint transition hover:text-vermilion"

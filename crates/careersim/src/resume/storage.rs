@@ -40,8 +40,8 @@ impl AttachmentStoreError {
 /// Storage port for attachment binaries, addressed by opaque random keys.
 #[async_trait]
 pub trait AttachmentStore: Send + Sync {
-    /// Writes the full byte payload under `key`. Fails if the key already
-    /// exists.
+    /// Writes the full byte payload under `key`. An existing file under the
+    /// same key is replaced atomically (temp file + rename).
     async fn put(&self, key: &str, bytes: &[u8]) -> Result<(), AttachmentStoreError>;
 
     /// Opens the stored bytes for reading.

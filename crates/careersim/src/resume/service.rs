@@ -61,6 +61,8 @@ impl ResumeService {
         content: ResumeContent,
     ) -> Result<Resume, ResumeError> {
         let title = super::model::validate_title(title)?;
+        // 字段级边界与 DB 字节兜底分属两层；入库前必须先过字段校验。
+        content.validate()?;
         let json = content.to_json()?;
         let resume = NewResume {
             id: ResumeId::generate(),
@@ -105,13 +107,57 @@ impl ResumeService {
             .await
             .map_err(map_attachment_error)?;
 
+        // 文件已落盘：此后任何失败都必须清理附件并记录日志，避免孤儿文件
+        // （plan/01 §8.1 第 11 步）。
+        let outcome = self
+            .parse_and_insert(
+                owner,
+                title,
+                file_name,
+                kind,
+                &storage_key,
+                bytes.len() as u64,
+                sha256,
+                bytes.to_vec(),
+            )
+            .await;
+        if let Err(err) = &outcome {
+            tracing::error!(
+                storage_key = %storage_key,
+                error = %err,
+                "attachment upload failed after writing file; removing stored attachment"
+            );
+            let _ = self.attachments.delete(&storage_key).await;
+        }
+        outcome
+    }
+
+    /// 落盘之后的解析与入库；失败由调用方负责清理附件。
+    #[allow(clippy::too_many_arguments)]
+    async fn parse_and_insert(
+        &self,
+        owner: UserId,
+        title: String,
+        file_name: String,
+        kind: AttachmentKind,
+        storage_key: &str,
+        size: u64,
+        sha256: [u8; 32],
+        bytes: Vec<u8>,
+    ) -> Result<Resume, ResumeError> {
         // 提取在阻塞线程池执行，带超时；纯文本只用于生成草稿，不持久化、不进日志。
         let extractor = self.extractor.clone();
-        let bytes_for_task = bytes.to_vec();
-        let handle = tokio::task::spawn_blocking(move || extractor.extract(kind, &bytes_for_task));
+        let handle = tokio::task::spawn_blocking(move || extractor.extract(kind, &bytes));
         let extracted = match tokio::time::timeout(EXTRACT_TIMEOUT, handle).await {
             Ok(Ok(result)) => result,
             Ok(Err(join_err)) => {
+                // 解析任务 panic / 提取器内部错误：日志在此处记录，
+                // 整体按后端错误失败；已落盘附件由调用方清理。
+                tracing::error!(
+                    storage_key = %storage_key,
+                    error = %join_err,
+                    "text extraction task failed"
+                );
                 return Err(ResumeError::Backend {
                     message: "text extraction task failed".to_owned(),
                     source: Some(Box::new(join_err)),
@@ -143,6 +189,8 @@ impl ResumeService {
 
         let content = match &content_json {
             Some(json) => json.clone(),
+            // 解析失败也必须落库：默认草稿序列化失败属于后端错误，
+            // 但仍先尝试入库以保留 `failed` 状态与附件引用。
             None => ResumeContent::default().to_json()?,
         };
 
@@ -151,22 +199,19 @@ impl ResumeService {
             title,
             content,
             attachment: Some(super::model::NewResumeAttachment {
-                storage_key: storage_key.clone(),
+                storage_key: storage_key.to_owned(),
                 file_name,
                 mime: kind.mime(),
-                size: bytes.len() as u64,
+                size,
                 sha256,
             }),
             parse_status,
         };
 
-        match self.store.insert(owner, resume).await {
-            Ok(inserted) => Ok(inserted),
-            Err(store_err) => {
-                let _ = self.attachments.delete(&storage_key).await;
-                Err(map_store_error(store_err))
-            }
-        }
+        self.store
+            .insert(owner, resume)
+            .await
+            .map_err(map_store_error)
     }
 
     /// 编辑标题/内容（PATCH 语义）。
@@ -182,7 +227,10 @@ impl ResumeService {
             None => None,
         };
         let content_json = match content {
-            Some(value) => Some(value.to_json()?),
+            Some(value) => {
+                value.validate()?;
+                Some(value.to_json()?)
+            }
             None => None,
         };
         let patch = ResumePatch {
