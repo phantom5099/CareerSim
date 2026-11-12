@@ -9,10 +9,33 @@
 
 ```text
 src/
-├── main.rs            # 进程入口：配置、连接池、迁移、装配、等待退出信号
+├── main.rs            # 进程入口：初始化日志后交给组合根 app::run
 ├── lib.rs             # 库入口：模块导出与 postgres_session_service 工厂
-├── config.rs          # AppConfig / DbConfig / LlmConfig 的环境变量读取与校验
+├── app.rs             # 组合根：配置 → 连接池 → 迁移 → 适配器 → Router → 服务
+├── config.rs          # AppConfig / DbConfig / LlmConfig / HttpConfig / Argon2Config
 ├── error.rs           # ConfigError 与 error_chain
+├── account.rs         # account 模块入口与公开类型聚合
+├── account/
+│   ├── model.rs       # UserId/Username/Password/User/ProfilePatch 与字段边界
+│   ├── password.rs    # PasswordHasher trait 与 Argon2id 实现
+│   ├── session.rs     # 会话令牌、LoginSession 与空闲/绝对超时规则
+│   ├── service.rs     # AccountService：注册/登录/注销/资料/改密
+│   ├── store.rs       # UserStore / SessionStore trait 与 AccountError
+│   ├── postgres.rs    # PostgreSQL 适配器
+│   └── tests.rs       # 仅放该模块单测
+├── pipeline.rs        # pipeline 模块入口（纯领域，无 IO）
+├── pipeline/
+│   ├── model.rs       # StageKey/StageKind/StageDefinition/PipelineDefinition/Score
+│   ├── rubric.rs      # EvaluationRubric 与加权评估
+│   ├── validate.rs    # 纯校验函数与 PipelineError
+│   └── tests.rs
+├── http.rs            # http 模块入口
+├── http/
+│   ├── router.rs      # Router 装配、公开/私有分组、AppState
+│   ├── auth.rs        # AuthContext 提取器与 Origin 校验
+│   ├── error.rs       # ApiError 与统一错误体映射
+│   ├── dto.rs         # 公共 DTO（分页、错误体）
+│   └── account_routes.rs # 注册/登录/注销/me/改密路由
 ├── agent.rs           # agent 模块入口与公开类型聚合
 ├── agent/
 │   ├── agent_loop.rs  # 回合循环、per-session 互斥、取消、阶段推进
@@ -44,7 +67,11 @@ src/
 ## 2. 依赖方向
 
 ```text
-main            → config / llm / agent / lib::postgres_session_service
+main            → app::run（组合根）
+app             → config / account / http / llm / store / lib 工厂
+http            → account::{service, model} / pipeline（类型）
+account         → 无业务依赖（除 error）
+pipeline        → 无业务依赖（纯领域）
 agent_loop      → context / session / stage / tool / llm::{LlmClient} / error
 session         → stage / role / tool / llm::client / store（crate 内）
 context         → message / role / session / stage / llm::client
@@ -243,6 +270,8 @@ cargo test store::memory
 
 | 想做什么 | 去哪里 |
 | --- | --- |
+| 新增账户能力或改会话语义 | `account/service.rs` + `account/store.rs` + 测试 |
+| 新增 HTTP 路由 | `http/` 下新建路由文件 + `http/router.rs` 追加挂载行 |
 | 新增事件类型 | `agent/session.rs` + `agent/context.rs` 投影 + 测试；必要时迁移 |
 | 调整阶段顺序或新增阶段 | `agent/stage.rs` + `agent/role.rs` + 提示词 + 测试 |
 | 新增角色 | `agent/role.rs` + `role/prompts/` + `Stage::role()` + 测试 |
@@ -250,5 +279,5 @@ cargo test store::memory
 | 改模型映射 | `llm/openai_compat.rs` |
 | 新增供应商 | `llm/provider.rs` + `config.rs` + `.env.example` |
 | 改存储或 SQL | `store/postgres.rs` + 新迁移文件 |
-| 改配置项 | `config.rs` + `.env.example` + `main.rs` 装配 |
+| 改配置项 | `config.rs` + `.env.example` + `app.rs` 装配 |
 | 改会话服务语义 | `agent/session.rs`（先确认存储不变量） |
