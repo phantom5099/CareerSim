@@ -14,9 +14,9 @@
 | 后端 | Rust 2024 / Tokio / `sqlx` / PostgreSQL；模型访问走 OpenAI 兼容协议 |
 | 核心 | `AgentLoop`：会话、回合、阶段、角色、上下文投影、工具循环 |
 | 存储 | PostgreSQL 事件日志（唯一事实源，不变量见 §5） |
-| 前端 | Vue 3 + Vite + TypeScript + Pinia + Tailwind，当前以 mock 数据运行 |
+| 前端 | Vue 3 + Vite + TypeScript + Pinia + Tailwind；认证已接入 HTTP Cookie 会话，其余模块仍以 mock 运行 |
 | 部署假设 | 单活部署（约束见 §5） |
-| 当前边界 | 没有 HTTP 层；`main` 只做装配并等待退出信号 |
+| 当前边界 | HTTP 层与账户模块已落地；`main` 经组合根 `app::run` 装配并等待退出信号 |
 | 许可证 | MIT；依赖许可证由 `deny.toml` 白名单约束 |
 
 工具链、edition、格式化与依赖版本统一以配置文件为准，不要凭记忆引用。
@@ -45,7 +45,7 @@
 
 | 你想做什么 | 去哪个层次 |
 | --- | --- |
-| 改 Rust 服务端：回合循环、事件存储、模型适配、迁移 | `crates/careersim/AGENTS.md`；落点表见其 §9 |
+| 改 Rust 服务端：账户、HTTP 路由、回合循环、事件存储、模型适配、迁移 | `crates/careersim/AGENTS.md`；落点表见其 §9 |
 | 改前端：页面、组件、契约、状态、样式 | `frontend/AGENTS.md`；目录职责见其 §2 |
 | 做代码复核 | `docs/review.md` |
 | 改 CI、依赖与许可证策略 | `.github/workflows/`、`deny.toml` |
@@ -92,7 +92,9 @@
 3. **LLM 层供应商无关**：`async_openai` 类型只允许出现在 `llm/openai_compat.rs`；
    业务代码只使用 `LlmClient` 与 `ChatRequest` / `ChatResponse`。
 4. **错误在边界映射**：驱动与 SDK 错误不得进入公开签名；必须保留 `source` 错误链。
-5. **单活部署假设**：回合互斥是进程内的；改为多实例同时服务前，必须重新设计互斥与
+5. **归属只来自登录态**：处理器只信任 `AuthContext` 提取器得到的用户身份；
+   客户端提交的 `userId`/`ownerId` 字段一律忽略，DTO 不定义此类字段。
+6. **单活部署假设**：回合互斥是进程内的；改为多实例同时服务前，必须重新设计互斥与
    数据库 fencing，不能沿用现有锁。
 
 事件信封、`seq` 分配、CAS 追加、半截回合修复等存储语义，以

@@ -7,8 +7,42 @@ use serde::Serialize;
 
 use crate::account::model::AccountError;
 
+/// 对外错误码集合；serde 序列化结果即 wire 契约（plan/00 §6.2 的 code）。
+/// 新增变体时必须同步补全 `status()` 的穷尽 match，编译器强制两者同步演进。
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    ValidationFailed,
+    CurrentPasswordMismatch,
+    Unauthenticated,
+    InvalidCredentials,
+    Forbidden,
+    NotFound,
+    Conflict,
+    PayloadTooLarge,
+    UnsupportedMediaType,
+    RateLimited,
+    InternalError,
+}
+
+impl ErrorCode {
+    /// code → HTTP 状态码；穷尽 match，禁止 `_` 兜底分支。
+    pub fn status(self) -> StatusCode {
+        match self {
+            Self::ValidationFailed | Self::CurrentPasswordMismatch => StatusCode::BAD_REQUEST,
+            Self::Unauthenticated | Self::InvalidCredentials => StatusCode::UNAUTHORIZED,
+            Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::NotFound => StatusCode::NOT_FOUND,
+            Self::Conflict => StatusCode::CONFLICT,
+            Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            Self::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
 /// 错误响应体：`{"error": {"code", "message", "fields"?}}`。
-/// 状态码由 `code` 统一推导，保证映射关系只有一处。
 #[derive(Debug, Serialize)]
 struct ApiErrorBody {
     error: ErrorPayload,
@@ -16,18 +50,19 @@ struct ApiErrorBody {
 
 #[derive(Debug, Serialize)]
 struct ErrorPayload {
-    code: &'static str,
+    code: ErrorCode,
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     fields: Option<Vec<String>>,
 }
 
-/// 对外的 API 错误；构造函数即映射表（plan/00 §6.2）。
+/// 对外的 API 错误；错误码只能通过具名构造函数产生，状态码由
+/// `ErrorCode::status` 统一推导，code → 状态码的映射不存在第二处。
 #[derive(Debug, Serialize)]
 pub struct ApiError(ApiErrorBody);
 
 impl ApiError {
-    pub(crate) fn new(code: &'static str, message: String) -> Self {
+    fn with_code(code: ErrorCode, message: String) -> Self {
         Self(ApiErrorBody {
             error: ErrorPayload {
                 code,
@@ -39,7 +74,7 @@ impl ApiError {
 
     /// 400 输入校验失败。
     pub fn validation_failed(message: impl Into<String>) -> Self {
-        Self::new("validation_failed", message.into())
+        Self::with_code(ErrorCode::ValidationFailed, message.into())
     }
 
     /// 400 输入校验失败，附带出错字段清单。
@@ -51,47 +86,67 @@ impl ApiError {
 
     /// 401 未登录或会话失效。
     pub fn unauthenticated() -> Self {
-        Self::new("unauthenticated", "authentication required".to_owned())
+        Self::with_code(
+            ErrorCode::Unauthenticated,
+            "authentication required".to_owned(),
+        )
     }
 
     /// 401 登录失败；文案不区分用户不存在与密码错误。
     pub fn invalid_credentials() -> Self {
-        Self::new("invalid_credentials", "invalid credentials".to_owned())
+        Self::with_code(
+            ErrorCode::InvalidCredentials,
+            "invalid credentials".to_owned(),
+        )
     }
 
     /// 400 当前密码不正确；独立 code 便于前端给出准确文案。
     pub fn current_password_mismatch() -> Self {
-        Self::new(
-            "current_password_mismatch",
+        Self::with_code(
+            ErrorCode::CurrentPasswordMismatch,
             "current password does not match".to_owned(),
         )
     }
 
+    /// 403 越权或来源被拒。
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self::with_code(ErrorCode::Forbidden, message.into())
+    }
+
+    /// 404 资源不存在；越权查询统一用它替代 403，避免泄露资源存在性。
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self::with_code(ErrorCode::NotFound, message.into())
+    }
+
     /// 409 唯一冲突。
     pub fn conflict(message: impl Into<String>) -> Self {
-        Self::new("conflict", message.into())
+        Self::with_code(ErrorCode::Conflict, message.into())
+    }
+
+    /// 413 请求体超过大小限制。
+    pub fn payload_too_large(message: impl Into<String>) -> Self {
+        Self::with_code(ErrorCode::PayloadTooLarge, message.into())
+    }
+
+    /// 415 媒体类型不支持。
+    pub fn unsupported_media_type(message: impl Into<String>) -> Self {
+        Self::with_code(ErrorCode::UnsupportedMediaType, message.into())
+    }
+
+    /// 429 触发限流。
+    pub fn rate_limited(message: impl Into<String>) -> Self {
+        Self::with_code(ErrorCode::RateLimited, message.into())
     }
 
     /// 500 内部错误；对外只给固定文案，细节仅进日志。
     pub fn internal_error() -> Self {
-        Self::new("internal_error", "internal error".to_owned())
+        Self::with_code(ErrorCode::InternalError, "internal error".to_owned())
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = match self.0.error.code {
-            "validation_failed" | "current_password_mismatch" => StatusCode::BAD_REQUEST,
-            "unauthenticated" | "invalid_credentials" => StatusCode::UNAUTHORIZED,
-            "forbidden" => StatusCode::FORBIDDEN,
-            "not_found" => StatusCode::NOT_FOUND,
-            "conflict" => StatusCode::CONFLICT,
-            "payload_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
-            "unsupported_media_type" => StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "rate_limited" => StatusCode::TOO_MANY_REQUESTS,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        (status, Json(self.0)).into_response()
+        (self.0.error.code.status(), Json(self.0)).into_response()
     }
 }
 
