@@ -220,3 +220,6 @@ fn with_cookie(response: Response, cookie: &str) -> Response {
     );
     Response::from_parts(parts, body)
 }
+
+#[cfg(test)]
+mod tests;

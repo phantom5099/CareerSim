@@ -2,6 +2,8 @@
 
 pub mod account_routes;
 pub mod auth;
-pub mod dto;
 pub mod error;
 pub mod router;
+
+#[cfg(test)]
+pub(crate) mod testing;

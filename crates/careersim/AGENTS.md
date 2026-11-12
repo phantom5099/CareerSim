@@ -22,6 +22,7 @@ src/
 │   ├── service.rs     # AccountService：注册/登录/注销/资料/改密
 │   ├── store.rs       # UserStore / SessionStore trait 与 AccountError
 │   ├── postgres.rs    # PostgreSQL 适配器
+│   ├── doubles.rs     # 内存存储与 FakeClock/FakeHasher 替身（cfg(test)）
 │   └── tests.rs       # 仅放该模块单测
 ├── pipeline.rs        # pipeline 模块入口（纯领域，无 IO）
 ├── pipeline/
@@ -34,8 +35,8 @@ src/
 │   ├── router.rs      # Router 装配、公开/私有分组、AppState
 │   ├── auth.rs        # AuthContext 提取器与 Origin 校验
 │   ├── error.rs       # ApiError、ErrorCode 枚举与统一错误体映射
-│   ├── dto.rs         # 公共 DTO（分页）
-│   └── account_routes.rs # 注册/登录/注销/me/改密路由
+│   ├── account_routes.rs # 注册/登录/注销/me/改密路由
+│   └── testing.rs     # 测试共用装配：内存账户服务 + oneshot 请求（cfg(test)）
 ├── agent.rs           # agent 模块入口与公开类型聚合
 ├── agent/
 │   ├── agent_loop.rs  # 回合循环、per-session 互斥、取消、阶段推进
@@ -225,14 +226,17 @@ config          → error / llm::provider
 
 ## 6. 测试约定
 
-- 单元测试位置：与源码同目录的 `tests.rs`，`#[tokio::test]`；测试替身只在
-  `#[cfg(test)]` 下编译。
-- 首选现有替身：`MemorySessionStore`、`MockLlmClient`、`FakeTool`；不要为测试在
-  生产模块里加公开入口。
+- 单元测试位置：与源码同目录的 `tests.rs`（如 `http/auth/tests.rs`），`#[tokio::test]`；
+  测试替身只在 `#[cfg(test)]` 下编译（`account/doubles.rs`、`http/testing.rs`、
+  `agent/tool/testing.rs`）。
+- 首选现有替身：`MemorySessionStore`、`MockLlmClient`、`FakeTool`、
+  `account::doubles`；不要为测试在生产模块里加公开入口。
 - 集成测试位置：`crates/careersim/tests/`，使用真实 PostgreSQL；未设置
   `DATABASE_URL` 时直接返回，不算验证通过。
 - 覆盖重点：事件序列、`seq` 连续性、CAS 冲突、半截回合修复、取消路径、空响应、
   `max_steps`、阶段推进、`NoNextStage`、错误 source 链。
+- HTTP 层覆盖重点：Origin 校验矩阵、Cookie 安全属性、AuthContext 提取、路由级
+  状态码与错误体映射；路由测试走完整 Router + oneshot，不依赖 PostgreSQL。
 - 单测不得访问真实网络或真实数据库；时间、随机、并发依赖必须可控。
 
 ---
