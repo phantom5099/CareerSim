@@ -80,7 +80,7 @@ impl From<CatalogError> for ApiError {
                 format!("referenced {field} does not exist"),
                 vec![field.to_owned()],
             ),
-            CatalogError::NotFound => ApiError::new("not_found", "resource not found".to_owned()),
+            CatalogError::NotFound => ApiError::not_found("resource not found"),
             CatalogError::Conflict(field) => {
                 ApiError::conflict(format!("`{field}` already exists"))
             }
@@ -649,7 +649,7 @@ async fn get_company(
         .catalog
         .get_company(auth.user_id, CompanyId::from_uuid(company_id))
         .await?
-        .ok_or_else(|| ApiError::new("not_found", "resource not found".to_owned()))?;
+        .ok_or_else(|| ApiError::not_found("resource not found"))?;
     Ok(Json(CompanyDetailDto {
         company: company_dto(&detail.company, auth.user_id),
         projects: detail.projects.into_iter().map(ProjectDto::from).collect(),
