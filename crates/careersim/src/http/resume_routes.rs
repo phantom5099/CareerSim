@@ -145,6 +145,7 @@ pub fn router() -> Router<AppState> {
             get(get_resume).patch(update_resume).delete(delete_resume),
         )
         .route("/api/v1/resumes/{id}/default", put(set_default_resume))
+        .route("/api/v1/resumes/{id}/attachment", get(download_attachment))
         .layer(RequestBodyLimitLayer::new(JSON_BODY_LIMIT_BYTES));
     let upload_routes = Router::new()
         .route("/api/v1/resumes/attachment", post(upload_attachment))

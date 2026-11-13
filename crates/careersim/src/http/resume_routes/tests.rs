@@ -1,7 +1,8 @@
 //! multipart 解析、下载头构造与路由级 HTTP 测试。
 
+use axum::Router;
 use axum::body::Body;
-use axum::http::header::CONTENT_TYPE;
+use axum::http::header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
 use serde_json::{Value, json};
 
@@ -394,6 +395,114 @@ async fn upload_with_magic_extension_mismatch_maps_to_415() {
         .unwrap();
     let response = send(app, request).await;
     assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
+// ---------- 附件下载 ----------
+
+/// 上传一份合法 PDF 附件，返回创建出的简历 JSON。
+async fn upload_pdf_attachment(app: &Router, cookie: &str) -> Value {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/resumes/attachment")
+        .header(axum::http::header::ORIGIN, ALLOWED_ORIGIN)
+        .header(axum::http::header::COOKIE, cookie)
+        .header(
+            CONTENT_TYPE,
+            HeaderValue::from_str(&format!("multipart/form-data; boundary={BOUNDARY}")).unwrap(),
+        )
+        .body(Body::from(build_multipart(
+            "附件简历",
+            "resume.pdf",
+            PDF_BYTES,
+        )))
+        .unwrap();
+    let response = send(app.clone(), request).await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    body_json(response).await
+}
+
+#[tokio::test]
+async fn download_attachment_streams_bytes_with_headers() {
+    let app = crate::testing::app();
+    let cookie = registered_cookie(&app, "alice").await;
+    let created = upload_pdf_attachment(&app, &cookie).await;
+    let resume_id = created["id"].as_str().unwrap();
+
+    let response = send(
+        app,
+        authed_empty(
+            "GET",
+            &format!("/api/v1/resumes/{resume_id}/attachment"),
+            &cookie,
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/pdf")
+    );
+    assert_eq!(
+        response.headers().get(CONTENT_LENGTH).unwrap(),
+        &PDF_BYTES.len().to_string()
+    );
+    let disposition = response
+        .headers()
+        .get(CONTENT_DISPOSITION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap();
+    assert!(disposition.starts_with("attachment; filename*=UTF-8''resume.pdf"));
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..], PDF_BYTES);
+}
+
+#[tokio::test]
+async fn download_attachment_of_online_resume_maps_to_404() {
+    let app = crate::testing::app();
+    let cookie = registered_cookie(&app, "alice").await;
+    let (status, body) = create_resume(&app, &cookie, "在线简历").await;
+    assert_eq!(status, StatusCode::CREATED);
+    let resume_id = body["id"].as_str().unwrap();
+
+    // 在线简历没有附件 → 404，与简历本身存在与否不区分。
+    let response = send(
+        app,
+        authed_empty(
+            "GET",
+            &format!("/api/v1/resumes/{resume_id}/attachment"),
+            &cookie,
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = body_json(response).await;
+    assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn download_attachment_of_other_owner_maps_to_404() {
+    let app = crate::testing::app();
+    let cookie = registered_cookie(&app, "alice").await;
+    let created = upload_pdf_attachment(&app, &cookie).await;
+    let resume_id = created["id"].as_str().unwrap();
+
+    let other = registered_cookie(&app, "bob").await;
+    let response = send(
+        app,
+        authed_empty(
+            "GET",
+            &format!("/api/v1/resumes/{resume_id}/attachment"),
+            &other,
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
