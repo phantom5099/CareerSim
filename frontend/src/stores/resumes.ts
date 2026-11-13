@@ -38,6 +38,18 @@ export const useResumesStore = defineStore('resumes', () => {
     return created
   }
 
+  async function attachToResume(id: string, file: File): Promise<ResumeDocument> {
+    const updated = await resumeApi.attachToResume(id, file)
+    resumes.value = resumes.value.map((resume) => (resume.id === id ? updated : resume))
+    return updated
+  }
+
+  async function removeAttachment(id: string): Promise<ResumeDocument> {
+    const updated = await resumeApi.removeAttachment(id)
+    resumes.value = resumes.value.map((resume) => (resume.id === id ? updated : resume))
+    return updated
+  }
+
   async function update(id: string, input: ResumeUpdateInput): Promise<ResumeDocument> {
     const updated = await resumeApi.update(id, input)
     resumes.value = resumes.value.map((resume) => (resume.id === id ? updated : resume))
@@ -66,6 +78,8 @@ export const useResumesStore = defineStore('resumes', () => {
     byId,
     createOnline,
     uploadAttachment,
+    attachToResume,
+    removeAttachment,
     update,
     remove,
     setDefault,

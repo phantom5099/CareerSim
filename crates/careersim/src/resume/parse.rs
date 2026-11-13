@@ -1,11 +1,10 @@
-//! Attachment text extraction: PDF and DOCX, plus draft derivation from plain text.
+//! Attachment text extraction: PDF and DOCX. Structuring into resume fields
+//! lives in [`super::structurize`] (rule-based, no model).
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use thiserror::Error;
-
-use super::content::ResumeContent;
 
 pub const MAX_EXTRACTED_TEXT_BYTES: usize = 512 * 1024;
 pub const EXTRACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
@@ -222,22 +221,4 @@ pub fn truncate_utf8(text: &str, max_bytes: usize) -> String {
         end -= 1;
     }
     text[..end].to_string()
-}
-
-/// Derives a conservative online draft from extracted plain text.
-///
-/// Only the summary is populated (first `MAX_SUMMARY_CHARS` characters of the
-/// trimmed text; char-based like all content bounds). The extractor never
-/// guesses structured fields, and the raw text itself is never persisted or
-/// logged.
-pub fn draft_from_text(text: &str) -> ResumeContent {
-    let summary: String = text
-        .trim()
-        .chars()
-        .take(super::content::MAX_SUMMARY_CHARS)
-        .collect();
-    ResumeContent {
-        summary,
-        ..ResumeContent::default()
-    }
 }

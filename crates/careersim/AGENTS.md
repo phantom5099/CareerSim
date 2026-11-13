@@ -37,7 +37,7 @@ src/
 │   ├── parse.rs       # ResumeTextExtractor、附件类型检测与解析草稿构造
 │   ├── service.rs     # ResumeService：CRUD、上传解析、附件打开（≤3 份、默认提升）
 │   ├── store.rs       # ResumeStore trait 与 ResumeStoreError
-│   ├── storage.rs     # AttachmentStore trait（键值字节存储）
+│   ├── storage.rs     # AttachmentStore trait（键值字节存储）；实现：LocalFs / S3 兼容
 │   ├── postgres.rs    # PostgreSQL 适配器
 │   └── tests.rs       # 仅放该模块单测
 ├── http.rs            # http 模块入口
@@ -206,6 +206,11 @@ config          → error / llm::provider
 ## 5. 会话与存储不变量
 
 ### 5.1 存储层
+
+附件二进制存储（`AttachmentStore`，键 `[A-Za-z0-9_-]{1,128}`）由
+`RESUME_STORAGE_BACKEND` 选择：`local`（默认，`RESUME_STORAGE_DIR`）或 `s3`
+（S3 兼容：`S3_ENDPOINT`/`S3_REGION`/`S3_BUCKET`/`S3_ACCESS_KEY_ID`/
+`S3_SECRET_ACCESS_KEY`，path-style，适配 MinIO/SeaweedFS/R2 等）。
 
 - `create`：同一事务写入 `sessions` 行与 `seq = 0` 的 `session_meta`；UUID 冲突有限次
   重试；`append` 拒绝 `SessionMeta`。

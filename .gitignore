@@ -15,3 +15,12 @@ coverage/
 /frontend/.env
 /frontend/.env.*
 !/frontend/.env.example
+
+# 本地对象存储与运行数据（SeaweedFS、本地附件）
+/data/
+
+# SeaweedFS 二进制与鉴权配置（含密钥，不入库）
+/tools/weed.exe
+/tools/s3.json
+# 规划文档不入库
+/plan/

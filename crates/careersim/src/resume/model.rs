@@ -1,4 +1,4 @@
-//! 简历领域模型：归属、类型、解析状态与边界（plan/01 §3.4）。
+//! 简历领域模型：归属、附件与解析状态边界（plan/01 §3.4）。
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,22 @@ use super::content::ResumeContent;
 pub const PDF_MIME: &str = "application/pdf";
 pub const DOCX_MIME: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+/// 由文件名后缀推导附件 MIME（大小写不敏感）。
+///
+/// MIME 不单独落库：上传时扩展名已与文件内容双重校验匹配，
+/// 仅 PDF/DOCX 两种，从 `attachment_name` 后缀推导即足够。
+pub fn mime_from_file_name(file_name: &str) -> Option<&'static str> {
+    let ext = std::path::Path::new(file_name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase)?;
+    match ext.as_str() {
+        "pdf" => Some(PDF_MIME),
+        "docx" => Some(DOCX_MIME),
+        _ => None,
+    }
+}
 
 /// 每个用户最多持有的有效（未删除）简历份数。
 pub const RESUME_LIMIT: usize = 3;
@@ -32,24 +48,6 @@ impl ResumeId {
 
     pub fn into_uuid(self) -> Uuid {
         self.0
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResumeKind {
-    /// 在线手填简历，无附件。
-    Online,
-    /// 附件简历：解析草稿同样保存在 `content`，可编辑。
-    Attachment,
-}
-
-impl ResumeKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ResumeKind::Online => "online",
-            ResumeKind::Attachment => "attachment",
-        }
     }
 }
 
@@ -87,7 +85,7 @@ impl ParseErrorCode {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseStatus {
-    /// 在线简历，无解析概念。
+    /// 无附件；解析概念不适用。
     NotApplicable,
     /// 附件已上传待解析；Phase 1 为同步解析，通常不出现。
     Pending,
@@ -114,35 +112,31 @@ pub struct ResumeAttachment {
     pub storage_key: String,
     /// 原始文件名，仅用于展示与下载头。
     pub file_name: String,
-    /// 校验后的固定 MIME（PDF/DOCX 之一）。
+    /// 校验后的固定 MIME（PDF/DOCX 之一），由文件名后缀推导。
     pub mime: String,
     pub size: u64,
-    /// 文件内容摘要；不对外返回。
-    pub sha256: [u8; 32],
 }
 
-/// 待写入的附件元数据；`mime` 为校验后的固定值。
+/// 待写入的附件元数据；MIME 由 `file_name` 后缀推导，不单独落库。
 #[derive(Debug, Clone)]
 pub struct NewResumeAttachment {
     pub storage_key: String,
     pub file_name: String,
-    pub mime: &'static str,
     pub size: u64,
-    pub sha256: [u8; 32],
 }
 
-/// 简历聚合。
+/// 简历聚合：结构化在线内容（必有、可编辑）+ 可选附件（原始 PDF/DOCX）。
 #[derive(Debug, Clone)]
 pub struct Resume {
     pub id: ResumeId,
     pub owner: crate::account::model::UserId,
     /// 展示标题，1..=80 字符。
     pub title: String,
-    pub kind: ResumeKind,
     /// 默认简历；每用户最多 1 份，由部分唯一索引兜底。
     pub is_default: bool,
     pub content: ResumeContent,
     pub attachment: Option<ResumeAttachment>,
+    /// 无附件时为 `NotApplicable`；有附件时为解析状态。
     pub parse_status: ParseStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

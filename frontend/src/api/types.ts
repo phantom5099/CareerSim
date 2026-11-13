@@ -123,23 +123,17 @@ interface ResumeMeta {
   isDefault: boolean
 }
 
-export type ResumeParseStatus = 'pending' | 'ready' | 'failed'
+export type ResumeParseStatus = 'not_applicable' | 'pending' | 'ready' | 'failed'
 
-export interface OnlineResume extends ResumeMeta {
-  kind: 'online'
+/** 简历文档：结构化在线内容必有；附件可选（解析结果回填 payload）。 */
+export interface ResumeDocument extends ResumeMeta {
   payload: ResumePayload
-}
-
-export interface AttachmentResume extends ResumeMeta {
-  kind: 'attachment'
-  payload: ResumePayload
-  attachment: ResumeAttachment
+  attachment?: ResumeAttachment
+  /** 无附件时为 not_applicable；有附件时为解析状态。 */
   parseStatus: ResumeParseStatus
   /** 解析失败时的固定错误码；存储键与哈希不对外返回。 */
   parseErrorCode?: string
 }
-
-export type ResumeDocument = OnlineResume | AttachmentResume
 
 export interface ResumeCreateInput {
   title: string

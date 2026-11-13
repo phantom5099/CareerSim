@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use sqlx::{PgPool, Row, postgres::PgRow};
 
 use super::model::{
-    DOCX_MIME, NewResume, PDF_MIME, ParseErrorCode, ParseStatus, RESUME_LIMIT, Resume,
-    ResumeAttachment, ResumeId, ResumeKind, ResumePatch,
+    NewResume, NewResumeAttachment, ParseErrorCode, ParseStatus, RESUME_LIMIT, Resume,
+    ResumeAttachment, ResumeId, ResumePatch,
 };
 use super::store::{ResumeStore, ResumeStoreError};
 use crate::account::model::UserId;
@@ -15,8 +15,8 @@ use crate::account::model::UserId;
 macro_rules! resume_select {
     ($tail:literal) => {
         concat!(
-            "SELECT id, user_id, title, kind, is_default, content, attachment_key, ",
-            "attachment_name, attachment_mime, attachment_size, attachment_sha256, ",
+            "SELECT id, user_id, title, is_default, content, attachment_key, ",
+            "attachment_name, attachment_size, ",
             "parse_status, parse_error_code, created_at, updated_at ",
             $tail
         )
@@ -28,8 +28,8 @@ macro_rules! resume_update_sql {
     ($head:literal) => {
         concat!(
             $head,
-            " RETURNING id, user_id, title, kind, is_default, content, attachment_key, ",
-            "attachment_name, attachment_mime, attachment_size, attachment_sha256, ",
+            " RETURNING id, user_id, title, is_default, content, attachment_key, ",
+            "attachment_name, attachment_size, ",
             "parse_status, parse_error_code, created_at, updated_at"
         )
     };
@@ -64,12 +64,6 @@ fn resume_from_row(row: &PgRow) -> Result<Resume, ResumeStoreError> {
     let id: uuid::Uuid = row.try_get("id").map_err(map)?;
     let owner: uuid::Uuid = row.try_get("user_id").map_err(map)?;
     let title: String = row.try_get("title").map_err(map)?;
-    let kind_raw: String = row.try_get("kind").map_err(map)?;
-    let kind = match kind_raw.as_str() {
-        "online" => ResumeKind::Online,
-        "attachment" => ResumeKind::Attachment,
-        _ => return Err(corrupt("unknown kind")),
-    };
     let is_default: bool = row.try_get("is_default").map_err(map)?;
 
     let content_value: serde_json::Value = row.try_get("content").map_err(map)?;
@@ -78,47 +72,24 @@ fn resume_from_row(row: &PgRow) -> Result<Resume, ResumeStoreError> {
 
     let attachment_key: Option<String> = row.try_get("attachment_key").map_err(map)?;
     let attachment_name: Option<String> = row.try_get("attachment_name").map_err(map)?;
-    let attachment_mime: Option<String> = row.try_get("attachment_mime").map_err(map)?;
     let attachment_size: Option<i64> = row.try_get("attachment_size").map_err(map)?;
-    let attachment_sha256: Option<Vec<u8>> = row.try_get("attachment_sha256").map_err(map)?;
 
-    let attachment = match kind {
-        ResumeKind::Online => {
-            if attachment_key.is_some()
-                || attachment_name.is_some()
-                || attachment_mime.is_some()
-                || attachment_size.is_some()
-                || attachment_sha256.is_some()
-            {
-                return Err(corrupt("online resume carries attachment columns"));
-            }
-            None
-        }
-        ResumeKind::Attachment => {
-            let (Some(storage_key), Some(file_name), Some(mime), Some(size), Some(sha256)) = (
-                attachment_key,
-                attachment_name,
-                attachment_mime,
-                attachment_size,
-                attachment_sha256,
-            ) else {
-                return Err(corrupt("attachment resume misses attachment columns"));
-            };
-            if mime != PDF_MIME && mime != DOCX_MIME {
-                return Err(corrupt("unknown attachment mime"));
-            }
+    // 附件字段组成组出现：全 NULL ⇔ 无附件；全非空 ⇔ 有附件（与 DB CHECK 一致）。
+    // MIME 不落库，由文件名后缀推导（上传时已与内容双重校验）。
+    let attachment = match (attachment_key, attachment_name, attachment_size) {
+        (None, None, None) => None,
+        (Some(storage_key), Some(file_name), Some(size)) => {
+            let mime = super::model::mime_from_file_name(&file_name)
+                .ok_or_else(|| corrupt("unknown attachment file extension"))?;
             let size = u64::try_from(size).map_err(|_| corrupt("negative attachment size"))?;
-            let sha256: [u8; 32] = sha256
-                .try_into()
-                .map_err(|_| corrupt("attachment sha256 must be 32 bytes"))?;
             Some(ResumeAttachment {
                 storage_key,
                 file_name,
-                mime,
+                mime: mime.to_owned(),
                 size,
-                sha256,
             })
         }
+        _ => return Err(corrupt("attachment columns are partially populated")),
     };
 
     let status_raw: String = row.try_get("parse_status").map_err(map)?;
@@ -148,7 +119,6 @@ fn resume_from_row(row: &PgRow) -> Result<Resume, ResumeStoreError> {
         id: ResumeId::from_uuid(id),
         owner: UserId::from_uuid(owner),
         title,
-        kind,
         is_default,
         content,
         attachment,
@@ -219,22 +189,19 @@ impl ResumeStore for PgResumeStore {
         }
         let is_default = count == 0;
 
-        let (attachment_key, attachment_name, attachment_mime, attachment_size, attachment_sha256) =
-            match &resume.attachment {
-                None => (None::<String>, None, None, None::<i64>, None::<Vec<u8>>),
-                Some(attachment) => (
-                    Some(attachment.storage_key.clone()),
-                    Some(attachment.file_name.clone()),
-                    Some(attachment.mime),
-                    Some(i64::try_from(attachment.size).map_err(|_| {
-                        ResumeStoreError::Backend {
-                            message: "attachment size out of range".to_owned(),
-                            source: None,
-                        }
-                    })?),
-                    Some(attachment.sha256.to_vec()),
-                ),
-            };
+        let (attachment_key, attachment_name, attachment_size) = match &resume.attachment {
+            None => (None::<String>, None, None::<i64>),
+            Some(attachment) => (
+                Some(attachment.storage_key.clone()),
+                Some(attachment.file_name.clone()),
+                Some(i64::try_from(attachment.size).map_err(|_| {
+                    ResumeStoreError::Backend {
+                        message: "attachment size out of range".to_owned(),
+                        source: None,
+                    }
+                })?),
+            ),
+        };
 
         let (parse_status, parse_error_code) = match &resume.parse_status {
             ParseStatus::NotApplicable => ("not_applicable", None),
@@ -244,26 +211,19 @@ impl ResumeStore for PgResumeStore {
         };
 
         let row = sqlx::query(resume_update_sql!(
-            "INSERT INTO resumes (id, user_id, title, kind, is_default, content, \
-             attachment_key, attachment_name, attachment_mime, attachment_size, \
-             attachment_sha256, parse_status, parse_error_code, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)"
+            "INSERT INTO resumes (id, user_id, title, is_default, content, \
+             attachment_key, attachment_name, attachment_size, \
+             parse_status, parse_error_code, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)"
         ))
         .bind(resume.id.into_uuid())
         .bind(owner.into_uuid())
         .bind(&resume.title)
-        .bind(if resume.attachment.is_some() {
-            "attachment"
-        } else {
-            "online"
-        })
         .bind(is_default)
         .bind(&resume.content)
         .bind(attachment_key)
         .bind(attachment_name)
-        .bind(attachment_mime)
         .bind(attachment_size)
-        .bind(attachment_sha256)
         .bind(parse_status)
         .bind(parse_error_code)
         .bind(chrono::Utc::now())
@@ -389,5 +349,67 @@ impl ResumeStore for PgResumeStore {
         tx.commit()
             .await
             .map_err(|err| resume_backend("delete resume commit", err))
+    }
+
+    async fn attach(
+        &self,
+        owner: UserId,
+        id: ResumeId,
+        attachment: NewResumeAttachment,
+        parse_status: ParseStatus,
+        content: serde_json::Value,
+    ) -> Result<Resume, ResumeStoreError> {
+        let (status, error_code) = match &parse_status {
+            ParseStatus::NotApplicable => ("not_applicable", None),
+            ParseStatus::Pending => ("pending", None),
+            ParseStatus::Ready => ("ready", None),
+            ParseStatus::Failed { code } => ("failed", Some(code.as_str())),
+        };
+        let row = sqlx::query(resume_update_sql!(
+            "UPDATE resumes SET attachment_key = $3, attachment_name = $4, \
+             attachment_size = $5, \
+             parse_status = $6, parse_error_code = $7, content = $8, updated_at = $9 \
+             WHERE user_id = $1 AND id = $2 AND deleted_at IS NULL"
+        ))
+        .bind(owner.into_uuid())
+        .bind(id.into_uuid())
+        .bind(&attachment.storage_key)
+        .bind(&attachment.file_name)
+        .bind(i64::try_from(attachment.size).map_err(|_| {
+            ResumeStoreError::Backend {
+                message: "attachment size out of range".to_owned(),
+                source: None,
+            }
+        })?)
+        .bind(status)
+        .bind(error_code)
+        .bind(&content)
+        .bind(chrono::Utc::now())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|err| resume_backend("attach resume", err))?;
+        match row {
+            Some(row) => Ok(resume_from_row(&row)?),
+            None => Err(ResumeStoreError::NotFound),
+        }
+    }
+
+    async fn detach(&self, owner: UserId, id: ResumeId) -> Result<Resume, ResumeStoreError> {
+        let row = sqlx::query(resume_update_sql!(
+            "UPDATE resumes SET attachment_key = NULL, attachment_name = NULL, \
+             attachment_size = NULL, \
+             parse_status = 'not_applicable', parse_error_code = NULL, updated_at = $3 \
+             WHERE user_id = $1 AND id = $2 AND deleted_at IS NULL"
+        ))
+        .bind(owner.into_uuid())
+        .bind(id.into_uuid())
+        .bind(chrono::Utc::now())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|err| resume_backend("detach resume", err))?;
+        match row {
+            Some(row) => Ok(resume_from_row(&row)?),
+            None => Err(ResumeStoreError::NotFound),
+        }
     }
 }

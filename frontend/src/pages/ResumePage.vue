@@ -2,7 +2,6 @@
 import { computed, onMounted, ref } from 'vue'
 
 import { RESUME_LIMIT } from '@/api/types'
-import { resumeApi } from '@/api/endpoints/resume'
 import type {
   ResumeCertificate,
   ResumeDocument,
@@ -15,15 +14,15 @@ import type {
   ResumeSkill,
 } from '@/api/types'
 import { formatDate } from '@/domain/types'
-import { useAuthStore } from '@/stores/auth'
 import { useResumesStore } from '@/stores/resumes'
 
-const auth = useAuthStore()
 const resumes = useResumesStore()
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const notice = ref<{ tone: 'ok' | 'warn'; text: string } | null>(null)
-const attachNotice = ref<{ tone: 'ok' | 'warn'; text: string } | null>(null)
+const attachNotice = ref<{ tone: 'ok' | 'warn' | 'busy'; text: string } | null>(null)
+/** 附件正在上传+解析；期间禁用上传按钮并显示进度提示。 */
+const parsing = ref(false)
 const pendingDeleteId = ref('')
 const aiDemoOpen = ref(false)
 
@@ -31,6 +30,9 @@ const editingId = ref<string | null>(null)
 const creating = ref(false)
 const editorOpen = computed(() => creating.value || editingId.value !== null)
 const editorTitle = computed(() => (creating.value ? '新建在线简历' : '编辑简历'))
+const editingResume = computed(() =>
+  editingId.value ? (resumes.byId(editingId.value) ?? null) : null,
+)
 const title = ref('')
 const draft = ref<ResumePayload>(blankPayload())
 const saving = ref(false)
@@ -71,18 +73,16 @@ function blankHonor(): ResumeHonor {
 }
 
 function blankPayload(): ResumePayload {
-  const role = auth.user?.targetRoles[0] ?? '前端工程师'
-  const city = auth.user?.targetCities[0] ?? '杭州'
   return {
-    name: auth.user?.displayName ?? '林同学',
+    name: '',
     phone: '',
     email: '',
-    city,
-    targetRole: role,
-    targetCity: city,
-    jobType: '校招',
+    city: '',
+    targetRole: '',
+    targetCity: '',
+    jobType: '',
     availableDate: '',
-    educations: [blankEducation()],
+    educations: [],
     experiences: [],
     projects: [],
     practices: [],
@@ -111,19 +111,21 @@ function formatFileSize(bytes: number): string {
 }
 
 function resumeMeta(resume: ResumeDocument): string {
-  if (resume.kind === 'online') {
-    const education = resume.payload.educations[0]
-    return [
-      resume.payload.targetRole,
-      resume.payload.targetCity,
-      education ? `${education.school} · ${education.degree}` : '',
-    ]
-      .filter(Boolean)
-      .join(' · ')
+  const education = resume.payload.educations[0]
+  const contentMeta = [
+    resume.payload.targetRole,
+    resume.payload.targetCity,
+    education ? `${education.school} · ${education.degree}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  if (!resume.attachment) {
+    return contentMeta
   }
   const status = parseStatusText(resume.parseStatus, resume.parseErrorCode)
   return [
-    resume.attachment.fileName,
+    contentMeta,
+    `附件 ${resume.attachment.fileName}`,
     formatFileSize(resume.attachment.fileSize),
     status ? `· ${status}` : '',
   ]
@@ -131,9 +133,14 @@ function resumeMeta(resume: ResumeDocument): string {
     .join(' ')
 }
 
-/** 附件解析状态文案；failed 时给出按错误码细分的提示。 */
-function parseStatusText(status: 'pending' | 'ready' | 'failed', errorCode?: string): string {
+/** 附件解析状态文案；not_applicable 表示无附件，failed 时按错误码细分提示。 */
+function parseStatusText(
+  status: 'not_applicable' | 'pending' | 'ready' | 'failed',
+  errorCode?: string,
+): string {
   switch (status) {
+    case 'not_applicable':
+      return ''
     case 'pending':
       return '解析中'
     case 'ready':
@@ -178,7 +185,7 @@ function startOnline() {
   }
   creating.value = true
   editingId.value = null
-  title.value = auth.user?.targetRoles[0] ?? '求职简历'
+  title.value = ''
   draft.value = blankPayload()
   pendingDeleteId.value = ''
   editorError.value = ''
@@ -394,6 +401,59 @@ async function saveEditor() {
   }
 }
 
+/** 标量字段中文名，用于回填摘要。 */
+const FIELD_NAMES: Array<[keyof ResumePayload, string]> = [
+  ['name', '姓名'],
+  ['phone', '手机号'],
+  ['email', '邮箱'],
+  ['city', '现居城市'],
+  ['targetRole', '目标岗位'],
+  ['targetCity', '目标城市'],
+  ['jobType', '求职类型'],
+  ['availableDate', '到岗时间'],
+  ['summary', '自我介绍'],
+]
+
+/** 列表字段中文名，用于回填摘要。 */
+const LIST_NAMES: Array<[keyof ResumePayload, string]> = [
+  ['educations', '教育'],
+  ['experiences', '经历'],
+  ['projects', '项目'],
+  ['practices', '实践'],
+  ['skills', '技能'],
+  ['certificates', '证书'],
+  ['honors', '荣誉'],
+]
+
+/** 对比解析前后的内容，生成"回填了什么/保留了什么"的人类可读摘要。 */
+function describeBackfill(before: ResumePayload, after: ResumePayload): string {
+  const filled = FIELD_NAMES.filter(
+    ([key]) => (before[key] as string).trim() === '' && (after[key] as string).trim() !== '',
+  ).map(([, label]) => label)
+  const appended = LIST_NAMES.filter(
+    ([key]) => (after[key] as unknown[]).length > (before[key] as unknown[]).length,
+  ).map(([key, label]) => {
+    const added = (after[key] as unknown[]).length - (before[key] as unknown[]).length
+    return `${label} ${added} 条`
+  })
+  const kept = FIELD_NAMES.filter(([key]) => (before[key] as string).trim() !== '').length
+
+  const parts: string[] = []
+  if (filled.length > 0) {
+    parts.push(`识别出并回填：${filled.join('、')}`)
+  }
+  if (appended.length > 0) {
+    parts.push(`新增条目：${appended.join('、')}`)
+  }
+  if (parts.length === 0) {
+    parts.push('本次未识别出可回填的新字段（标准单栏排版的简历识别效果最好）')
+  }
+  if (kept > 0) {
+    parts.push(`已有内容保持不变`)
+  }
+  return parts.join('；') + '。'
+}
+
 async function onFile(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -401,30 +461,82 @@ async function onFile(event: Event) {
   if (!file) {
     return
   }
+  // 上传与解析在后端同步完成，响应返回即携带回填结果；
+  // 期间显示解析中提示，避免大文件时界面无反馈。
+  parsing.value = true
+  attachNotice.value = { tone: 'busy', text: `正在上传并解析「${file.name}」…` }
+  // 编辑已有简历：附件挂到该简历并回填；否则上传即创建新简历。
+  if (editingId.value) {
+    try {
+      const before = draft.value
+      const updated = await resumes.attachToResume(editingId.value, file)
+      title.value = updated.title
+      draft.value = JSON.parse(JSON.stringify(updated.payload)) as ResumePayload
+      if (updated.parseStatus === 'failed') {
+        const text = `附件「${file.name}」已挂到当前简历，但解析未成功：${parseStatusText(updated.parseStatus, updated.parseErrorCode)}`
+        warn(text)
+        attachNotice.value = { tone: 'warn', text }
+      } else {
+        const text = `附件「${file.name}」解析完成：${describeBackfill(before, updated.payload)}`
+        notice.value = { tone: 'ok', text: '附件解析完成，表单已更新。' }
+        attachNotice.value = { tone: 'ok', text }
+      }
+    } catch (error) {
+      const text = error instanceof Error ? error.message : '上传失败，请稍后重试。'
+      editorError.value = text
+      attachNotice.value = { tone: 'warn', text }
+    } finally {
+      parsing.value = false
+    }
+    return
+  }
+
   if (atLimit.value) {
     const text = `最多保存 ${RESUME_LIMIT} 份简历，请先删除一份。`
     warn(text)
     attachNotice.value = { tone: 'warn', text }
+    parsing.value = false
     return
   }
   const uploadTitle = file.name.replace(/\.[^.]+$/, '') || file.name
   try {
     const created = await resumes.uploadAttachment(uploadTitle, file)
-    if (created.kind === 'attachment' && created.parseStatus === 'failed') {
-      const text = `已保存附件「${file.name}」，但解析未成功：${parseStatusText(created.parseStatus, created.parseErrorCode)}`
+    // 直接切换为编辑这份新简历，表单立即显示回填结果，
+    // 避免“弹窗里上传却建了另一份简历、当前表单纹丝不动”的错觉。
+    creating.value = false
+    editingId.value = created.id
+    title.value = created.title
+    draft.value = JSON.parse(JSON.stringify(created.payload)) as ResumePayload
+    if (created.parseStatus === 'failed') {
+      const text = `附件「${file.name}」已保存为新简历，但解析未成功：${parseStatusText(created.parseStatus, created.parseErrorCode)}`
       warn(text)
       attachNotice.value = { tone: 'warn', text }
       return
     }
-    notice.value = { tone: 'ok', text: `已上传附件简历「${file.name}」，解析完成。` }
     attachNotice.value = {
       tone: 'ok',
-      text: `已上传附件简历「${file.name}」，已生成内容草稿，投递时可单独选用。`,
+      text: `附件「${file.name}」解析完成：${describeBackfill(blankPayload(), created.payload)}`,
     }
   } catch (error) {
     const text = error instanceof Error ? error.message : '添加失败，请稍后重试。'
     warn(text)
     attachNotice.value = { tone: 'warn', text }
+  } finally {
+    parsing.value = false
+  }
+}
+
+async function removeAttachment(resumeId: string) {
+  try {
+    await resumes.removeAttachment(resumeId)
+    if (editingId.value === resumeId) {
+      draft.value = JSON.parse(
+        JSON.stringify(resumes.byId(resumeId)?.payload ?? draft.value),
+      ) as ResumePayload
+    }
+    notice.value = { tone: 'ok', text: '附件已移除，在线内容保持不变。' }
+  } catch (error) {
+    warn(error instanceof Error ? error.message : '移除失败，请稍后重试。')
   }
 }
 
@@ -545,20 +657,12 @@ const previewHonors = computed(() => draft.value.honors.filter((item) => item.na
           class="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-line/70 pt-3 text-[0.64rem]"
         >
           <button
-            v-if="resume.kind === 'online'"
             type="button"
             class="text-ink-soft transition hover:text-vermilion"
             @click="editResume(resume)"
           >
             编辑
           </button>
-          <a
-            v-if="resume.kind === 'attachment'"
-            :href="resumeApi.attachmentDownloadUrl(resume.id)"
-            class="text-ink-soft transition hover:text-vermilion"
-          >
-            下载附件
-          </a>
           <button
             type="button"
             class="ml-auto text-ink-faint transition hover:text-vermilion"
@@ -632,25 +736,55 @@ const previewHonors = computed(() => draft.value.honors.filter((item) => item.na
 
                 <section>
                   <div class="flex items-baseline justify-between border-b border-ink pb-1.5">
-                    <h3 class="font-display text-lg">附件简历</h3>
+                    <h3 class="font-display text-lg">附件解析回填</h3>
                     <span class="font-mono text-[0.54rem] tracking-[0.14em] text-ink-faint">
                       ATTACHMENT
                     </span>
                   </div>
                   <div class="mt-3 border border-dashed border-line-strong px-4 py-4">
                     <p class="text-[0.68rem] leading-5 text-ink-soft">
-                      支持 PDF / Word，上传后作为独立附件简历保存，投递时可与在线简历分别选用。
+                      支持 PDF / Word。上传后自动解析，识别出的字段回填到下方表单；
+                      <template v-if="editingId">已有内容不会被覆盖，重复上传会替换附件。</template>
+                      <template v-else>上传即创建一份新简历。</template>
                     </p>
+                    <div
+                      v-if="editingId && editingResume?.attachment"
+                      class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[0.64rem]"
+                    >
+                      <span class="text-ink-soft">
+                        当前附件：{{ editingResume.attachment.fileName }}（{{
+                          formatFileSize(editingResume.attachment.fileSize)
+                        }}）
+                      </span>
+                      <span
+                        v-if="parseStatusText(editingResume.parseStatus, editingResume.parseErrorCode)"
+                        class="text-ink-faint"
+                      >
+                        {{
+                          parseStatusText(editingResume.parseStatus, editingResume.parseErrorCode)
+                        }}
+                      </span>
+                      <button
+                        type="button"
+                        class="text-ink-soft transition hover:text-vermilion"
+                        @click="removeAttachment(editingResume.id)"
+                      >
+                        移除附件
+                      </button>
+                    </div>
                     <div class="mt-3 flex flex-wrap items-center gap-3">
                       <button
-                        v-if="!atLimit"
                         type="button"
-                        class="btn-line py-1.5 text-[0.68rem]"
+                        class="btn-line py-1.5 text-[0.68rem] disabled:cursor-not-allowed disabled:opacity-50"
+                        :disabled="parsing"
                         @click="fileInput?.click()"
                       >
-                        选择文件上传
+                        {{ parsing ? '解析中…' : editingId ? '选择文件替换附件' : '选择文件上传' }}
                       </button>
-                      <span v-else class="text-[0.62rem] text-ink-faint">
+                      <span
+                        v-if="!editingId && atLimit"
+                        class="text-[0.62rem] text-ink-faint"
+                      >
                         已保存 {{ RESUME_LIMIT }} 份，删除一份后可继续上传。
                       </span>
                       <span class="font-mono text-[0.58rem] text-ink-faint">
@@ -660,7 +794,11 @@ const previewHonors = computed(() => draft.value.honors.filter((item) => item.na
                     <p
                       v-if="attachNotice"
                       class="mt-2 text-[0.62rem]"
-                      :class="attachNotice.tone === 'ok' ? 'text-moss' : 'text-vermilion'"
+                      :class="{
+                        'text-moss': attachNotice.tone === 'ok',
+                        'text-vermilion': attachNotice.tone === 'warn',
+                        'text-ink-soft': attachNotice.tone === 'busy',
+                      }"
                     >
                       {{ attachNotice.text }}
                     </p>
@@ -750,6 +888,7 @@ const previewHonors = computed(() => draft.value.honors.filter((item) => item.na
                     <label class="block">
                       <span class="text-[0.62rem] text-ink-faint">工作类型</span>
                       <select v-model="draft.jobType" class="field mt-1.5 text-sm">
+                        <option value="">未选择</option>
                         <option>校招</option>
                         <option>实习</option>
                         <option>社招</option>
@@ -1484,7 +1623,7 @@ const previewHonors = computed(() => draft.value.honors.filter((item) => item.na
               {{ editorError }}
             </p>
             <p v-else class="min-w-0 flex-1 text-[0.6rem] text-ink-faint">
-              在线简历会用于投递；附件简历可在此一并上传，不参与在线编辑。
+              在线简历会用于投递；附件可选上传，解析出的字段会自动回填到表单。
             </p>
             <div class="ml-auto flex items-center gap-2">
               <button type="button" class="btn-line py-1.5 text-[0.7rem]" @click="closeEditor">

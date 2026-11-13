@@ -104,8 +104,51 @@ pub struct AppConfig {
     pub llm: LlmConfig,
     pub http: HttpConfig,
     pub argon2: Argon2Config,
-    pub resume_storage_dir: String,
+    pub storage: AttachmentStorageConfig,
     pub max_steps: usize,
+}
+
+/// 附件二进制存储后端；`RESUME_STORAGE_BACKEND` 选择实现。
+///
+/// - `local`（默认）：本地文件系统，目录取 `RESUME_STORAGE_DIR`；
+/// - `s3`：S3 兼容对象存储（MinIO / R2 / 七牛等），走 `S3_*` 环境变量。
+#[derive(Clone)]
+pub enum AttachmentStorageConfig {
+    LocalFs { dir: String },
+    S3 { endpoint: String, region: String, bucket: String, access_key_id: String, secret_access_key: String },
+}
+
+impl AttachmentStorageConfig {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        let backend = match std::env::var("RESUME_STORAGE_BACKEND") {
+            Ok(value) if !value.trim().is_empty() => value.trim().to_ascii_lowercase(),
+            _ => "local".to_owned(),
+        };
+        match backend.as_str() {
+            "local" => {
+                let dir = match std::env::var("RESUME_STORAGE_DIR") {
+                    Ok(value) if !value.trim().is_empty() => value,
+                    _ => "data/resumes".to_owned(),
+                };
+                Ok(Self::LocalFs { dir })
+            }
+            "s3" => Ok(Self::S3 {
+                endpoint: required("S3_ENDPOINT")?,
+                region: match std::env::var("S3_REGION") {
+                    Ok(value) if !value.trim().is_empty() => value,
+                    // MinIO 默认 region。
+                    _ => "us-east-1".to_owned(),
+                },
+                bucket: required("S3_BUCKET")?,
+                access_key_id: required("S3_ACCESS_KEY_ID")?,
+                secret_access_key: required("S3_SECRET_ACCESS_KEY")?,
+            }),
+            _ => Err(ConfigError::Invalid {
+                name: "RESUME_STORAGE_BACKEND",
+                value: backend,
+            }),
+        }
+    }
 }
 
 impl AppConfig {
@@ -114,10 +157,7 @@ impl AppConfig {
         let llm = LlmConfig::from_env()?;
         let http = HttpConfig::from_env()?;
         let argon2 = Argon2Config::from_env()?;
-        let resume_storage_dir = match std::env::var("RESUME_STORAGE_DIR") {
-            Ok(value) if !value.trim().is_empty() => value,
-            _ => "data/resumes".to_owned(),
-        };
+        let storage = AttachmentStorageConfig::from_env()?;
         let max_steps = optional_parse("MAX_STEPS", 8_usize)?;
         if max_steps == 0 {
             return Err(ConfigError::Invalid {
@@ -131,7 +171,7 @@ impl AppConfig {
             llm,
             http,
             argon2,
-            resume_storage_dir,
+            storage,
             max_steps,
         })
     }

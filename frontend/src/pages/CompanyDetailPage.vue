@@ -154,17 +154,15 @@ const applying = ref(false)
 const applyError = ref('')
 
 function describeResume(resume: ResumeDocument): string {
-  if (resume.kind === 'online') {
-    const education = resume.payload.educations[0]
-    return [
-      resume.payload.targetRole,
-      resume.payload.targetCity,
-      education ? `${education.school} · ${education.degree}` : '',
-    ]
-      .filter(Boolean)
-      .join(' · ')
-  }
-  return resume.attachment.fileName
+  const education = resume.payload.educations[0]
+  const contentMeta = [
+    resume.payload.targetRole,
+    resume.payload.targetCity,
+    education ? `${education.school} · ${education.degree}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  return resume.attachment ? `${contentMeta} · 附件 ${resume.attachment.fileName}` : contentMeta
 }
 
 function openApply(job: Job) {
@@ -624,7 +622,7 @@ onBeforeUnmount(() => {
                 <span class="min-w-0">
                   <span class="flex flex-wrap items-baseline gap-1.5">
                     <span class="text-[0.8rem] font-medium">{{ resume.title }}</span>
-                    <span class="chip">{{ resume.kind === 'online' ? '在线简历' : '附件简历' }}</span>
+                    <span class="chip">{{ resume.attachment ? '含附件' : '在线简历' }}</span>
                     <span v-if="resume.isDefault" class="text-[0.62rem] text-vermilion">默认</span>
                   </span>
                   <span class="mt-1 block text-[0.66rem] leading-4 text-ink-soft">

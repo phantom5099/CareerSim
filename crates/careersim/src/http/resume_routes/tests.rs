@@ -39,6 +39,22 @@ fn build_multipart(title: &str, file_name: &str, file_bytes: &[u8]) -> Vec<u8> {
     body
 }
 
+/// 只带 `file` 字段的 multipart（给已有简历传附件）。
+fn build_file_multipart(file_name: &str, file_bytes: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!(
+            "Content-Disposition: form-data; name=\"file\"; filename=\"{file_name}\"\r\n\
+             Content-Type: application/pdf\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(file_bytes);
+    body.extend_from_slice(format!("\r\n--{BOUNDARY}--\r\n").as_bytes());
+    body
+}
+
 #[test]
 fn parses_title_and_file_fields() {
     let body = build_multipart("  后端简历 ", "resume.pdf", b"%PDF-bytes");
@@ -177,11 +193,10 @@ async fn create_online_resume_returns_created_as_default() {
     let (status, body) = create_resume(&app, &cookie, "我的简历").await;
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(body["title"], "我的简历");
-    assert_eq!(body["kind"], "online");
     assert_eq!(body["isDefault"], true);
     assert_eq!(body["parseStatus"], "not_applicable");
-    assert_eq!(body["content"]["name"], "Alice");
-    assert_eq!(body["content"]["targetRole"], "后端工程师");
+    assert_eq!(body["payload"]["name"], "Alice");
+    assert_eq!(body["payload"]["targetRole"], "后端工程师");
 }
 
 #[tokio::test]
@@ -237,7 +252,7 @@ async fn resume_crud_roundtrip_preserves_unpatched_content() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     assert_eq!(body["title"], "改过的简历");
-    assert_eq!(body["content"]["targetRole"], "后端工程师");
+    assert_eq!(body["payload"]["targetRole"], "后端工程师");
 
     // 删除后读取 404。
     let response = send(
@@ -336,11 +351,10 @@ async fn upload_attachment_creates_ready_draft_resume() {
     let response = send(app, request).await;
     assert_eq!(response.status(), StatusCode::CREATED);
     let body = body_json(response).await;
-    assert_eq!(body["kind"], "attachment");
     assert_eq!(body["parseStatus"], "ready");
-    // StaticTextExtractor 的固定文本成为摘要草稿。
+    // StaticTextExtractor 的固定文本没有可识别段头，兜底进入摘要。
     assert_eq!(
-        body["content"]["summary"],
+        body["payload"]["summary"],
         "提取到的简历正文：五年 Rust 后端经验"
     );
     assert_eq!(body["attachment"]["fileName"], "resume.pdf");
@@ -395,6 +409,66 @@ async fn upload_with_magic_extension_mismatch_maps_to_415() {
         .unwrap();
     let response = send(app, request).await;
     assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
+#[tokio::test]
+async fn attach_to_existing_resume_backfills_and_keeps_filled_fields() {
+    let app = crate::testing::app();
+    let cookie = registered_cookie(&app, "alice").await;
+    let (_, created) = create_resume(&app, &cookie, "我的简历").await;
+    let resume_id = created["id"].as_str().unwrap().to_owned();
+
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/v1/resumes/{resume_id}/attachment"))
+        .header(axum::http::header::ORIGIN, ALLOWED_ORIGIN)
+        .header(axum::http::header::COOKIE, &cookie)
+        .header(
+            CONTENT_TYPE,
+            HeaderValue::from_str(&format!("multipart/form-data; boundary={BOUNDARY}")).unwrap(),
+        )
+        .body(Body::from(build_file_multipart("resume.pdf", PDF_BYTES)))
+        .unwrap();
+    let response = send(app, request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["id"], resume_id.as_str());
+    assert_eq!(body["parseStatus"], "ready");
+    assert_eq!(body["attachment"]["fileName"], "resume.pdf");
+    // 已填字段不被覆盖。
+    assert_eq!(body["payload"]["name"], "Alice");
+    // 空字段由解析回填（兜底摘要）。
+    assert_eq!(
+        body["payload"]["summary"],
+        "提取到的简历正文：五年 Rust 后端经验"
+    );
+}
+
+#[tokio::test]
+async fn remove_attachment_resets_parse_status_and_keeps_content() {
+    let app = crate::testing::app();
+    let cookie = registered_cookie(&app, "alice").await;
+    let created = upload_pdf_attachment(&app, &cookie).await;
+    let resume_id = created["id"].as_str().unwrap().to_owned();
+
+    let response = send(
+        app,
+        authed_empty(
+            "DELETE",
+            &format!("/api/v1/resumes/{resume_id}/attachment"),
+            &cookie,
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["attachment"], Value::Null);
+    assert_eq!(body["parseStatus"], "not_applicable");
+    // 内容保留。
+    assert_eq!(
+        body["payload"]["summary"],
+        "提取到的简历正文：五年 Rust 后端经验"
+    );
 }
 
 // ---------- 附件下载 ----------

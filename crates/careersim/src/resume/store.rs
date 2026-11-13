@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
-use super::model::{NewResume, Resume, ResumeId, ResumePatch};
+use super::model::{NewResumeAttachment, NewResume, ParseStatus, Resume, ResumeId, ResumePatch};
 use crate::account::model::UserId;
 
 /// Errors raised by resume persistence backends.
@@ -60,4 +60,20 @@ pub trait ResumeStore: Send + Sync {
     /// Soft-deletes the resume; if it was the default, promotes the most
     /// recently updated remaining resume (all within one transaction).
     async fn soft_delete(&self, owner: UserId, id: ResumeId) -> Result<(), ResumeStoreError>;
+
+    /// Attaches (or replaces) the attachment of an existing resume and stores
+    /// the parse outcome plus the merged content in one update. The caller is
+    /// responsible for cleaning up any replaced file on disk.
+    async fn attach(
+        &self,
+        owner: UserId,
+        id: ResumeId,
+        attachment: NewResumeAttachment,
+        parse_status: ParseStatus,
+        content: serde_json::Value,
+    ) -> Result<Resume, ResumeStoreError>;
+
+    /// Removes the attachment (if any) and resets `parse_status` to
+    /// `not_applicable`; content is left untouched.
+    async fn detach(&self, owner: UserId, id: ResumeId) -> Result<Resume, ResumeStoreError>;
 }

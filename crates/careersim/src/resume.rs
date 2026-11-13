@@ -1,4 +1,4 @@
-//! 简历上下文：在线简历、附件简历、文本提取与默认简历管理（plan/01 §3.4）。
+//! 简历上下文：在线简历内容、可选附件、规则化解析回填与默认简历管理（plan/01 §3.4）。
 //!
 //! 依赖方向：`http -> ResumeService -> ResumeStore/AttachmentStore/ResumeTextExtractor`；
 //! PG 与本地文件系统适配器只通过 [`postgres_resume_service`] 对外暴露。
@@ -10,6 +10,7 @@ pub(crate) mod postgres;
 pub mod service;
 pub mod storage;
 pub mod store;
+pub mod structurize;
 
 #[cfg(test)]
 mod tests;
@@ -21,15 +22,18 @@ use sqlx::PgPool;
 pub use content::ResumeContent;
 pub use model::{
     NewResume, NewResumeAttachment, ParseErrorCode, ParseStatus, Resume, ResumeAttachment,
-    ResumeError, ResumeId, ResumeKind, ResumePatch,
+    ResumeError, ResumeId, ResumePatch,
 };
 pub use parse::{
     AttachmentKind, CompositeTextExtractor, DocxTextExtractor, ParseError, PdfTextExtractor,
     ResumeTextExtractor,
 };
 pub use service::{OpenedAttachment, ResumeService};
-pub use storage::{AttachmentStore, AttachmentStoreError, LocalFsAttachmentStore};
+pub use storage::{
+    AttachmentStore, AttachmentStoreError, LocalFsAttachmentStore, S3AttachmentStore,
+};
 pub use store::{ResumeStore, ResumeStoreError};
+pub use structurize::{merge_parsed, structurize};
 
 /// 附件格式统一提取器：PDF + DOCX。
 pub fn default_text_extractor() -> Arc<dyn ResumeTextExtractor> {

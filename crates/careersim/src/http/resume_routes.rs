@@ -42,11 +42,12 @@ pub struct AttachmentDto {
 pub struct ResumeDto {
     pub id: String,
     pub title: String,
-    pub kind: &'static str,
     pub is_default: bool,
     pub parse_status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parse_error_code: Option<&'static str>,
+    /// 对外统一叫 `payload`，与创建/更新请求的 `payload` 字段对称。
+    #[serde(rename = "payload")]
     pub content: ResumeContent,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachment: Option<AttachmentDto>,
@@ -59,7 +60,6 @@ impl From<Resume> for ResumeDto {
         let Resume {
             id,
             title,
-            kind,
             is_default,
             content,
             attachment,
@@ -75,7 +75,6 @@ impl From<Resume> for ResumeDto {
         Self {
             id: id.into_uuid().to_string(),
             title,
-            kind: kind.as_str(),
             is_default,
             parse_status: parse_status.as_str(),
             parse_error_code,
@@ -145,10 +144,14 @@ pub fn router() -> Router<AppState> {
             get(get_resume).patch(update_resume).delete(delete_resume),
         )
         .route("/api/v1/resumes/{id}/default", put(set_default_resume))
-        .route("/api/v1/resumes/{id}/attachment", get(download_attachment))
+        .route(
+            "/api/v1/resumes/{id}/attachment",
+            get(download_attachment).delete(remove_attachment),
+        )
         .layer(RequestBodyLimitLayer::new(JSON_BODY_LIMIT_BYTES));
     let upload_routes = Router::new()
         .route("/api/v1/resumes/attachment", post(upload_attachment))
+        .route("/api/v1/resumes/{id}/attachment", post(attach_to_resume))
         .layer(RequestBodyLimitLayer::new(UPLOAD_BODY_LIMIT_BYTES));
     json_routes.merge(upload_routes)
 }
@@ -190,6 +193,37 @@ pub async fn upload_attachment(
         .upload_attachment(auth.user_id, &title, &file_name, &file_bytes)
         .await?;
     Ok((StatusCode::CREATED, Json(ResumeDto::from(resume))).into_response())
+}
+
+/// 给已有简历上传附件：解析结构化后回填字段（只补空字段、列表追加去重）。
+pub async fn attach_to_resume(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Path(raw_id): Path<String>,
+    request: Request,
+) -> Result<Json<ResumeDto>, ApiError> {
+    let id = parse_resume_id(&raw_id)?;
+    let headers = request.headers().clone();
+    let body = axum::body::to_bytes(request.into_body(), UPLOAD_BODY_LIMIT_BYTES)
+        .await
+        .map_err(|_| ApiError::payload_too_large("multipart body exceeds the upload limit"))?;
+    let (file_name, file_bytes) = parse_multipart_file(&headers, &body)?;
+    let resume = state
+        .resume
+        .attach_to_resume(auth.user_id, id, &file_name, &file_bytes)
+        .await?;
+    Ok(Json(ResumeDto::from(resume)))
+}
+
+/// 移除简历附件；内容保持不变。
+pub async fn remove_attachment(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Path(raw_id): Path<String>,
+) -> Result<Json<ResumeDto>, ApiError> {
+    let id = parse_resume_id(&raw_id)?;
+    let resume = state.resume.remove_attachment(auth.user_id, id).await?;
+    Ok(Json(ResumeDto::from(resume)))
 }
 
 pub async fn get_resume(
@@ -341,6 +375,40 @@ fn parse_multipart_upload(
 
 fn validation_error(message: &'static str) -> ApiError {
     ApiError::validation_failed(message)
+}
+
+/// 只接受 `file` 文件字段的 multipart 解析（给已有简历传附件场景）。
+fn parse_multipart_file(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<(String, Vec<u8>), ApiError> {
+    let content_type = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| ApiError::validation_failed("content-type header is required"))?;
+    let boundary = extract_boundary(content_type)
+        .ok_or_else(|| ApiError::validation_failed("multipart boundary is missing"))?;
+    let fields = parse_multipart_body(&boundary, body)?;
+
+    let mut file_name: Option<String> = None;
+    let mut file_bytes: Option<Vec<u8>> = None;
+    for field in fields {
+        if field.name == "file" && file_bytes.is_none() {
+            file_name = field.file_name;
+            file_bytes = Some(field.content);
+        }
+    }
+    let Some(file_name) = file_name else {
+        return Err(ApiError::validation_failed(
+            "multipart field `file` is required",
+        ));
+    };
+    let Some(file_bytes) = file_bytes else {
+        return Err(ApiError::validation_failed(
+            "multipart field `file` is required",
+        ));
+    };
+    Ok((file_name, file_bytes))
 }
 
 struct MultipartField {

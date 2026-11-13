@@ -6,13 +6,15 @@ import type { ResumeCreateInput, ResumeDocument, ResumeUpdateInput } from '../ty
 export interface ResumesApi {
   list(): Promise<ResumeDocument[]>
   create(input: ResumeCreateInput): Promise<ResumeDocument>
-  /** multipart 上传：`title` + `file`；同步解析，返回含 parseStatus 的简历。 */
+  /** multipart 上传：`title` + `file`；上传即创建一份新简历（附件解析回填）。 */
   uploadAttachment(title: string, file: File): Promise<ResumeDocument>
+  /** 给已有简历传附件：解析结构化后只补空字段、列表追加去重。 */
+  attachToResume(id: string, file: File): Promise<ResumeDocument>
+  /** 移除简历附件；在线内容保持不变。 */
+  removeAttachment(id: string): Promise<ResumeDocument>
   update(id: string, input: ResumeUpdateInput): Promise<ResumeDocument>
   remove(id: string): Promise<void>
   setDefault(id: string): Promise<ResumeDocument>
-  /** 附件下载地址；鉴权由会话 Cookie 承担，不暴露存储键。 */
-  attachmentDownloadUrl(id: string): string
 }
 
 interface ApiErrorBody {
@@ -49,14 +51,10 @@ function uploadMessage(status: number, code: string): string {
 }
 
 /** FormData 上传不能走 apiFetch（它强制 JSON Content-Type），这里用原始 fetch。 */
-async function upload(title: string, file: File): Promise<ResumeDocument> {
-  const form = new FormData()
-  form.append('title', title)
-  form.append('file', file)
-
+async function uploadForm(url: string, form: FormData): Promise<ResumeDocument> {
   let response: Response
   try {
-    response = await fetch('/api/v1/resumes/attachment', {
+    response = await fetch(url, {
       method: 'POST',
       credentials: 'include',
       body: form,
@@ -72,6 +70,12 @@ async function upload(title: string, file: File): Promise<ResumeDocument> {
   return (await response.json()) as ResumeDocument
 }
 
+function fileForm(file: File): FormData {
+  const form = new FormData()
+  form.append('file', file)
+  return form
+}
+
 export const resumeApi: ResumesApi = {
   list(): Promise<ResumeDocument[]> {
     return apiFetch<ResumeDocument[]>('/api/v1/resumes')
@@ -85,7 +89,18 @@ export const resumeApi: ResumesApi = {
   },
 
   uploadAttachment(title: string, file: File): Promise<ResumeDocument> {
-    return upload(title, file)
+    const form = new FormData()
+    form.append('title', title)
+    form.append('file', file)
+    return uploadForm('/api/v1/resumes/attachment', form)
+  },
+
+  attachToResume(id: string, file: File): Promise<ResumeDocument> {
+    return uploadForm(`/api/v1/resumes/${id}/attachment`, fileForm(file))
+  },
+
+  async removeAttachment(id: string): Promise<ResumeDocument> {
+    return apiFetch<ResumeDocument>(`/api/v1/resumes/${id}/attachment`, { method: 'DELETE' })
   },
 
   update(id: string, input: ResumeUpdateInput): Promise<ResumeDocument> {
@@ -101,9 +116,5 @@ export const resumeApi: ResumesApi = {
 
   setDefault(id: string): Promise<ResumeDocument> {
     return apiFetch<ResumeDocument>(`/api/v1/resumes/${id}/default`, { method: 'PUT' })
-  },
-
-  attachmentDownloadUrl(id: string): string {
-    return `/api/v1/resumes/${id}/attachment`
   },
 }

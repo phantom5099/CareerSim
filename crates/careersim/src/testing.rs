@@ -24,7 +24,8 @@ use crate::account::session::{LoginSession, NewLoginSession, SessionId, SessionT
 use crate::account::store::{SessionStore, SessionStoreError, UserStore, UserStoreError};
 use crate::http::router::{AppState, router};
 use crate::resume::model::{
-    NewResume, RESUME_LIMIT, Resume, ResumeAttachment, ResumeId, ResumeKind, ResumePatch,
+    NewResume, NewResumeAttachment, ParseStatus, RESUME_LIMIT, Resume, ResumeAttachment,
+    ResumeId, ResumePatch,
 };
 use crate::resume::parse::{AttachmentKind, ParseError, ResumeTextExtractor};
 use crate::resume::storage::{AttachmentStore, AttachmentStoreError};
@@ -384,19 +385,18 @@ impl ResumeStore for InMemoryResumeStore {
             id: resume.id,
             owner,
             title: resume.title,
-            kind: if resume.attachment.is_some() {
-                ResumeKind::Attachment
-            } else {
-                ResumeKind::Online
-            },
             is_default,
             content,
-            attachment: resume.attachment.map(|att| ResumeAttachment {
-                storage_key: att.storage_key,
-                file_name: att.file_name,
-                mime: att.mime.to_owned(),
-                size: att.size,
-                sha256: att.sha256,
+            attachment: resume.attachment.map(|att| {
+                let mime = super::resume::model::mime_from_file_name(&att.file_name)
+                    .unwrap_or_default()
+                    .to_owned();
+                ResumeAttachment {
+                    storage_key: att.storage_key,
+                    file_name: att.file_name,
+                    mime,
+                    size: att.size,
+                }
             }),
             parse_status: resume.parse_status,
             created_at: now,
@@ -479,6 +479,52 @@ impl ResumeStore for InMemoryResumeStore {
             }
         }
         Ok(())
+    }
+
+    async fn attach(
+        &self,
+        owner: UserId,
+        id: ResumeId,
+        attachment: NewResumeAttachment,
+        parse_status: ParseStatus,
+        content: serde_json::Value,
+    ) -> Result<Resume, ResumeStoreError> {
+        let mut data = self.data.lock().unwrap();
+        let Some(row) = data
+            .iter_mut()
+            .find(|row| !row.deleted && row.resume.owner == owner && row.resume.id == id)
+        else {
+            return Err(ResumeStoreError::NotFound);
+        };
+        let mime = super::resume::model::mime_from_file_name(&attachment.file_name)
+            .unwrap_or_default()
+            .to_owned();
+        row.resume.attachment = Some(ResumeAttachment {
+            storage_key: attachment.storage_key,
+            file_name: attachment.file_name,
+            mime,
+            size: attachment.size,
+        });
+        row.resume.parse_status = parse_status;
+        row.resume.content = serde_json::from_value(content).map_err(|err| {
+            ResumeStoreError::backend(format!("stored content is not valid: {err}"))
+        })?;
+        row.resume.updated_at = Utc::now();
+        Ok(row.resume.clone())
+    }
+
+    async fn detach(&self, owner: UserId, id: ResumeId) -> Result<Resume, ResumeStoreError> {
+        let mut data = self.data.lock().unwrap();
+        let Some(row) = data
+            .iter_mut()
+            .find(|row| !row.deleted && row.resume.owner == owner && row.resume.id == id)
+        else {
+            return Err(ResumeStoreError::NotFound);
+        };
+        row.resume.attachment = None;
+        row.resume.parse_status = ParseStatus::NotApplicable;
+        row.resume.updated_at = Utc::now();
+        Ok(row.resume.clone())
     }
 }
 
