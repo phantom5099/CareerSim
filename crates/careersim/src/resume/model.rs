@@ -114,7 +114,6 @@ pub struct ResumeAttachment {
     pub file_name: String,
     /// 校验后的固定 MIME（PDF/DOCX 之一），由文件名后缀推导。
     pub mime: String,
-    pub size: u64,
 }
 
 /// 待写入的附件元数据；MIME 由 `file_name` 后缀推导，不单独落库。
@@ -122,7 +121,6 @@ pub struct ResumeAttachment {
 pub struct NewResumeAttachment {
     pub storage_key: String,
     pub file_name: String,
-    pub size: u64,
 }
 
 /// 简历聚合：结构化在线内容（必有、可编辑）+ 可选附件（原始 PDF/DOCX）。

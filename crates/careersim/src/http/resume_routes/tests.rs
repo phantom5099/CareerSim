@@ -2,7 +2,7 @@
 
 use axum::Router;
 use axum::body::Body;
-use axum::http::header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE};
+use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
 use serde_json::{Value, json};
 
@@ -358,7 +358,6 @@ async fn upload_attachment_creates_ready_draft_resume() {
         "提取到的简历正文：五年 Rust 后端经验"
     );
     assert_eq!(body["attachment"]["fileName"], "resume.pdf");
-    assert_eq!(body["attachment"]["fileSize"], PDF_BYTES.len() as u64);
 }
 
 #[tokio::test]
@@ -517,10 +516,6 @@ async fn download_attachment_streams_bytes_with_headers() {
             .get(CONTENT_TYPE)
             .and_then(|v| v.to_str().ok()),
         Some("application/pdf")
-    );
-    assert_eq!(
-        response.headers().get(CONTENT_LENGTH).unwrap(),
-        &PDF_BYTES.len().to_string()
     );
     let disposition = response
         .headers()

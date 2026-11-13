@@ -5,7 +5,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path, Request, State};
 use axum::http::StatusCode;
-use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE};
+use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
@@ -28,12 +28,11 @@ const UPLOAD_BODY_LIMIT_BYTES: usize = 12 * 1024 * 1024;
 
 // ---------- DTO ----------
 
-/// 附件展示信息；MIME 由文件名后缀决定，无需对外暴露（plan/01 §6.3）。
+/// 附件展示信息；大小与 MIME 均不对外暴露（plan/01 §6.3）。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentDto {
     pub file_name: String,
-    pub file_size: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -80,7 +79,6 @@ impl From<Resume> for ResumeDto {
             content,
             attachment: attachment.map(|att| AttachmentDto {
                 file_name: att.file_name,
-                file_size: att.size,
             }),
             created_at: created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
             updated_at: updated_at.to_rfc3339_opts(SecondsFormat::Millis, true),
@@ -284,12 +282,11 @@ pub async fn download_attachment(
         ApiError::internal_error()
     })?;
 
-    // 流式转发：附件不整体读入内存（plan/01 §8.3）。
+    // 流式转发：附件不整体读入内存（plan/01 §8.3）；长度未知时用 chunked 传输。
     let stream = tokio_util::io::ReaderStream::new(opened.stream);
     let response = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, opened.mime.as_str())
-        .header(CONTENT_LENGTH, opened.size)
         .header(CONTENT_DISPOSITION, disposition)
         .header(HeaderName::from_static("x-content-type-options"), "nosniff")
         .header(CACHE_CONTROL, "private, no-store")

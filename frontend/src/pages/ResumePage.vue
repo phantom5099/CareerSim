@@ -100,16 +100,6 @@ function lines(value: string): string[] {
     .filter(Boolean)
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`
-  }
-  if (bytes < 1024 * 1024) {
-    return `${Math.round(bytes / 1024)} KB`
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
 function resumeMeta(resume: ResumeDocument): string {
   const education = resume.payload.educations[0]
   const contentMeta = [
@@ -126,7 +116,6 @@ function resumeMeta(resume: ResumeDocument): string {
   return [
     contentMeta,
     `附件 ${resume.attachment.fileName}`,
-    formatFileSize(resume.attachment.fileSize),
     status ? `· ${status}` : '',
   ]
     .filter(Boolean)
@@ -752,9 +741,7 @@ const previewHonors = computed(() => draft.value.honors.filter((item) => item.na
                       class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[0.64rem]"
                     >
                       <span class="text-ink-soft">
-                        当前附件：{{ editingResume.attachment.fileName }}（{{
-                          formatFileSize(editingResume.attachment.fileSize)
-                        }}）
+                        当前附件：{{ editingResume.attachment.fileName }}
                       </span>
                       <span
                         v-if="parseStatusText(editingResume.parseStatus, editingResume.parseErrorCode)"

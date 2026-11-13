@@ -16,7 +16,7 @@ macro_rules! resume_select {
     ($tail:literal) => {
         concat!(
             "SELECT id, user_id, title, is_default, content, attachment_key, ",
-            "attachment_name, attachment_size, ",
+            "attachment_name, ",
             "parse_status, parse_error_code, created_at, updated_at ",
             $tail
         )
@@ -29,7 +29,7 @@ macro_rules! resume_update_sql {
         concat!(
             $head,
             " RETURNING id, user_id, title, is_default, content, attachment_key, ",
-            "attachment_name, attachment_size, ",
+            "attachment_name, ",
             "parse_status, parse_error_code, created_at, updated_at"
         )
     };
@@ -72,21 +72,18 @@ fn resume_from_row(row: &PgRow) -> Result<Resume, ResumeStoreError> {
 
     let attachment_key: Option<String> = row.try_get("attachment_key").map_err(map)?;
     let attachment_name: Option<String> = row.try_get("attachment_name").map_err(map)?;
-    let attachment_size: Option<i64> = row.try_get("attachment_size").map_err(map)?;
 
     // 附件字段组成组出现：全 NULL ⇔ 无附件；全非空 ⇔ 有附件（与 DB CHECK 一致）。
     // MIME 不落库，由文件名后缀推导（上传时已与内容双重校验）。
-    let attachment = match (attachment_key, attachment_name, attachment_size) {
-        (None, None, None) => None,
-        (Some(storage_key), Some(file_name), Some(size)) => {
+    let attachment = match (attachment_key, attachment_name) {
+        (None, None) => None,
+        (Some(storage_key), Some(file_name)) => {
             let mime = super::model::mime_from_file_name(&file_name)
                 .ok_or_else(|| corrupt("unknown attachment file extension"))?;
-            let size = u64::try_from(size).map_err(|_| corrupt("negative attachment size"))?;
             Some(ResumeAttachment {
                 storage_key,
                 file_name,
                 mime: mime.to_owned(),
-                size,
             })
         }
         _ => return Err(corrupt("attachment columns are partially populated")),
@@ -189,17 +186,11 @@ impl ResumeStore for PgResumeStore {
         }
         let is_default = count == 0;
 
-        let (attachment_key, attachment_name, attachment_size) = match &resume.attachment {
-            None => (None::<String>, None, None::<i64>),
+        let (attachment_key, attachment_name) = match &resume.attachment {
+            None => (None::<String>, None),
             Some(attachment) => (
                 Some(attachment.storage_key.clone()),
                 Some(attachment.file_name.clone()),
-                Some(i64::try_from(attachment.size).map_err(|_| {
-                    ResumeStoreError::Backend {
-                        message: "attachment size out of range".to_owned(),
-                        source: None,
-                    }
-                })?),
             ),
         };
 
@@ -212,9 +203,9 @@ impl ResumeStore for PgResumeStore {
 
         let row = sqlx::query(resume_update_sql!(
             "INSERT INTO resumes (id, user_id, title, is_default, content, \
-             attachment_key, attachment_name, attachment_size, \
+             attachment_key, attachment_name, \
              parse_status, parse_error_code, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)"
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)"
         ))
         .bind(resume.id.into_uuid())
         .bind(owner.into_uuid())
@@ -223,7 +214,6 @@ impl ResumeStore for PgResumeStore {
         .bind(&resume.content)
         .bind(attachment_key)
         .bind(attachment_name)
-        .bind(attachment_size)
         .bind(parse_status)
         .bind(parse_error_code)
         .bind(chrono::Utc::now())
@@ -367,20 +357,13 @@ impl ResumeStore for PgResumeStore {
         };
         let row = sqlx::query(resume_update_sql!(
             "UPDATE resumes SET attachment_key = $3, attachment_name = $4, \
-             attachment_size = $5, \
-             parse_status = $6, parse_error_code = $7, content = $8, updated_at = $9 \
+             parse_status = $5, parse_error_code = $6, content = $7, updated_at = $8 \
              WHERE user_id = $1 AND id = $2 AND deleted_at IS NULL"
         ))
         .bind(owner.into_uuid())
         .bind(id.into_uuid())
         .bind(&attachment.storage_key)
         .bind(&attachment.file_name)
-        .bind(i64::try_from(attachment.size).map_err(|_| {
-            ResumeStoreError::Backend {
-                message: "attachment size out of range".to_owned(),
-                source: None,
-            }
-        })?)
         .bind(status)
         .bind(error_code)
         .bind(&content)
@@ -397,7 +380,6 @@ impl ResumeStore for PgResumeStore {
     async fn detach(&self, owner: UserId, id: ResumeId) -> Result<Resume, ResumeStoreError> {
         let row = sqlx::query(resume_update_sql!(
             "UPDATE resumes SET attachment_key = NULL, attachment_name = NULL, \
-             attachment_size = NULL, \
              parse_status = 'not_applicable', parse_error_code = NULL, updated_at = $3 \
              WHERE user_id = $1 AND id = $2 AND deleted_at IS NULL"
         ))

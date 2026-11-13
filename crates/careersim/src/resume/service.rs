@@ -22,7 +22,6 @@ use crate::account::model::UserId;
 pub struct OpenedAttachment {
     pub file_name: String,
     pub mime: String,
-    pub size: u64,
     pub stream: Box<dyn AsyncRead + Send + Unpin>,
 }
 
@@ -107,15 +106,7 @@ impl ResumeService {
         // 文件已落盘：此后任何失败都必须清理附件并记录日志，避免孤儿文件
         // （plan/01 §8.1 第 11 步）。
         let outcome = self
-            .parse_and_insert(
-                owner,
-                title,
-                file_name,
-                kind,
-                &storage_key,
-                bytes.len() as u64,
-                bytes.to_vec(),
-            )
+            .parse_and_insert(owner, title, file_name, kind, &storage_key, bytes.to_vec())
             .await;
         if let Err(err) = &outcome {
             tracing::error!(
@@ -143,7 +134,7 @@ impl ResumeService {
             self.validate_and_store(raw_file_name, bytes).await?;
 
         let outcome = self
-            .parse_and_attach(owner, id, file_name, kind, &storage_key, bytes.len() as u64, bytes.to_vec())
+            .parse_and_attach(owner, id, file_name, kind, &storage_key, bytes.to_vec())
             .await;
         if let Err(err) = &outcome {
             tracing::error!(
@@ -199,7 +190,6 @@ impl ResumeService {
     }
 
     /// 落盘之后的解析与回填；失败由调用方清理附件。
-    #[allow(clippy::too_many_arguments)]
     async fn parse_and_attach(
         &self,
         owner: UserId,
@@ -207,7 +197,6 @@ impl ResumeService {
         file_name: String,
         kind: AttachmentKind,
         storage_key: &str,
-        size: u64,
         bytes: Vec<u8>,
     ) -> Result<Resume, ResumeError> {
         let extracted = self.extract_with_timeout(storage_key, kind, bytes).await?;
@@ -245,7 +234,6 @@ impl ResumeService {
                 super::model::NewResumeAttachment {
                     storage_key: storage_key.to_owned(),
                     file_name: file_name.clone(),
-                    size,
                 },
                 parse_status,
                 content_json,
@@ -291,7 +279,6 @@ impl ResumeService {
     }
 
     /// 落盘之后的解析与入库；失败由调用方负责清理附件。
-    #[allow(clippy::too_many_arguments)]
     async fn parse_and_insert(
         &self,
         owner: UserId,
@@ -299,7 +286,6 @@ impl ResumeService {
         file_name: String,
         kind: AttachmentKind,
         storage_key: &str,
-        size: u64,
         bytes: Vec<u8>,
     ) -> Result<Resume, ResumeError> {
         // 提取在阻塞线程池执行，带超时；纯文本只用于生成草稿，不持久化、不进日志。
@@ -341,7 +327,6 @@ impl ResumeService {
             attachment: Some(super::model::NewResumeAttachment {
                 storage_key: storage_key.to_owned(),
                 file_name,
-                size,
             }),
             parse_status,
         };
@@ -422,7 +407,6 @@ impl ResumeService {
         Ok(OpenedAttachment {
             file_name: attachment.file_name.clone(),
             mime: attachment.mime.clone(),
-            size: attachment.size,
             stream,
         })
     }

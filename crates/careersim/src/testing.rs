@@ -395,7 +395,6 @@ impl ResumeStore for InMemoryResumeStore {
                     storage_key: att.storage_key,
                     file_name: att.file_name,
                     mime,
-                    size: att.size,
                 }
             }),
             parse_status: resume.parse_status,
@@ -503,7 +502,6 @@ impl ResumeStore for InMemoryResumeStore {
             storage_key: attachment.storage_key,
             file_name: attachment.file_name,
             mime,
-            size: attachment.size,
         });
         row.resume.parse_status = parse_status;
         row.resume.content = serde_json::from_value(content).map_err(|err| {
