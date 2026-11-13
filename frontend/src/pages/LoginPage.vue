@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 
-import { demoConfig } from '@/config/demo'
 import { brand } from '@/content/brand'
 import { useAuthStore } from '@/stores/auth'
 
@@ -11,8 +10,8 @@ const route = useRoute()
 const auth = useAuthStore()
 
 const form = reactive({
-  username: demoConfig.enabled ? demoConfig.username : '',
-  password: demoConfig.enabled ? demoConfig.password : '',
+  username: '',
+  password: '',
 })
 const showPassword = ref(false)
 const touched = ref(false)
@@ -194,6 +193,16 @@ const year = new Date().getFullYear()
               <button type="submit" class="btn-solid w-full" :disabled="!canSubmit">
                 {{ auth.loading ? '正在入场…' : '入场 →' }}
               </button>
+
+              <p class="text-center text-xs text-ink-soft">
+                还没有账号？
+                <RouterLink
+                  :to="{ name: 'register' }"
+                  class="text-vermilion-deep underline-offset-2 hover:underline"
+                >
+                  注册一个
+                </RouterLink>
+              </p>
             </form>
           </div>
         </div>

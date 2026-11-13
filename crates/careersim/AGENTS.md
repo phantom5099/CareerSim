@@ -9,10 +9,33 @@
 
 ```text
 src/
-├── main.rs            # 进程入口：配置、连接池、迁移、装配、等待退出信号
+├── main.rs            # 进程入口：初始化日志后交给组合根 app::run
 ├── lib.rs             # 库入口：模块导出与 postgres_session_service 工厂
-├── config.rs          # AppConfig / DbConfig / LlmConfig 的环境变量读取与校验
+├── app.rs             # 组合根：配置 → 连接池 → 迁移 → 适配器 → Router → 服务
+├── config.rs          # AppConfig / DbConfig / LlmConfig / HttpConfig / Argon2Config
 ├── error.rs           # ConfigError 与 error_chain
+├── testing.rs         # crate 级测试装配：账户端口替身 + Router/oneshot（cfg(test)）
+├── account.rs         # account 模块入口与公开类型聚合
+├── account/
+│   ├── model.rs       # UserId/Username/Password/User/ProfilePatch 与字段边界
+│   ├── password.rs    # PasswordHasher trait 与 Argon2id 实现
+│   ├── session.rs     # 会话令牌、LoginSession 与空闲/绝对超时规则
+│   ├── service.rs     # AccountService：注册/登录/注销/资料/改密
+│   ├── store.rs       # UserStore / SessionStore trait 与 AccountError
+│   ├── postgres.rs    # PostgreSQL 适配器
+│   └── tests.rs       # 仅放该模块单测
+├── pipeline.rs        # pipeline 模块入口（纯领域，无 IO）
+├── pipeline/
+│   ├── model.rs       # StageKey/StageKind/StageDefinition/PipelineDefinition/Score
+│   ├── rubric.rs      # EvaluationRubric 与加权评估
+│   ├── validate.rs    # 纯校验函数与 PipelineError
+│   └── tests.rs
+├── http.rs            # http 模块入口
+├── http/
+│   ├── router.rs      # Router 装配、公开/私有分组、AppState
+│   ├── auth.rs        # AuthContext 提取器与 Origin 校验
+│   ├── error.rs       # ApiError、ErrorCode 枚举与统一错误体映射
+│   └── account_routes.rs # 注册/登录/注销/me/改密路由
 ├── agent.rs           # agent 模块入口与公开类型聚合
 ├── agent/
 │   ├── agent_loop.rs  # 回合循环、per-session 互斥、取消、阶段推进
@@ -44,7 +67,11 @@ src/
 ## 2. 依赖方向
 
 ```text
-main            → config / llm / agent / lib::postgres_session_service
+main            → app::run（组合根）
+app             → config / account / http / llm / store / lib 工厂
+http            → account::{service, model} / pipeline（类型）
+account         → 无业务依赖（除 error）
+pipeline        → 无业务依赖（纯领域）
 agent_loop      → context / session / stage / tool / llm::{LlmClient} / error
 session         → stage / role / tool / llm::client / store（crate 内）
 context         → message / role / session / stage / llm::client
@@ -112,6 +139,9 @@ config          → error / llm::provider
 - 错误文本同样受根 §10 的密钥红线约束；`ConfigError` 只包含变量名与非法值。
 - 可恢复与不可恢复要能区分：例如 `SessionBusy`、`NoNextStage`、`Conflict`、
   `Corrupt` 各有独立变体，不要合并成字符串。
+- HTTP 错误码是 `ErrorCode` 枚举，wire 字符串由 serde 推导；只能通过 `ApiError`
+  的具名构造函数产生错误，禁止手写错误码字面量，状态码由 `ErrorCode::status`
+  的穷尽 match 唯一推导。
 
 ### 4.4 异步、并发与取消
 
@@ -195,14 +225,17 @@ config          → error / llm::provider
 
 ## 6. 测试约定
 
-- 单元测试位置：与源码同目录的 `tests.rs`，`#[tokio::test]`；测试替身只在
-  `#[cfg(test)]` 下编译。
-- 首选现有替身：`MemorySessionStore`、`MockLlmClient`、`FakeTool`；不要为测试在
-  生产模块里加公开入口。
+- 单元测试位置：与源码同目录的 `tests.rs`（如 `http/auth/tests.rs`），`#[tokio::test]`；
+  测试替身只在 `#[cfg(test)]` 下编译；跨模块共用的替身与请求装配集中在
+  `src/testing.rs`，模块内专用替身就近放（如 `agent/tool/testing.rs`）。
+- 首选现有替身：`crate::testing`（账户内存端口、FakeClock/FakeHasher、Router/oneshot）、
+  `MemorySessionStore`、`MockLlmClient`、`FakeTool`；不要为测试在生产模块里加公开入口。
 - 集成测试位置：`crates/careersim/tests/`，使用真实 PostgreSQL；未设置
   `DATABASE_URL` 时直接返回，不算验证通过。
 - 覆盖重点：事件序列、`seq` 连续性、CAS 冲突、半截回合修复、取消路径、空响应、
   `max_steps`、阶段推进、`NoNextStage`、错误 source 链。
+- HTTP 层覆盖重点：Origin 校验矩阵、Cookie 安全属性、AuthContext 提取、路由级
+  状态码与错误体映射；路由测试走完整 Router + oneshot，不依赖 PostgreSQL。
 - 单测不得访问真实网络或真实数据库；时间、随机、并发依赖必须可控。
 
 ---
@@ -243,6 +276,8 @@ cargo test store::memory
 
 | 想做什么 | 去哪里 |
 | --- | --- |
+| 新增账户能力或改会话语义 | `account/service.rs` + `account/store.rs` + 测试 |
+| 新增 HTTP 路由 | `http/` 下新建路由文件 + `http/router.rs` 追加挂载行 |
 | 新增事件类型 | `agent/session.rs` + `agent/context.rs` 投影 + 测试；必要时迁移 |
 | 调整阶段顺序或新增阶段 | `agent/stage.rs` + `agent/role.rs` + 提示词 + 测试 |
 | 新增角色 | `agent/role.rs` + `role/prompts/` + `Stage::role()` + 测试 |
@@ -250,5 +285,5 @@ cargo test store::memory
 | 改模型映射 | `llm/openai_compat.rs` |
 | 新增供应商 | `llm/provider.rs` + `config.rs` + `.env.example` |
 | 改存储或 SQL | `store/postgres.rs` + 新迁移文件 |
-| 改配置项 | `config.rs` + `.env.example` + `main.rs` 装配 |
+| 改配置项 | `config.rs` + `.env.example` + `app.rs` 装配 |
 | 改会话服务语义 | `agent/session.rs`（先确认存储不变量） |

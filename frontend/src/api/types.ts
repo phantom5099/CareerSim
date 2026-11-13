@@ -2,24 +2,39 @@ export interface User {
   id: string
   username: string
   displayName: string
-  school?: string
-  major?: string
-  graduationYear?: number
+  school: string | null
+  major: string | null
+  graduationYear: number | null
   targetRoles: string[]
   targetCities: string[]
   avatarText: string
   avatarColor: string
 }
 
-export interface AuthSession {
-  token: string
-  expiresAt: string
-  user: User
-}
-
 export interface LoginPayload {
   username: string
   password: string
+}
+
+export interface RegisterPayload {
+  username: string
+  password: string
+  displayName: string
+}
+
+/** 资料补丁；省略 = 不修改，null = 清空。 */
+export interface ProfilePatchPayload {
+  displayName?: string
+  school?: string | null
+  major?: string | null
+  graduationYear?: number | null
+  targetRoles?: string[]
+  targetCities?: string[]
+}
+
+export interface ChangePasswordPayload {
+  currentPassword: string
+  newPassword: string
 }
 
 export interface IndustriesResponse {

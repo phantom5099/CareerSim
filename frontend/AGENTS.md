@@ -27,7 +27,8 @@
 
 | 路径 | 内容 |
 | --- | --- |
-| `src/api/endpoints/` | 端点契约接口 + 当前绑定（mock 或 HTTP） |
+| `src/api/http.ts` | 请求客户端核心：`credentials: 'include'`、统一错误映射、非认证接口 401 时清空会话并跳登录 |
+| `src/api/endpoints/` | 端点契约接口 + 当前绑定（`auth.ts` 为 HTTP Cookie 实现，其余为 mock） |
 | `src/api/types.ts` | 接口 DTO：登录、认证会话、简历、行业等 |
 | `src/api/error.ts` | 统一 `ApiError`（`status` + `code`） |
 | `src/domain/types.ts` | 领域模型与阶段常量（`Application`、`Company`、`Job`、`StageKey`） |
@@ -53,14 +54,15 @@
 - 不在页面里写「有后端 / 无后端」的条件分支，也不在页面里直接拼请求。
 - 错误统一使用 `ApiError`；不要各页各写一套错误结构。
 - mock 数据只存在内存中，刷新页面即重置；不要把它当成持久化数据源。
-- 契约变更必须同步 mock 实现与调用方；不允许只改类型不改实现。
+- 契约变更必须同步 mock 实现与调用方；不允许只改类型不改实现。已接入 HTTP 的模块
+  （`auth.ts`）不再保留 mock，契约变更直接改 HTTP 实现与调用方。
 
 当前端点模块：
 
 | 模块 | 绑定 |
 | --- | --- |
+| `auth.ts` | HTTP 实现（`apiFetch` + Cookie 会话；无 mock） |
 | `applications.ts` | `mockApplicationsApi` |
-| `auth.ts` | `mockAuthApi` |
 | `companies.ts` | `mockCompaniesApi` |
 | `interviews.ts` | `mockInterviewsApi` |
 | `offers.ts` | `mockOffersApi` |
