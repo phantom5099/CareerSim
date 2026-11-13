@@ -7,7 +7,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use serde_json::json;
 
-use crate::http::testing::{
+use crate::testing::{
     ALLOWED_ORIGIN, body_json, empty_request, first_cookie_pair, json_request, logged_in_cookie,
     send,
 };
@@ -17,7 +17,7 @@ use crate::http::testing::{
 #[tokio::test]
 async fn register_returns_created_with_user_body() {
     let response = send(
-        crate::http::testing::app(),
+        crate::testing::app(),
         json_request(
             "POST",
             "/api/v1/auth/register",
@@ -34,7 +34,7 @@ async fn register_returns_created_with_user_body() {
 
 #[tokio::test]
 async fn register_duplicate_username_maps_to_conflict() {
-    let app = crate::http::testing::app();
+    let app = crate::testing::app();
     let payload = json!({ "username": "alice", "password": "password123", "displayName": "A" });
     send(
         app.clone(),
@@ -49,7 +49,7 @@ async fn register_duplicate_username_maps_to_conflict() {
 
 #[tokio::test]
 async fn login_with_wrong_password_maps_to_invalid_credentials() {
-    let app = crate::http::testing::app();
+    let app = crate::testing::app();
     send(
         app.clone(),
         json_request(
@@ -78,7 +78,7 @@ async fn login_with_wrong_password_maps_to_invalid_credentials() {
 #[tokio::test]
 async fn me_without_cookie_is_unauthenticated() {
     let response = send(
-        crate::http::testing::app(),
+        crate::testing::app(),
         empty_request("GET", "/api/v1/auth/me"),
     )
     .await;
@@ -89,7 +89,7 @@ async fn me_without_cookie_is_unauthenticated() {
 
 #[tokio::test]
 async fn me_with_session_cookie_returns_current_user() {
-    let app = crate::http::testing::app();
+    let app = crate::testing::app();
     let cookie = logged_in_cookie(&app).await;
     let request = Request::builder()
         .method("GET")
@@ -111,13 +111,13 @@ async fn me_with_garbage_cookie_is_unauthenticated() {
         .header(axum::http::header::COOKIE, "careersim_session=not-a-token")
         .body(Body::empty())
         .unwrap();
-    let response = send(crate::http::testing::app(), request).await;
+    let response = send(crate::testing::app(), request).await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
 async fn patch_profile_updates_display_name() {
-    let app = crate::http::testing::app();
+    let app = crate::testing::app();
     let cookie = logged_in_cookie(&app).await;
     let request = Request::builder()
         .method("PATCH")
@@ -139,7 +139,7 @@ async fn patch_profile_updates_display_name() {
 
 #[tokio::test]
 async fn change_password_with_wrong_current_maps_to_400() {
-    let app = crate::http::testing::app();
+    let app = crate::testing::app();
     let cookie = logged_in_cookie(&app).await;
     let request = Request::builder()
         .method("POST")
@@ -160,7 +160,7 @@ async fn change_password_with_wrong_current_maps_to_400() {
 
 #[tokio::test]
 async fn change_password_returns_rotated_cookie() {
-    let app = crate::http::testing::app();
+    let app = crate::testing::app();
     let cookie = logged_in_cookie(&app).await;
     let request = Request::builder()
         .method("POST")
@@ -179,7 +179,7 @@ async fn change_password_returns_rotated_cookie() {
 
 #[tokio::test]
 async fn logout_clears_cookie_and_revokes_session() {
-    let app = crate::http::testing::app();
+    let app = crate::testing::app();
     let cookie = logged_in_cookie(&app).await;
     let request = Request::builder()
         .method("POST")

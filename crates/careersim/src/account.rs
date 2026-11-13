@@ -11,8 +11,6 @@ pub mod session;
 pub mod store;
 
 #[cfg(test)]
-pub(crate) mod doubles;
-#[cfg(test)]
 mod tests;
 
 use std::sync::Arc;

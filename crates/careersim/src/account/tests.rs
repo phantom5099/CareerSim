@@ -1,12 +1,12 @@
-//! 账户服务单元测试：内存端口替身 + FakeClock/FakeHasher（替身见 `doubles.rs`）。
+//! 账户服务单元测试：内存端口替身取自 `crate::testing`，另配 FakeClock/FakeHasher。
 
 use std::sync::Arc;
 
 use chrono::Duration;
 
-use super::doubles::{FakeClock, FakeHasher, InMemorySessionStore, InMemoryUserStore};
 use crate::account::model::{AccountError, ProfilePatch, UserId, Username};
 use crate::account::service::AccountService;
+use crate::testing::{FakeClock, FakeHasher, InMemorySessionStore, InMemoryUserStore};
 
 // ---------- 装配 ----------
 

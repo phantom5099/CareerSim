@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::account::session::SESSION_COOKIE;
 use crate::http::auth::{clear_session_cookie_header, session_cookie_header};
-use crate::http::testing::{body_json, empty_request, json_request, send};
+use crate::testing::{body_json, empty_request, json_request, send};
 
 // ---------- Cookie 属性 ----------
 
@@ -45,7 +45,7 @@ async fn login_without_origin() -> axum::response::Response {
             json!({"username": "a", "password": "b"}).to_string(),
         ))
         .unwrap();
-    send(crate::http::testing::app(), request).await
+    send(crate::testing::app(), request).await
 }
 
 #[tokio::test]
@@ -67,7 +67,7 @@ async fn post_with_unknown_origin_is_forbidden() {
             json!({"username": "a", "password": "b"}).to_string(),
         ))
         .unwrap();
-    let response = send(crate::http::testing::app(), request).await;
+    let response = send(crate::testing::app(), request).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
@@ -75,7 +75,7 @@ async fn post_with_unknown_origin_is_forbidden() {
 async fn post_with_allowed_origin_passes_to_handler() {
     // 合法 Origin + 未注册用户：通过 Origin 检查，落到 401 而非 403。
     let response = send(
-        crate::http::testing::app(),
+        crate::testing::app(),
         json_request(
             "POST",
             "/api/v1/auth/login",
@@ -88,10 +88,6 @@ async fn post_with_allowed_origin_passes_to_handler() {
 
 #[tokio::test]
 async fn get_without_origin_is_allowed() {
-    let response = send(
-        crate::http::testing::app(),
-        empty_request("GET", "/healthz"),
-    )
-    .await;
+    let response = send(crate::testing::app(), empty_request("GET", "/healthz")).await;
     assert_eq!(response.status(), StatusCode::OK);
 }
