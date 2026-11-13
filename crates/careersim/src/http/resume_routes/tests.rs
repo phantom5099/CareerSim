@@ -359,7 +359,6 @@ async fn upload_attachment_creates_ready_draft_resume() {
     );
     assert_eq!(body["attachment"]["fileName"], "resume.pdf");
     assert_eq!(body["attachment"]["fileSize"], PDF_BYTES.len() as u64);
-    assert_eq!(body["attachment"]["mime"], "application/pdf");
 }
 
 #[tokio::test]

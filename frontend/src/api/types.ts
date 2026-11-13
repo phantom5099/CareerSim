@@ -113,7 +113,6 @@ export interface ResumePayload {
 export interface ResumeAttachment {
   fileName: string
   fileSize: number
-  mime: string
 }
 
 interface ResumeMeta {

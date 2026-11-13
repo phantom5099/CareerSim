@@ -28,13 +28,12 @@ const UPLOAD_BODY_LIMIT_BYTES: usize = 12 * 1024 * 1024;
 
 // ---------- DTO ----------
 
-/// 附件展示信息；存储键与哈希不对外返回（plan/01 §6.3）。
+/// 附件展示信息；MIME 由文件名后缀决定，无需对外暴露（plan/01 §6.3）。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentDto {
     pub file_name: String,
     pub file_size: u64,
-    pub mime: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,7 +81,6 @@ impl From<Resume> for ResumeDto {
             attachment: attachment.map(|att| AttachmentDto {
                 file_name: att.file_name,
                 file_size: att.size,
-                mime: att.mime,
             }),
             created_at: created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
             updated_at: updated_at.to_rfc3339_opts(SecondsFormat::Millis, true),
