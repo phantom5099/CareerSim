@@ -173,15 +173,6 @@ impl AccountService {
         Ok(())
     }
 
-    /// 按登录态查询用户；用户已不存在视为会话失效。
-    pub async fn me(&self, user_id: UserId) -> Result<User, AccountError> {
-        self.users
-            .find_by_id(user_id)
-            .await
-            .map_err(store_user_error)?
-            .ok_or(AccountError::Unauthenticated)
-    }
-
     /// 只更新当前用户资料；字段边界见 `ProfilePatch::validate`。
     pub async fn update_profile(
         &self,
@@ -211,7 +202,13 @@ impl AccountService {
             Password::parse(current_password).map_err(|_| AccountError::CurrentPasswordMismatch)?;
         let new_password = Password::parse(new_password)?;
 
-        let user = self.me(user_id).await?;
+        // 用户已不存在视为会话失效；取用户名以推导凭证查询键。
+        let user = self
+            .users
+            .find_by_id(user_id)
+            .await
+            .map_err(store_user_error)?
+            .ok_or(AccountError::Unauthenticated)?;
         // 存量展示名重新归一化得到查询键；失败说明数据被绕过服务层改动。
         let username_key = Username::parse(&user.username).map_err(|_| AccountError::Backend {
             message: "stored username failed normalization".to_owned(),
