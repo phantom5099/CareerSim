@@ -1,4 +1,5 @@
 /target
+/plan/
 /.env
 /.env.*
 !/.env.example
@@ -15,3 +16,4 @@ coverage/
 /frontend/.env
 /frontend/.env.*
 !/frontend/.env.example
+/.qoder
