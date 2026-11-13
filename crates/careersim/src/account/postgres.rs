@@ -319,8 +319,8 @@ impl SessionStore for PgSessionStore {
         user: UserId,
         keep: SessionId,
         now: DateTime<Utc>,
-    ) -> Result<u64, SessionStoreError> {
-        let result = sqlx::query(
+    ) -> Result<(), SessionStoreError> {
+        sqlx::query(
             "UPDATE login_sessions SET revoked_at = $3 \
              WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL",
         )
@@ -330,7 +330,7 @@ impl SessionStore for PgSessionStore {
         .execute(&self.pool)
         .await
         .map_err(|err| session_backend("revoke other sessions", err))?;
-        Ok(result.rows_affected())
+        Ok(())
     }
 
     async fn rotate(

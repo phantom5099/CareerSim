@@ -72,13 +72,13 @@ pub trait SessionStore: Send + Sync {
     ) -> Result<(), SessionStoreError>;
     /// 幂等：会话不存在或已撤销时同样成功。
     async fn revoke(&self, id: SessionId, now: DateTime<Utc>) -> Result<(), SessionStoreError>;
-    /// 撤销该用户除 `keep` 外的所有有效会话，返回撤销数量。
+    /// 撤销该用户除 `keep` 外的所有有效会话。
     async fn revoke_others(
         &self,
         user: UserId,
         keep: SessionId,
         now: DateTime<Utc>,
-    ) -> Result<u64, SessionStoreError>;
+    ) -> Result<(), SessionStoreError>;
     /// 同一事务内撤销旧会话并写入新会话；旧会话缺失时返回 `NotFound`。
     async fn rotate(
         &self,
