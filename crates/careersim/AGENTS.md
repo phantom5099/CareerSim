@@ -14,7 +14,7 @@ src/
 ├── app.rs             # 组合根：配置 → 连接池 → 迁移 → 适配器 → Router → 服务
 ├── config.rs          # AppConfig / DbConfig / LlmConfig / HttpConfig / Argon2Config
 ├── error.rs           # ConfigError 与 error_chain
-├── testing.rs         # crate 级测试装配：账户端口替身 + Router/oneshot（cfg(test)）
+├── testing.rs         # crate 级测试装配：账户/catalog 端口替身 + Router/oneshot（cfg(test)）
 ├── account.rs         # account 模块入口与公开类型聚合
 ├── account/
 │   ├── model.rs       # UserId/Username/Password/User/ProfilePatch 与字段边界
@@ -30,12 +30,21 @@ src/
 │   ├── rubric.rs      # EvaluationRubric 与加权评估
 │   ├── validate.rs    # 纯校验函数与 PipelineError
 │   └── tests.rs
+├── catalog.rs         # catalog 模块入口与公开类型聚合
+├── catalog/
+│   ├── model.rs       # 公司/项目/流水线/岗位实体、可见性作用域与分页游标
+│   ├── store.rs       # CatalogStore trait 与 CatalogError
+│   ├── service.rs     # CatalogService：所有权校验、可见性判定与 CRUD 编排
+│   ├── template.rs    # CompanyTemplateV1 模板解析与 dry-run 校验
+│   ├── postgres.rs    # PostgreSQL 适配器（可见性 SQL、软删除、唯一冲突）
+│   └── tests.rs       # 仅放该模块单测
 ├── http.rs            # http 模块入口
 ├── http/
 │   ├── router.rs      # Router 装配、公开/私有分组、AppState
 │   ├── auth.rs        # AuthContext 提取器与 Origin 校验
 │   ├── error.rs       # ApiError、ErrorCode 枚举与统一错误体映射
-│   └── account_routes.rs # 注册/登录/注销/me/改密路由
+│   ├── account_routes.rs # 注册/登录/注销/me/改密路由
+│   └── catalog_routes.rs # 公司/项目/流水线/岗位路由与模板导入
 ├── agent.rs           # agent 模块入口与公开类型聚合
 ├── agent/
 │   ├── agent_loop.rs  # 回合循环、per-session 互斥、取消、阶段推进
@@ -68,9 +77,10 @@ src/
 
 ```text
 main            → app::run（组合根）
-app             → config / account / http / llm / store / lib 工厂
-http            → account::{service, model} / pipeline（类型）
+app             → config / account / catalog / http / llm / store / lib 工厂
+http            → account::{service, model} / catalog::{service, model, store, template} / pipeline（类型）
 account         → 无业务依赖（除 error）
+catalog         → account（UserId 等类型）/ pipeline（PipelineDefinition）
 pipeline        → 无业务依赖（纯领域）
 agent_loop      → context / session / stage / tool / llm::{LlmClient} / error
 session         → stage / role / tool / llm::client / store（crate 内）
@@ -158,6 +168,9 @@ config          → error / llm::provider
 
 ### 4.5 序列化与事件
 
+- 对外 DTO 字段统一 `camelCase`（plan/00 S-H01）；每个含非 camelCase 字段名的 DTO
+  自带 `#[serde(rename_all = "camelCase")]`——`#[serde(flatten)]` 的内容不继承外层
+  rename，嵌套 DTO 不得依赖外层声明。
 - 事件信封与事件类型分离：`v`、`seq`、`at` 由 store 分配，调用方不构造。
 - 事件枚举使用内部标签（`#[serde(tag = "type")]`），变体字段为 `snake_case`。
 - 可选字段使用 `skip_serializing_if`；空集合按现有约定省略。
@@ -277,6 +290,7 @@ cargo test store::memory
 | 想做什么 | 去哪里 |
 | --- | --- |
 | 新增账户能力或改会话语义 | `account/service.rs` + `account/store.rs` + 测试 |
+| 新增目录能力（公司/项目/流水线/岗位/模板） | `catalog/service.rs` + `catalog/store.rs` + `http/catalog_routes.rs` + 测试 |
 | 新增 HTTP 路由 | `http/` 下新建路由文件 + `http/router.rs` 追加挂载行 |
 | 新增事件类型 | `agent/session.rs` + `agent/context.rs` 投影 + 测试；必要时迁移 |
 | 调整阶段顺序或新增阶段 | `agent/stage.rs` + `agent/role.rs` + 提示词 + 测试 |
