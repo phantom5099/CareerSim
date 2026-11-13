@@ -228,16 +228,14 @@ impl SessionStore for InMemorySessionStore {
         user: UserId,
         keep: SessionId,
         now: DateTime<Utc>,
-    ) -> Result<u64, SessionStoreError> {
+    ) -> Result<(), SessionStoreError> {
         let mut sessions = self.sessions.lock().unwrap();
-        let mut revoked = 0_u64;
         for session in sessions.values_mut() {
             if session.user_id == user && session.id != keep && session.revoked_at.is_none() {
                 session.revoked_at = Some(now);
-                revoked += 1;
             }
         }
-        Ok(revoked)
+        Ok(())
     }
 
     async fn rotate(
