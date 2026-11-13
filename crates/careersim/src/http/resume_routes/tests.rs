@@ -1,10 +1,13 @@
-//! multipart 解析与下载头构造的单元测试。
+//! multipart 解析、下载头构造与路由级 HTTP 测试。
 
+use axum::body::Body;
 use axum::http::header::CONTENT_TYPE;
-use axum::http::{HeaderMap, HeaderValue};
+use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
+use serde_json::{Value, json};
 
 use super::parse_multipart_upload;
 use super::percent_encode_file_name;
+use crate::testing::{ALLOWED_ORIGIN, body_json, empty_request, registered_cookie, send};
 
 const BOUNDARY: &str = "careersim-boundary-1234";
 
@@ -109,4 +112,317 @@ fn file_name_percent_encoding_is_ascii_safe() {
     assert!(!encoded.contains('"'));
     assert!(!encoded.contains('\r'));
     assert!(!encoded.contains('\n'));
+}
+
+// ---------- 路由级 HTTP 测试 ----------
+
+/// 携带 Cookie 与 Origin 的 JSON 请求。
+fn authed_json(method: &str, uri: &str, cookie: &str, body: Value) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(axum::http::header::ORIGIN, ALLOWED_ORIGIN)
+        .header(axum::http::header::COOKIE, cookie)
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+/// 携带 Cookie 与 Origin 的无体请求。
+fn authed_empty(method: &str, uri: &str, cookie: &str) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(axum::http::header::ORIGIN, ALLOWED_ORIGIN)
+        .header(axum::http::header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap()
+}
+
+fn resume_payload(title: &str) -> Value {
+    json!({
+        "title": title,
+        "payload": { "name": "Alice", "targetRole": "后端工程师", "city": "上海" },
+    })
+}
+
+/// 创建一份在线简历，返回 (状态码, 响应体)。
+async fn create_resume(app: &axum::Router, cookie: &str, title: &str) -> (StatusCode, Value) {
+    let response = send(
+        app.clone(),
+        authed_json("POST", "/api/v1/resumes", cookie, resume_payload(title)),
+    )
+    .await;
+    let status = response.status();
+    (status, body_json(response).await)
+}
+
+#[tokio::test]
+async fn resume_routes_without_cookie_are_unauthenticated() {
+    let response = send(
+        crate::testing::app(),
+        empty_request("GET", "/api/v1/resumes"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = body_json(response).await;
+    assert_eq!(body["error"]["code"], "unauthenticated");
+}
+
+#[tokio::test]
+async fn create_online_resume_returns_created_as_default() {
+    let app = crate::testing::app();
+    let cookie = registered_cookie(&app, "alice").await;
+    let (status, body) = create_resume(&app, &cookie, "我的简历").await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["title"], "我的简历");
+    assert_eq!(body["kind"], "online");
+    assert_eq!(body["isDefault"], true);
+    assert_eq!(body["parseStatus"], "not_applicable");
+    assert_eq!(body["content"]["name"], "Alice");
+    assert_eq!(body["content"]["targetRole"], "后端工程师");
+}
+
+#[tokio::test]
+async fn create_resume_with_blank_title_maps_to_validation() {
+    let app = crate::testing::app();
+    let cookie = registered_cookie(&app, "alice").await;
+    let response = send(
+        app,
+        authed_json(
+            "POST",
+            "/api/v1/resumes",
+            &cookie,
+            json!({ "title": "   ", "payload": {} }),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(response).await;
+    assert_eq!(body["error"]["code"], "validation_failed");
+}
+
+#[tokio::test]
+async fn fourth_resume_maps_to_conflict() {
+    let app = crate::testing::app();
+    let cookie = registered_cookie(&app, "alice").await;
+    for index in 0..3 {
+        let (status, _) = create_resume(&app, &cookie, &format!("简历{index}")).await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    let (status, body) = create_resume(&app, &cookie, "第四份").await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], "conflict");
+}
+
+#[tokio::test]
+async fn resume_crud_roundtrip_preserves_unpatched_content() {
+    let app = crate::testing::app();
+    let cookie = registered_cookie(&app, "alice").await;
+    let (_, created) = create_resume(&app, &cookie, "我的简历").await;
+    let resume_id = created["id"].as_str().unwrap().to_owned();
+
+    // 只改标题，payload 保持原值。
+    let response = send(
+        app.clone(),
+        authed_json(
+            "PATCH",
+            &format!("/api/v1/resumes/{resume_id}"),
+            &cookie,
+            json!({ "title": "改过的简历" }),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["title"], "改过的简历");
+    assert_eq!(body["content"]["targetRole"], "后端工程师");
+
+    // 删除后读取 404。
+    let response = send(
+        app.clone(),
+        authed_empty("DELETE", &format!("/api/v1/resumes/{resume_id}"), &cookie),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let response = send(
+        app,
+        authed_empty("GET", &format!("/api/v1/resumes/{resume_id}"), &cookie),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = body_json(response).await;
+    assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn set_default_switches_flag_and_list_orders_default_first() {
+    let app = crate::testing::app();
+    let cookie = registered_cookie(&app, "alice").await;
+    let (_, first) = create_resume(&app, &cookie, "第一份").await;
+    let (_, second) = create_resume(&app, &cookie, "第二份").await;
+    assert_eq!(first["isDefault"], true);
+    assert_eq!(second["isDefault"], false);
+    let second_id = second["id"].as_str().unwrap().to_owned();
+
+    let response = send(
+        app.clone(),
+        authed_empty(
+            "PUT",
+            &format!("/api/v1/resumes/{second_id}/default"),
+            &cookie,
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["isDefault"], true);
+
+    // 列表：默认在前。
+    let response = send(app, authed_empty("GET", "/api/v1/resumes", &cookie)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let items = body_json(response).await.as_array().unwrap().to_vec();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["title"], "第二份");
+    assert_eq!(items[0]["isDefault"], true);
+    assert_eq!(items[1]["isDefault"], false);
+}
+
+#[tokio::test]
+async fn patch_resume_of_other_owner_maps_to_not_found() {
+    let app = crate::testing::app();
+    let alice = registered_cookie(&app, "alice").await;
+    let bob = registered_cookie(&app, "bob").await;
+    let (_, created) = create_resume(&app, &alice, "Alice 的简历").await;
+    let resume_id = created["id"].as_str().unwrap();
+
+    let response = send(
+        app,
+        authed_json(
+            "PATCH",
+            &format!("/api/v1/resumes/{resume_id}"),
+            &bob,
+            json!({ "title": "劫持" }),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// ---------- 附件上传 ----------
+
+/// 最小合法 PDF：扩展名 + magic bytes 双重校验都能通过。
+const PDF_BYTES: &[u8] = b"%PDF-1.4\nfake-pdf-content";
+
+#[tokio::test]
+async fn upload_attachment_creates_ready_draft_resume() {
+    let app = crate::testing::app();
+    let cookie = registered_cookie(&app, "alice").await;
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/resumes/attachment")
+        .header(axum::http::header::ORIGIN, ALLOWED_ORIGIN)
+        .header(axum::http::header::COOKIE, cookie)
+        .header(
+            CONTENT_TYPE,
+            HeaderValue::from_str(&format!("multipart/form-data; boundary={BOUNDARY}")).unwrap(),
+        )
+        .body(Body::from(build_multipart(
+            "附件简历",
+            "resume.pdf",
+            PDF_BYTES,
+        )))
+        .unwrap();
+    let response = send(app, request).await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = body_json(response).await;
+    assert_eq!(body["kind"], "attachment");
+    assert_eq!(body["parseStatus"], "ready");
+    // StaticTextExtractor 的固定文本成为摘要草稿。
+    assert_eq!(
+        body["content"]["summary"],
+        "提取到的简历正文：五年 Rust 后端经验"
+    );
+    assert_eq!(body["attachment"]["fileName"], "resume.pdf");
+    assert_eq!(body["attachment"]["fileSize"], PDF_BYTES.len() as u64);
+    assert_eq!(body["attachment"]["mime"], "application/pdf");
+}
+
+#[tokio::test]
+async fn upload_with_unsupported_type_maps_to_415() {
+    let app = crate::testing::app();
+    let cookie = registered_cookie(&app, "alice").await;
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/resumes/attachment")
+        .header(axum::http::header::ORIGIN, ALLOWED_ORIGIN)
+        .header(axum::http::header::COOKIE, cookie)
+        .header(
+            CONTENT_TYPE,
+            HeaderValue::from_str(&format!("multipart/form-data; boundary={BOUNDARY}")).unwrap(),
+        )
+        .body(Body::from(build_multipart(
+            "文本简历",
+            "resume.txt",
+            b"plain text",
+        )))
+        .unwrap();
+    let response = send(app, request).await;
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let body = body_json(response).await;
+    assert_eq!(body["error"]["code"], "unsupported_media_type");
+}
+
+#[tokio::test]
+async fn upload_with_magic_extension_mismatch_maps_to_415() {
+    let app = crate::testing::app();
+    let cookie = registered_cookie(&app, "alice").await;
+    // 扩展名 .pdf 但内容不是 PDF magic → 415。
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/resumes/attachment")
+        .header(axum::http::header::ORIGIN, ALLOWED_ORIGIN)
+        .header(axum::http::header::COOKIE, cookie)
+        .header(
+            CONTENT_TYPE,
+            HeaderValue::from_str(&format!("multipart/form-data; boundary={BOUNDARY}")).unwrap(),
+        )
+        .body(Body::from(build_multipart(
+            "假 PDF",
+            "resume.pdf",
+            b"not a pdf at all",
+        )))
+        .unwrap();
+    let response = send(app, request).await;
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
+#[tokio::test]
+async fn upload_with_missing_title_maps_to_validation() {
+    let app = crate::testing::app();
+    let cookie = registered_cookie(&app, "alice").await;
+    let file_only = {
+        let mut body = Vec::new();
+        body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+        body.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"file\"; filename=\"a.pdf\"\r\n\r\n",
+        );
+        body.extend_from_slice(PDF_BYTES);
+        body.extend_from_slice(format!("\r\n--{BOUNDARY}--\r\n").as_bytes());
+        body
+    };
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/resumes/attachment")
+        .header(axum::http::header::ORIGIN, ALLOWED_ORIGIN)
+        .header(axum::http::header::COOKIE, cookie)
+        .header(
+            CONTENT_TYPE,
+            HeaderValue::from_str(&format!("multipart/form-data; boundary={BOUNDARY}")).unwrap(),
+        )
+        .body(Body::from(file_only))
+        .unwrap();
+    let response = send(app, request).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(response).await;
+    assert_eq!(body["error"]["code"], "validation_failed");
 }
