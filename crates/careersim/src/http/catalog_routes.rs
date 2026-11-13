@@ -28,6 +28,9 @@ use super::auth::AuthContext;
 use super::error::ApiError;
 use super::router::AppState;
 
+#[cfg(test)]
+mod tests;
+
 /// catalog 路由组；state 由外层 `router()` 统一注入。
 pub fn router() -> Router<AppState> {
     Router::new()
