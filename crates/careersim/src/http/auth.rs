@@ -118,3 +118,6 @@ pub fn clear_session_cookie_header(secure: bool) -> String {
 
 /// 供 app.rs 装配 `Arc<AccountService>` 时的类型别名。
 pub type SharedAccount = Arc<crate::account::service::AccountService>;
+
+#[cfg(test)]
+mod tests;
