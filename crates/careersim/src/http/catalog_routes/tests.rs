@@ -276,8 +276,8 @@ async fn private_company_hidden_from_others_but_visible_to_owner() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["name"], "私密公司");
     // 列表计数沿用 PG 实现的 snake_case 列名（真实 wire 契约）。
-    assert_eq!(items[0]["project_count"], 0);
-    assert_eq!(items[0]["visible_job_count"], 0);
+    assert_eq!(items[0]["projectCount"], 0);
+    assert_eq!(items[0]["visibleJobCount"], 0);
 }
 
 #[tokio::test]
