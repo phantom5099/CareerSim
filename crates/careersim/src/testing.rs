@@ -328,11 +328,7 @@ impl ResumeStore for UnusedResumeStore {
         unimplemented!("resume store is not wired into HTTP tests")
     }
 
-    async fn insert(
-        &self,
-        _owner: UserId,
-        _resume: NewResume,
-    ) -> Result<Resume, ResumeStoreError> {
+    async fn insert(&self, _owner: UserId, _resume: NewResume) -> Result<Resume, ResumeStoreError> {
         unimplemented!("resume store is not wired into HTTP tests")
     }
 
