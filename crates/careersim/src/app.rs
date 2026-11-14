@@ -12,7 +12,9 @@ use crate::config::AppConfig;
 use crate::http::router::{AppState, router};
 use crate::llm::OpenAiCompatibleClient;
 use crate::postgres_session_service;
-use crate::resume::{AttachmentStore, LocalFsAttachmentStore, S3AttachmentStore, postgres_resume_service};
+use crate::resume::{
+    AttachmentStore, LocalFsAttachmentStore, S3AttachmentStore, postgres_resume_service,
+};
 
 const MODEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 

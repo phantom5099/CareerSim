@@ -1,5 +1,5 @@
 //! Attachment text extraction: PDF and DOCX. Structuring into resume fields
-//! lives in [`super::structurize`] (rule-based, no model).
+//! lives in [`super::structurize()`] (rule-based, no model).
 
 use std::sync::Arc;
 

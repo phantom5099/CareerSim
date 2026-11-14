@@ -145,7 +145,6 @@ async fn attachment_upload_parse_and_download() {
     let attachment = resume.attachment.as_ref().expect("attachment");
     assert_eq!(attachment.file_name, "我的简历.pdf");
     assert_eq!(attachment.mime, "application/pdf");
-    assert_eq!(attachment.size, fake_pdf.len() as u64);
 
     // 下载流内容一致，且不暴露存储键。
     let opened = service

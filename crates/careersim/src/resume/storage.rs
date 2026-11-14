@@ -248,15 +248,24 @@ impl AttachmentStore for S3AttachmentStore {
         key: &str,
     ) -> Result<Box<dyn tokio::io::AsyncRead + Send + Unpin>, AttachmentStoreError> {
         self.check(key)?;
-        match self.client.get_object().bucket(&self.bucket).key(key).send().await {
+        match self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+        {
             Ok(resp) => {
                 // 附件上限 10 MiB，整块读入内存再包一层内存 Reader。
-                let data = resp.body.collect().await.map_err(|err| {
-                    AttachmentStoreError::Backend {
-                        message: format!("s3 get_object stream failed: {err}"),
-                        source: None,
-                    }
-                })?;
+                let data =
+                    resp.body
+                        .collect()
+                        .await
+                        .map_err(|err| AttachmentStoreError::Backend {
+                            message: format!("s3 get_object stream failed: {err}"),
+                            source: None,
+                        })?;
                 Ok(Box::new(std::io::Cursor::new(data.into_bytes().to_vec())))
             }
             Err(err) => {

@@ -373,10 +373,7 @@ fn validation_error(message: &'static str) -> ApiError {
 }
 
 /// 只接受 `file` 文件字段的 multipart 解析（给已有简历传附件场景）。
-fn parse_multipart_file(
-    headers: &HeaderMap,
-    body: &[u8],
-) -> Result<(String, Vec<u8>), ApiError> {
+fn parse_multipart_file(headers: &HeaderMap, body: &[u8]) -> Result<(String, Vec<u8>), ApiError> {
     let content_type = headers
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())

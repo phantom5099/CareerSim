@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::content::{
-    MAX_FIELD_CHARS, MAX_ITEMS, MAX_SERIALIZED_BYTES, MAX_SUMMARY_CHARS, ResumeContent, ResumeEducation,
-    ResumeSkill,
+    MAX_FIELD_CHARS, MAX_ITEMS, MAX_SERIALIZED_BYTES, MAX_SUMMARY_CHARS, ResumeContent,
+    ResumeEducation, ResumeSkill,
 };
 use super::model::{MAX_ATTACHMENT_BYTES, ResumeError, validate_title};
 use super::parse::{
@@ -319,9 +319,11 @@ GPA: 3.86/4.0
 fn merge_parsed_fills_only_empty_fields_and_dedupes() {
     use super::structurize::merge_parsed;
 
-    let mut base = ResumeContent::default();
-    base.name = "李四".to_owned();
-    base.summary = "已有自我介绍".to_owned();
+    let mut base = ResumeContent {
+        name: "李四".to_owned(),
+        summary: "已有自我介绍".to_owned(),
+        ..ResumeContent::default()
+    };
     let existing = ResumeEducation {
         school: "复旦大学".to_owned(),
         degree: "本科".to_owned(),
@@ -332,10 +334,12 @@ fn merge_parsed_fills_only_empty_fields_and_dedupes() {
     };
     base.educations.push(existing.clone());
 
-    let mut parsed = ResumeContent::default();
-    parsed.name = "张三".to_owned();
-    parsed.phone = "13812345678".to_owned();
-    parsed.summary = "解析的自我介绍".to_owned();
+    let mut parsed = ResumeContent {
+        name: "张三".to_owned(),
+        phone: "13812345678".to_owned(),
+        summary: "解析的自我介绍".to_owned(),
+        ..ResumeContent::default()
+    };
     parsed.educations.push(existing);
     parsed.educations.push(ResumeEducation {
         school: "上海交通大学".to_owned(),

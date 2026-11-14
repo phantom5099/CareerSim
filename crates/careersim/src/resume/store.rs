@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
-use super::model::{NewResumeAttachment, NewResume, ParseStatus, Resume, ResumeId, ResumePatch};
+use super::model::{NewResume, NewResumeAttachment, ParseStatus, Resume, ResumeId, ResumePatch};
 use crate::account::model::UserId;
 
 /// Errors raised by resume persistence backends.

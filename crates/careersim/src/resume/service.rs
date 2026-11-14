@@ -130,8 +130,7 @@ impl ResumeService {
         raw_file_name: &str,
         bytes: &[u8],
     ) -> Result<Resume, ResumeError> {
-        let (file_name, kind, storage_key) =
-            self.validate_and_store(raw_file_name, bytes).await?;
+        let (file_name, kind, storage_key) = self.validate_and_store(raw_file_name, bytes).await?;
 
         let outcome = self
             .parse_and_attach(owner, id, file_name, kind, &storage_key, bytes.to_vec())
@@ -154,7 +153,10 @@ impl ResumeService {
         id: ResumeId,
     ) -> Result<Resume, ResumeError> {
         let resume = self.store.get(owner, id).await.map_err(map_store_error)?;
-        let old_key = resume.attachment.as_ref().map(|att| att.storage_key.clone());
+        let old_key = resume
+            .attachment
+            .as_ref()
+            .map(|att| att.storage_key.clone());
         let updated = self
             .store
             .detach(owner, id)
@@ -242,10 +244,10 @@ impl ResumeService {
             .map_err(map_store_error)?;
 
         // 数据库已指向新附件：旧附件文件此时才清理。
-        if let Some(old) = &current.attachment {
-            if old.storage_key != storage_key {
-                let _ = self.attachments.delete(&old.storage_key).await;
-            }
+        if let Some(old) = &current.attachment
+            && old.storage_key != storage_key
+        {
+            let _ = self.attachments.delete(&old.storage_key).await;
         }
         Ok(updated)
     }
@@ -443,7 +445,7 @@ pub fn detect_attachment_kind(
         }
         None => {
             if extension_ok(AttachmentKind::Docx)
-                && DocxTextExtractor::default()
+                && DocxTextExtractor
                     .extract(AttachmentKind::Docx, bytes)
                     .is_ok()
             {

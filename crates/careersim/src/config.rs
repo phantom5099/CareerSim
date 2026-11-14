@@ -114,8 +114,16 @@ pub struct AppConfig {
 /// - `s3`：S3 兼容对象存储（MinIO / R2 / 七牛等），走 `S3_*` 环境变量。
 #[derive(Clone)]
 pub enum AttachmentStorageConfig {
-    LocalFs { dir: String },
-    S3 { endpoint: String, region: String, bucket: String, access_key_id: String, secret_access_key: String },
+    LocalFs {
+        dir: String,
+    },
+    S3 {
+        endpoint: String,
+        region: String,
+        bucket: String,
+        access_key_id: String,
+        secret_access_key: String,
+    },
 }
 
 impl AttachmentStorageConfig {

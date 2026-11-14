@@ -9,9 +9,9 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use super::content::{
-    MAX_FIELD_CHARS, MAX_ITEM_CHARS, MAX_ITEM_DESCRIPTION_CHARS, MAX_SUMMARY_CHARS, ResumeContent,
-    ResumeCertificate, ResumeEducation, ResumeExperience, ResumeHonor, ResumeProject, ResumePractice,
-    ResumeSkill,
+    MAX_FIELD_CHARS, MAX_ITEM_CHARS, MAX_ITEM_DESCRIPTION_CHARS, MAX_SUMMARY_CHARS,
+    ResumeCertificate, ResumeContent, ResumeEducation, ResumeExperience, ResumeHonor,
+    ResumePractice, ResumeProject, ResumeSkill,
 };
 
 /// 段类型；`Experience` 的布尔值标记是否实习段。
@@ -111,17 +111,17 @@ fn detect_section(raw_line: &str) -> Option<Section> {
     if stripped.is_empty() {
         return None;
     }
-    Section::match_header(&stripped)
+    Section::match_header(stripped)
 }
 
 /// 去掉段头常见装饰：`【】`、`#`、`*`、`-`、`•`、序号（`一、` `1.` `1、`）与结尾冒号。
 fn strip_decorations(line: &str) -> &str {
     let mut text = line.trim();
     for (open, close) in [("【", "】"), ("[", "]")] {
-        if let Some(rest) = text.strip_prefix(open) {
-            if let Some(inner) = rest.strip_suffix(close) {
-                text = inner;
-            }
+        if let Some(rest) = text.strip_prefix(open)
+            && let Some(inner) = rest.strip_suffix(close)
+        {
+            text = inner;
         }
     }
     let mut text = text.trim_start_matches(['#', '*', '-', '•', '·', '—']);
@@ -137,13 +137,14 @@ fn strip_decorations(line: &str) -> &str {
             text = stripped;
         }
     }
-    for prefix in ["一、", "二、", "三、", "四、", "五、", "六、", "七、", "八、", "九、", "十、"] {
+    for prefix in [
+        "一、", "二、", "三、", "四、", "五、", "六、", "七、", "八、", "九、", "十、",
+    ] {
         if let Some(rest) = text.strip_prefix(prefix) {
             text = rest;
         }
     }
-    text.trim_end_matches(['：', ':', '　'])
-        .trim()
+    text.trim_end_matches(['：', ':', '　']).trim()
 }
 
 fn contains_date(text: &str) -> bool {
@@ -208,7 +209,8 @@ fn email_regex() -> &'static Regex {
 fn gpa_score_regex() -> &'static Regex {
     static GPA: OnceLock<Regex> = OnceLock::new();
     GPA.get_or_init(|| {
-        Regex::new(r"(?:(?:GPA|绩点)[:：\s]*)?[0-4]\.\d{1,2}(?:\s*/\s*[0-4](?:\.\d+)?)?").expect("gpa regex")
+        Regex::new(r"(?:(?:GPA|绩点)[:：\s]*)?[0-4]\.\d{1,2}(?:\s*/\s*[0-4](?:\.\d+)?)?")
+            .expect("gpa regex")
     })
 }
 
@@ -231,7 +233,8 @@ fn cut(text: &str, max: usize) -> String {
 }
 
 fn clean_line(line: &str) -> &str {
-    line.trim().trim_start_matches(['•', '·', '-', '—', '*', '·'])
+    line.trim()
+        .trim_start_matches(['•', '·', '-', '—', '*', '·'])
 }
 
 /// 从联系区（首个段头之前的所有行）提取标量字段。
@@ -242,10 +245,10 @@ fn parse_contact_zone(lines: &[&str]) -> ResumeContent {
     if let Some(m) = email_regex().find(&joined) {
         content.email = cut(m.as_str(), MAX_FIELD_CHARS);
     }
-    if let Some(caps) = phone_regex().captures(&joined) {
-        if let Some(m) = caps.get(1) {
-            content.phone = cut(&m.as_str().replace(['-', ' '], ""), MAX_FIELD_CHARS);
-        }
+    if let Some(caps) = phone_regex().captures(&joined)
+        && let Some(m) = caps.get(1)
+    {
+        content.phone = cut(&m.as_str().replace(['-', ' '], ""), MAX_FIELD_CHARS);
     }
     // 标签字段：`城市：xx`，兼容一行混排多个标签（`邮箱：x 电话：y 现居：z`）。
     for line in lines {
@@ -288,8 +291,8 @@ struct Entry {
 /// 1. 单行式：`公司 职位 2023.06-2023.09`（锚行自带文字）；
 /// 2. 日期独行：标题行在前、日期行单独一行（悬挂行回看合并）；
 /// 3. 多行式：学校/公司/职位分散成多行后接日期行（如教育经历三行式）。
-/// 锚点前保留最近 3 行悬挂行与锚行文字拼接；仍未被合并的散行（段头下的
-/// 说明）丢弃。
+///    锚点前保留最近 3 行悬挂行与锚行文字拼接；仍未被合并的散行（段头下的
+///    说明）丢弃。
 fn split_entries(body_lines: &[&str]) -> Vec<Entry> {
     const MAX_PENDING_LINES: usize = 3;
     let mut entries: Vec<Entry> = Vec::new();
@@ -344,7 +347,10 @@ fn strip_span(text: &str, start: usize, end: usize) -> String {
 /// 按常见分隔符切条目头文字（不含日期）。
 fn split_headline(headline: &str) -> Vec<String> {
     headline
-        .split(['|', '｜', '/', '·', '，', ',', '、', ';', '；', '@', ' ', '\u{3000}', '(', '（', ')', '）'])
+        .split([
+            '|', '｜', '/', '·', '，', ',', '、', ';', '；', '@', ' ', '\u{3000}', '(', '（', ')',
+            '）',
+        ])
         .map(str::trim)
         .filter(|chunk| !chunk.is_empty())
         .map(str::to_owned)
@@ -352,30 +358,126 @@ fn split_headline(headline: &str) -> Vec<String> {
 }
 
 const COMPANY_KEYWORDS: &[&str] = &[
-    "公司", "有限", "股份", "集团", "银行", "科技", "事业部", "厂", "工作室", "研究院",
-    "研究所", "事务所", "中心", "网络", "传媒", "证券", "基金", "实验室", "医院", "商行",
-    "inc", "ltd", "corp", "llc", "group",
+    "公司",
+    "有限",
+    "股份",
+    "集团",
+    "银行",
+    "科技",
+    "事业部",
+    "厂",
+    "工作室",
+    "研究院",
+    "研究所",
+    "事务所",
+    "中心",
+    "网络",
+    "传媒",
+    "证券",
+    "基金",
+    "实验室",
+    "医院",
+    "商行",
+    "inc",
+    "ltd",
+    "corp",
+    "llc",
+    "group",
 ];
 const ROLE_KEYWORDS: &[&str] = &[
-    "经理", "工程师", "实习", "管培生", "助理", "专员", "主管", "总监", "开发", "设计",
-    "运营", "产品", "分析", "顾问", "教师", "讲师", "编辑", "记者", "策划", "翻译", "研究",
-    "助教", "架构", "运维", "测试", "运营", "市场", "销售", "人事", "财务", "会计", "律师",
-    "intern", "engineer", "manager", "lead", "analyst", "designer", "developer", "founder",
-    "director", "architect", "consultant", "specialist", "officer", "assistant", "president",
-    "researcher", "scientist",
+    "经理",
+    "工程师",
+    "实习",
+    "管培生",
+    "助理",
+    "专员",
+    "主管",
+    "总监",
+    "开发",
+    "设计",
+    "运营",
+    "产品",
+    "分析",
+    "顾问",
+    "教师",
+    "讲师",
+    "编辑",
+    "记者",
+    "策划",
+    "翻译",
+    "研究",
+    "助教",
+    "架构",
+    "运维",
+    "测试",
+    "运营",
+    "市场",
+    "销售",
+    "人事",
+    "财务",
+    "会计",
+    "律师",
+    "intern",
+    "engineer",
+    "manager",
+    "lead",
+    "analyst",
+    "designer",
+    "developer",
+    "founder",
+    "director",
+    "architect",
+    "consultant",
+    "specialist",
+    "officer",
+    "assistant",
+    "president",
+    "researcher",
+    "scientist",
 ];
 const SCHOOL_KEYWORDS: &[&str] = &[
-    "大学", "学院", "学校", "中学", "附属", "university", "college", "institute", "school",
+    "大学",
+    "学院",
+    "学校",
+    "中学",
+    "附属",
+    "university",
+    "college",
+    "institute",
+    "school",
 ];
 const DEGREE_KEYWORDS: &[&str] = &[
-    "博士", "硕士", "研究生", "本科", "学士", "大专", "专科", "在读", "应届", "双学位",
-    "辅修", "mba", "phd", "ph.d", "doctor", "master", "bachelor", "associate", "b.s.", "m.s.",
-    "b.a.", "m.a.",
+    "博士",
+    "硕士",
+    "研究生",
+    "本科",
+    "学士",
+    "大专",
+    "专科",
+    "在读",
+    "应届",
+    "双学位",
+    "辅修",
+    "mba",
+    "phd",
+    "ph.d",
+    "doctor",
+    "master",
+    "bachelor",
+    "associate",
+    "b.s.",
+    "m.s.",
+    "b.a.",
+    "m.a.",
 ];
 
 /// 特征评分选块：任一正则词命中 +3，任一负则词命中 -3；纯数字块 -4，
 /// 超长块（>30 字符）-2。返回得分 > 0 的最高分块；并列取先出现者。
-fn pick_by_score<'a>(chunks: &'a [String], positive: &[&str], negative: &[&str]) -> Option<&'a String> {
+fn pick_by_score<'a>(
+    chunks: &'a [String],
+    positive: &[&str],
+    negative: &[&str],
+) -> Option<&'a String> {
     let mut best: Option<(i32, &'a String)> = None;
     for chunk in chunks {
         let lower = chunk.to_ascii_lowercase();
@@ -420,13 +522,12 @@ fn parse_education_entry(entry: &Entry) -> Option<ResumeEducation> {
     // 专业：去掉学校与学历块后的下一个块；否则看描述行。
     let major = chunks
         .iter()
-        .filter(|chunk| {
+        .find(|chunk| {
             let lower = chunk.to_ascii_lowercase();
             !SCHOOL_KEYWORDS.iter().any(|key| lower.contains(*key))
                 && !DEGREE_KEYWORDS.iter().any(|key| lower.contains(*key))
                 && *chunk != &school
         })
-        .next()
         .map(|chunk| cut(chunk, MAX_ITEM_CHARS))
         .unwrap_or_default();
 
@@ -464,7 +565,8 @@ fn parse_education_entry(entry: &Entry) -> Option<ResumeEducation> {
                 || lower.contains("绩点")
                 || lower.contains("排名")
                 || lower.contains("前")
-                || gpa_score_regex().is_match(line)        })
+                || gpa_score_regex().is_match(line)
+        })
         .map(|line| cut(line, MAX_ITEM_CHARS))
         .unwrap_or_default();
 
@@ -485,10 +587,20 @@ fn parse_experience_entry(entry: &Entry, internship: bool) -> Option<ResumeExper
     let chunks = split_headline(&entry.headline);
     let company = pick_by_score(&chunks, COMPANY_KEYWORDS, ROLE_KEYWORDS)
         .map(|chunk| cut(chunk, MAX_ITEM_CHARS))
-        .unwrap_or_else(|| chunks.first().map(|c| cut(c, MAX_ITEM_CHARS)).unwrap_or_default());
+        .unwrap_or_else(|| {
+            chunks
+                .first()
+                .map(|c| cut(c, MAX_ITEM_CHARS))
+                .unwrap_or_default()
+        });
     let role = pick_by_score(&chunks, ROLE_KEYWORDS, COMPANY_KEYWORDS)
         .map(|chunk| cut(chunk, MAX_ITEM_CHARS))
-        .unwrap_or_else(|| chunks.get(1).map(|c| cut(c, MAX_ITEM_CHARS)).unwrap_or_default());
+        .unwrap_or_else(|| {
+            chunks
+                .get(1)
+                .map(|c| cut(c, MAX_ITEM_CHARS))
+                .unwrap_or_default()
+        });
     let kind = if internship || entry.headline.contains("实习") {
         "实习"
     } else {
@@ -582,7 +694,10 @@ pub fn structurize(text: &str) -> ResumeContent {
                             role,
                             start_date: start,
                             end_date: end,
-                            description: cut(&entry.description.join("\n"), MAX_ITEM_DESCRIPTION_CHARS),
+                            description: cut(
+                                &entry.description.join("\n"),
+                                MAX_ITEM_DESCRIPTION_CHARS,
+                            ),
                         });
                     }
                 }
@@ -595,7 +710,10 @@ pub fn structurize(text: &str) -> ResumeContent {
                             role,
                             start_date: start,
                             end_date: end,
-                            description: cut(&entry.description.join("\n"), MAX_ITEM_DESCRIPTION_CHARS),
+                            description: cut(
+                                &entry.description.join("\n"),
+                                MAX_ITEM_DESCRIPTION_CHARS,
+                            ),
                         });
                     }
                 }
@@ -667,9 +785,10 @@ pub fn structurize(text: &str) -> ResumeContent {
         || !content.phone.is_empty()
         || !content.city.is_empty();
     if !strong {
-        let mut fallback = ResumeContent::default();
-        fallback.summary = cut(text, MAX_SUMMARY_CHARS);
-        return fallback;
+        return ResumeContent {
+            summary: cut(text, MAX_SUMMARY_CHARS),
+            ..ResumeContent::default()
+        };
     }
     content
 }
@@ -684,7 +803,10 @@ fn split_trailing_date(line: &str) -> (String, String) {
         let tail = line[*end..].trim();
         if tail.chars().count() <= 2 {
             date = normalize_date(&line[*start..*end]);
-            name = line[..*start].trim().trim_end_matches(['，', ',', '、', '-']).to_owned();
+            name = line[..*start]
+                .trim()
+                .trim_end_matches(['，', ',', '、', '-'])
+                .to_owned();
         }
     }
     (name, date)

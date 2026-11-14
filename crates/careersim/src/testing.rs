@@ -24,8 +24,8 @@ use crate::account::session::{LoginSession, NewLoginSession, SessionId, SessionT
 use crate::account::store::{SessionStore, SessionStoreError, UserStore, UserStoreError};
 use crate::http::router::{AppState, router};
 use crate::resume::model::{
-    NewResume, NewResumeAttachment, ParseStatus, RESUME_LIMIT, Resume, ResumeAttachment,
-    ResumeId, ResumePatch,
+    NewResume, NewResumeAttachment, ParseStatus, RESUME_LIMIT, Resume, ResumeAttachment, ResumeId,
+    ResumePatch,
 };
 use crate::resume::parse::{AttachmentKind, ParseError, ResumeTextExtractor};
 use crate::resume::storage::{AttachmentStore, AttachmentStoreError};
