@@ -392,7 +392,7 @@ async function retryLoad() {
             :options="industries"
           />
           <span class="text-[0.66rem] text-ink-faint">
-            {{ rest.length }} 条{{ query.trim() ? ' · 搜索结果' : '' }}
+            {{ visibleCompanies.length }} 条{{ query.trim() ? ' · 搜索结果' : '' }}
           </span>
         </div>
       </div>
@@ -409,8 +409,9 @@ async function retryLoad() {
         </button>
       </div>
 
+      <!-- 空状态只看全部可见公司；条目全部进轮播时列表区留空，不算"无匹配"。 -->
       <div
-        v-else-if="!rest.length"
+        v-else-if="!visibleCompanies.length"
         class="mt-6 border border-dashed border-line-strong px-6 py-12 text-center"
       >
         <p class="font-display text-xl">没有找到匹配的公司</p>
