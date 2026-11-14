@@ -9,11 +9,11 @@ use axum::routing::{get, patch, post};
 use serde::{Deserialize, Serialize};
 use tower_http::limit::RequestBodyLimitLayer;
 
-use crate::account::model::{ProfilePatch, User};
+use crate::account::model::{AccountError, ProfilePatch, User};
 use crate::account::service::SessionGrant;
 
 use super::auth::{AuthContext, clear_session_cookie_header, session_cookie_header};
-use super::error::ApiError;
+use super::error::{ApiError, render_backend_chain};
 use super::router::AppState;
 
 /// JSON 请求体上限：与全局一致（1 MiB）。
@@ -90,6 +90,29 @@ fn fnv1a(input: &str) -> usize {
         hash = hash.wrapping_mul(0x0100_0193);
     }
     hash as usize
+}
+
+/// `AccountError` → 统一错误体；后端错误细节只进日志。
+impl From<AccountError> for ApiError {
+    fn from(err: AccountError) -> Self {
+        match err {
+            AccountError::InvalidUsername { .. } | AccountError::InvalidPassword { .. } => {
+                ApiError::validation_failed(err.to_string())
+            }
+            AccountError::InvalidProfile { field, .. } => {
+                ApiError::validation_fields(err.to_string(), vec![field.to_owned()])
+            }
+            AccountError::InvalidCredentials => ApiError::invalid_credentials(),
+            AccountError::CurrentPasswordMismatch => ApiError::current_password_mismatch(),
+            AccountError::UsernameTaken => ApiError::conflict("username already taken"),
+            AccountError::Unauthenticated => ApiError::unauthenticated(),
+            // 后端错误细节只进日志；对外统一 internal_error，避免泄露内部信息。
+            AccountError::Backend { message, source } => {
+                tracing::error!(error = %render_backend_chain(&message, source.as_deref()), "account backend error");
+                ApiError::internal_error()
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

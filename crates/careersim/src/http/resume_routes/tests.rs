@@ -94,6 +94,87 @@ fn boundary_may_be_quoted_and_missing_boundary_is_rejected() {
 }
 
 #[test]
+fn extract_boundary_parses_loose_but_legal_forms() {
+    use super::extract_boundary;
+
+    // 引号形式照常解析，值大小写保留。
+    assert_eq!(
+        extract_boundary("multipart/form-data; boundary=\"Quoted-1\"").as_deref(),
+        Some("Quoted-1")
+    );
+    // 等号两侧允许 OWS（RFC 7231）；键名大小写不敏感。
+    assert_eq!(
+        extract_boundary("multipart/form-data; boundary = abc").as_deref(),
+        Some("abc")
+    );
+    assert_eq!(
+        extract_boundary("multipart/form-data; BOUNDARY=abc").as_deref(),
+        Some("abc")
+    );
+    // bchars 内的特殊字符合法。
+    assert_eq!(
+        extract_boundary("multipart/form-data; boundary=a+b_c.d:e=f?g(h)i'j,k/l-m").as_deref(),
+        Some("a+b_c.d:e=f?g(h)i'j,k/l-m")
+    );
+    // 70 字符为上限。
+    assert_eq!(
+        extract_boundary(&format!("multipart/form-data; boundary={}", "a".repeat(70))).as_deref(),
+        Some("a".repeat(70).as_str())
+    );
+}
+
+#[test]
+fn extract_boundary_rejects_malformed_values() {
+    use super::extract_boundary;
+
+    // 参数名必须独立成段：xboundary、另一参数引号值内的 boundary 都不误匹配。
+    assert_eq!(
+        extract_boundary("multipart/form-data; xboundary=evil"),
+        None
+    );
+    assert_eq!(
+        extract_boundary("multipart/form-data; foo=\"bar;boundary=x\""),
+        None
+    );
+    // 非 ASCII 码点低 8 位截断后伪装成可见 ASCII，必须拒绝。
+    assert_eq!(
+        extract_boundary("multipart/form-data; boundary=\u{0120}abc"),
+        None
+    );
+    // 未配对引号、bchars 之外的字面字符（分号、转义引号）拒绝。
+    assert_eq!(
+        extract_boundary("multipart/form-data; boundary=\"abc"),
+        None
+    );
+    assert_eq!(
+        extract_boundary("multipart/form-data; boundary=abc\""),
+        None
+    );
+    assert_eq!(
+        extract_boundary("multipart/form-data; boundary=\"a;b\""),
+        None
+    );
+    assert_eq!(
+        extract_boundary("multipart/form-data; boundary=\"a\\\"b\""),
+        None
+    );
+    // 首尾空格（bcharsnospace）、空值、超长（>70）拒绝。
+    assert_eq!(
+        extract_boundary("multipart/form-data; boundary=\" abc \""),
+        None
+    );
+    assert_eq!(
+        extract_boundary("multipart/form-data; boundary=\" \""),
+        None
+    );
+    assert_eq!(extract_boundary("multipart/form-data; boundary="), None);
+    assert_eq!(
+        extract_boundary(&format!("multipart/form-data; boundary={}", "a".repeat(71))),
+        None
+    );
+}
+
+#[test]
 fn missing_fields_are_rejected() {
     let title_only = {
         let mut body = Vec::new();

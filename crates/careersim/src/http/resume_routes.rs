@@ -18,7 +18,7 @@ use crate::resume::model::{ParseStatus, Resume, ResumeError, ResumeId};
 use crate::resume::service::OpenedAttachment;
 
 use super::auth::AuthContext;
-use super::error::ApiError;
+use super::error::{ApiError, render_backend_chain};
 use super::router::AppState;
 
 /// JSON 请求体上限：与全局一致（1 MiB）。
@@ -122,7 +122,7 @@ impl From<ResumeError> for ApiError {
                 ApiError::unsupported_media_type("attachment must be a PDF or DOCX file")
             }
             ResumeError::Backend { message, source } => {
-                tracing::error!(message = %message, source = ?source, "resume backend error");
+                tracing::error!(error = %render_backend_chain(&message, source.as_deref()), "resume backend error");
                 ApiError::internal_error()
             }
         }
@@ -409,23 +409,22 @@ struct MultipartField {
     content: Vec<u8>,
 }
 
+/// 从 `Content-Type` 提取 multipart boundary；参数解析复用 [`disposition_param`]，
+/// 因此参数名必须独立成段：`xboundary=`、另一个参数引号值里的 `boundary=` 都不会误匹配，
+/// `boundary = x`（等号两侧 OWS）也能解析。
+/// 合法 boundary 为 RFC 2046 bchars（字母数字 + `'()+_,-./:=?` 与空格），
+/// 非空、≤70 字符、首尾不得为空格；引号值须成对，转义后的 `"` 等越界字符一并拒绝。
 fn extract_boundary(content_type: &str) -> Option<String> {
-    let lower = content_type.to_ascii_lowercase();
-    let position = lower.find("boundary=")?;
-    let raw = content_type[position + "boundary=".len()..].trim();
-    // boundary 值到下一个参数为止；可能被双引号包裹（引号内的 `;` 属于值）。
-    let raw = split_disposition_params(raw)
-        .first()
-        .copied()
-        .unwrap_or(raw)
-        .trim();
-    let raw = raw.trim_matches('"');
-    // 合法 boundary 为可见 ASCII 且 ≤70 字符；防止病态输入拖垮扫描。
-    if raw.is_empty() || raw.len() > 70 || !raw.chars().all(|ch| (0x20..0x7f).contains(&(ch as u8)))
-    {
-        return None;
-    }
-    Some(raw.to_owned())
+    const BCHARS_EXTRA: &str = "'()+_,-./:=? ";
+    let value = disposition_param(content_type, "boundary")?;
+    let valid = !value.is_empty()
+        && value.len() <= 70
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || BCHARS_EXTRA.contains(byte as char))
+        && !value.starts_with(' ')
+        && !value.ends_with(' ');
+    valid.then_some(value)
 }
 
 fn parse_multipart_body(boundary: &str, body: &[u8]) -> Result<Vec<MultipartField>, ApiError> {
@@ -491,8 +490,9 @@ fn parse_multipart_part(part: &[u8]) -> Result<MultipartField, ApiError> {
     })
 }
 
-/// 读取 `Content-Disposition` 中的参数；支持双引号与 `\` 转义，
-/// 引号内的 `;` 不作为参数分隔符（如 `filename="a;b.pdf"`）。
+/// 读取头参数串（`Content-Disposition`、`Content-Type` 等）中的指定参数；
+/// 支持双引号与 `\` 转义，引号内的 `;` 不作为参数分隔符（如 `filename="a;b.pdf"`）。
+/// 键名忽略大小写，等号两侧允许空白；取第一个匹配的参数。
 fn disposition_param(disposition: &str, key: &str) -> Option<String> {
     for segment in split_disposition_params(disposition) {
         let segment = segment.trim();
