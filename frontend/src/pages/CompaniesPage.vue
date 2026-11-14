@@ -4,7 +4,7 @@ import { RouterLink } from 'vue-router'
 
 import CompanyMark from '@/components/CompanyMark.vue'
 import MultiSelect from '@/components/MultiSelect.vue'
-import { PROJECT_STATUS_LABELS, formatDate } from '@/domain/types'
+import { PROJECT_STATUS_LABELS, effectiveProjectStatus, formatDate } from '@/domain/types'
 import type { Company, ProjectStatus } from '@/domain/types'
 import { useCompanyCatalogStore } from '@/stores/companyCatalog'
 
@@ -155,16 +155,16 @@ onBeforeUnmount(stopHeadlineTimer)
 
 const projectTone: Record<ProjectStatus, string> = {
   open: 'border-moss/60 text-moss',
-  closing: 'border-vermilion/50 text-vermilion',
   closed: 'border-line text-ink-faint',
 }
 
 function activeProject(company: Company) {
-  return company.projects.find((project) => project.status !== 'closed') ?? company.projects[0]
+  return company.projects.find((project) => effectiveProjectStatus(project) !== 'closed') ?? company.projects[0]
 }
 
 function projectStatus(company: Company): ProjectStatus | undefined {
-  return activeProject(company)?.status
+  const project = activeProject(company)
+  return project ? effectiveProjectStatus(project) : undefined
 }
 
 function projectToneOf(company: Company): string {

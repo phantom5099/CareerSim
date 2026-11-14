@@ -98,11 +98,11 @@ impl CompanySource {
     }
 }
 
-/// 项目状态；与数据库 CHECK 约束一致。
+/// 项目状态；与数据库 CHECK 约束一致。`open`/`closed` 只表示拥有者是否
+/// 手动关闭；对外读取时以 [`ProjectStatus::effective`] 的派生结果为准。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectStatus {
     Open,
-    Closing,
     Closed,
 }
 
@@ -110,7 +110,6 @@ impl ProjectStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Open => "open",
-            Self::Closing => "closing",
             Self::Closed => "closed",
         }
     }
@@ -118,9 +117,18 @@ impl ProjectStatus {
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
             "open" => Some(Self::Open),
-            "closing" => Some(Self::Closing),
             "closed" => Some(Self::Closed),
             _ => None,
+        }
+    }
+
+    /// 读取时的有效状态：存储为 `closed`，或 `deadline` 已过（按当天日期
+    /// 比较，截止日当天仍算开放），都对外呈现为 `closed`。
+    pub fn effective(self, deadline: Option<NaiveDate>, today: NaiveDate) -> Self {
+        match self {
+            Self::Closed => Self::Closed,
+            Self::Open if deadline.is_some_and(|date| date < today) => Self::Closed,
+            Self::Open => Self::Open,
         }
     }
 }
@@ -314,6 +322,10 @@ pub(crate) const HIGHLIGHT_ITEM_MAX_CHARS: usize = 60;
 pub(crate) const LOGO_TEXT_MAX_CHARS: usize = 8;
 pub(crate) const ACCENT_MAX_CHARS: usize = 7;
 pub(crate) const PROJECT_NAME_MAX_CHARS: usize = 60;
+/// 薪资月数上限；表单与模板导入共用。
+pub(crate) const SALARY_MONTHS_MAX: u8 = 24;
+/// 岗位标签数量上限；表单与模板导入共用。
+pub(crate) const JOB_TAGS_MAX_ITEMS: usize = 12;
 
 /// 公司模板各文本字段的长度上限；前端表单 maxlength 与此严格一致。
 pub(crate) const ENGLISH_NAME_MAX_CHARS: usize = 40;
@@ -354,30 +366,30 @@ pub(crate) fn validate_company_fields(
     accent: &str,
 ) -> Result<(), CatalogError> {
     let name_chars = name.trim().chars().count();
-    if !(1..=80).contains(&name_chars) {
+    if !(1..=COMPANY_NAME_MAX_CHARS).contains(&name_chars) {
         return Err(CatalogError::InvalidInput {
             field: "name",
-            reason: "must be 1..=80 characters".to_owned(),
+            reason: format!("must be 1..={COMPANY_NAME_MAX_CHARS} characters"),
         });
     }
-    if highlights.len() > 12 {
+    if highlights.len() > HIGHLIGHT_MAX_ITEMS {
         return Err(CatalogError::InvalidInput {
             field: "highlights",
-            reason: "must contain at most 12 items".to_owned(),
+            reason: format!("must contain at most {HIGHLIGHT_MAX_ITEMS} items"),
         });
     }
     for highlight in highlights {
-        if highlight.trim().is_empty() || highlight.chars().count() > 60 {
+        if highlight.trim().is_empty() || highlight.chars().count() > HIGHLIGHT_ITEM_MAX_CHARS {
             return Err(CatalogError::InvalidInput {
                 field: "highlights",
-                reason: "each item must be 1..=60 characters".to_owned(),
+                reason: format!("each item must be 1..={HIGHLIGHT_ITEM_MAX_CHARS} characters"),
             });
         }
     }
-    if logo_text.chars().count() > 8 {
+    if logo_text.chars().count() > LOGO_TEXT_MAX_CHARS {
         return Err(CatalogError::InvalidInput {
             field: "logoText",
-            reason: "must be at most 8 characters".to_owned(),
+            reason: format!("must be at most {LOGO_TEXT_MAX_CHARS} characters"),
         });
     }
     if !accent.is_empty() && !is_hex_color(accent) {
@@ -391,10 +403,10 @@ pub(crate) fn validate_company_fields(
 
 pub(crate) fn validate_project_name(name: &str) -> Result<(), CatalogError> {
     let chars = name.trim().chars().count();
-    if !(1..=60).contains(&chars) {
+    if !(1..=PROJECT_NAME_MAX_CHARS).contains(&chars) {
         return Err(CatalogError::InvalidInput {
             field: "name",
-            reason: "must be 1..=60 characters".to_owned(),
+            reason: format!("must be 1..={PROJECT_NAME_MAX_CHARS} characters"),
         });
     }
     Ok(())
@@ -420,10 +432,10 @@ pub(crate) fn validate_salary(
             reason: "must be greater than or equal to salaryMin".to_owned(),
         });
     }
-    if salary_months.is_some_and(|v| !(1..=24).contains(&v)) {
+    if salary_months.is_some_and(|v| !(1..=SALARY_MONTHS_MAX).contains(&v)) {
         return Err(CatalogError::InvalidInput {
             field: "salaryMonths",
-            reason: "must be within 1..=24".to_owned(),
+            reason: format!("must be within 1..={SALARY_MONTHS_MAX}"),
         });
     }
     Ok(())

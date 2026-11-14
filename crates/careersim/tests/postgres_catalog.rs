@@ -608,7 +608,13 @@ async fn import_template_roundtrip() {
         "schemaVersion": 1,
         "company": {
             "name": name,
+            "englishName": "Fictional Import",
             "industry": "虚构行业",
+            "city": "上海",
+            "size": "100–499 人",
+            "tagline": "连接想象与现实",
+            "description": "一家用于导入验证的虚构公司。",
+            "logoText": "导入",
             "isPrivate": false,
         },
         "projects": [{"key": "p1", "name": "2027 校招", "status": "open"}],
@@ -707,14 +713,14 @@ async fn project_and_pipeline_updates_and_deletes() {
     let project_id: ProjectId = detail.projects[0].id;
     let pipeline_id = detail.pipelines[0].id;
 
-    // 项目改名 + 状态 + 清空截止日期。
+    // 项目改名 + 手动关闭 + 清空截止日期。
     let updated_project = catalog
         .update_project(
             alice,
             project_id,
             ProjectPatchInput {
                 name: Some("改名项目".to_owned()),
-                status: Some(ProjectStatus::Closing),
+                status: Some(ProjectStatus::Closed),
                 deadline: Some(None),
                 ..ProjectPatchInput::default()
             },
@@ -723,8 +729,37 @@ async fn project_and_pipeline_updates_and_deletes() {
         .await
         .expect("update project");
     assert_eq!(updated_project.name, "改名项目");
-    assert_eq!(updated_project.status, ProjectStatus::Closing);
+    assert_eq!(updated_project.status, ProjectStatus::Closed);
     assert!(updated_project.deadline.is_none());
+
+    // deadline 已过的 open 项目读取时按 closed 呈现；延期后恢复 open。
+    let expired = catalog
+        .update_project(
+            alice,
+            project_id,
+            ProjectPatchInput {
+                status: Some(ProjectStatus::Open),
+                deadline: Some(Some(now.date_naive() - chrono::Duration::days(1))),
+                ..ProjectPatchInput::default()
+            },
+            now,
+        )
+        .await
+        .expect("expire project");
+    assert_eq!(expired.status, ProjectStatus::Closed);
+    let extended = catalog
+        .update_project(
+            alice,
+            project_id,
+            ProjectPatchInput {
+                deadline: Some(Some(now.date_naive() + chrono::Duration::days(30))),
+                ..ProjectPatchInput::default()
+            },
+            now,
+        )
+        .await
+        .expect("extend project");
+    assert_eq!(extended.status, ProjectStatus::Open);
 
     // 流水线改名；Bob 越权拒绝。
     let renamed = catalog

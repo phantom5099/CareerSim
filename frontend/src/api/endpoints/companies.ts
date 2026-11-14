@@ -147,7 +147,7 @@ interface CompanyListResponse {
 // ---------- DTO → 领域对象 ----------
 
 function projectStatusOf(raw: string): ProjectStatus {
-  return raw === 'open' || raw === 'closing' || raw === 'closed' ? raw : 'open'
+  return raw === 'open' || raw === 'closed' ? raw : 'open'
 }
 
 function toPipeline(dto: PipelineDto): PipelineInfo {

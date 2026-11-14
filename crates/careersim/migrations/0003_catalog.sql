@@ -42,13 +42,13 @@ CREATE TABLE recruitment_projects (
     name        text NOT NULL,             -- 项目名，1..=60，公司内唯一
     name_key    text NOT NULL,             -- 项目名归一化键
     season      text NOT NULL DEFAULT '',  -- 招聘季，如 "2027"
-    status      text NOT NULL,             -- open/closing/closed
+    status      text NOT NULL,             -- open/closed；是否手动关闭，读取时过期派生为 closed
     deadline    date,                      -- 报名截止日期，可空
     description text NOT NULL DEFAULT '',  -- 项目说明
     created_at  timestamptz NOT NULL,      -- 创建时间
     updated_at  timestamptz NOT NULL,      -- 最近更新时间
     deleted_at  timestamptz,               -- 软删除时间；NULL=未删除
-    CONSTRAINT projects_status CHECK (status IN ('open', 'closing', 'closed')),
+    CONSTRAINT projects_status CHECK (status IN ('open', 'closed')),
     CONSTRAINT projects_name_len CHECK (char_length(name) BETWEEN 1 AND 60),
     UNIQUE (company_id, id)
 );

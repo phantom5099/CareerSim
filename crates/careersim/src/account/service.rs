@@ -7,7 +7,8 @@ use chrono::{DateTime, Utc};
 use tokio::task;
 
 use super::model::{
-    AccountError, NewUser, Password, PasswordHash, ProfilePatch, User, UserId, Username,
+    AccountError, DISPLAY_NAME_MAX_CHARS, NewUser, Password, PasswordHash, ProfilePatch, User,
+    UserId, Username,
 };
 use super::password::PasswordHasher;
 use super::session::{SessionId, SessionToken, new_login_session};
@@ -89,10 +90,10 @@ impl AccountService {
         let password = Password::parse(password)?;
         let display_name = display_name.trim();
         let display_chars = display_name.chars().count();
-        if !(1..=40).contains(&display_chars) {
+        if !(1..=DISPLAY_NAME_MAX_CHARS).contains(&display_chars) {
             return Err(AccountError::InvalidProfile {
                 field: "displayName",
-                reason: "must be 1..=40 characters",
+                reason: format!("must be 1..={DISPLAY_NAME_MAX_CHARS} characters"),
             });
         }
 

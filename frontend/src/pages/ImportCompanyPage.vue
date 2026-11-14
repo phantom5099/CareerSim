@@ -225,7 +225,7 @@ function loadIntoForm(template: Record<string, unknown>) {
       key,
       name: clampText(project.name, TEMPLATE_LIMITS.projectName),
       season: clampText(project.season, TEMPLATE_LIMITS.season),
-      status: (['open', 'closing', 'closed'].includes(String(project.status))
+      status: (['open', 'closed'].includes(String(project.status))
         ? project.status
         : 'open') as ProjectStatus,
       deadline: String(project.deadline ?? ''),

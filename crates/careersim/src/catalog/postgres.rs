@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use sqlx::{Executor, PgPool, Postgres, Row, postgres::PgRow};
 
 use super::model::{
@@ -285,13 +285,16 @@ fn project_from_row(row: &PgRow) -> Result<RecruitmentProject, CatalogError> {
     let status_raw: String = column(row, "status")?;
     let status =
         ProjectStatus::parse(&status_raw).ok_or_else(|| corrupted_row("project status"))?;
+    let deadline: Option<NaiveDate> = column(row, "deadline")?;
+    // 过期判定按 UTC+8 自然日，与主要用户群一致的本地日期。
+    let today = (Utc::now() + Duration::hours(8)).date_naive();
     Ok(RecruitmentProject {
         id: ProjectId::from_uuid(id),
         company_id: CompanyId::from_uuid(company_id),
         name: column(row, "name")?,
         season: column(row, "season")?,
-        status,
-        deadline: column(row, "deadline")?,
+        status: status.effective(deadline, today),
+        deadline,
         description: column(row, "description")?,
         created_at: column(row, "created_at")?,
         updated_at: column(row, "updated_at")?,

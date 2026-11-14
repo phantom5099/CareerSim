@@ -41,7 +41,7 @@ const STAGE_KINDS: readonly StageKind[] = [
 
 type Raw = Record<string, unknown>
 
-const PROJECT_STATUSES: readonly ProjectStatus[] = ['open', 'closing', 'closed']
+const PROJECT_STATUSES: readonly ProjectStatus[] = ['open', 'closed']
 const DEFAULT_PIPELINE_KEY = 'pl1'
 
 function isRecord(value: unknown): value is Raw {
@@ -370,7 +370,7 @@ export function generateCompanyTemplate(prompt: string): Record<string, unknown>
       key: 'p2',
       name: internProject,
       season: '日常实习',
-      status: 'closing',
+      status: 'open',
       deadline: futureDate(20),
       description: `每周至少到岗 3 天，${internJobs.map((job) => job.title).join('、')}方向可转正。`,
     })

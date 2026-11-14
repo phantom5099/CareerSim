@@ -5,6 +5,9 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+/// 展示昵称长度上限；注册与资料更新共用。
+pub(crate) const DISPLAY_NAME_MAX_CHARS: usize = 40;
+
 /// 用户唯一标识（uuid v4）；一切归属判断的根。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UserId(Uuid);
@@ -158,10 +161,10 @@ impl ProfilePatch {
     pub fn validate(&self) -> Result<(), AccountError> {
         if let Some(name) = &self.display_name {
             let chars = name.chars().count();
-            if !(1..=40).contains(&chars) {
+            if !(1..=DISPLAY_NAME_MAX_CHARS).contains(&chars) {
                 return Err(AccountError::InvalidProfile {
                     field: "displayName",
-                    reason: "must be 1..=40 characters",
+                    reason: format!("must be 1..={DISPLAY_NAME_MAX_CHARS} characters"),
                 });
             }
         }
@@ -171,7 +174,7 @@ impl ProfilePatch {
                 if chars > 80 {
                     return Err(AccountError::InvalidProfile {
                         field,
-                        reason: "must be at most 80 characters",
+                        reason: "must be at most 80 characters".to_owned(),
                     });
                 }
             }
@@ -181,7 +184,7 @@ impl ProfilePatch {
         {
             return Err(AccountError::InvalidProfile {
                 field: "graduationYear",
-                reason: "must be between 1980 and 2100",
+                reason: "must be between 1980 and 2100".to_owned(),
             });
         }
         for (field, value) in [
@@ -192,13 +195,13 @@ impl ProfilePatch {
                 if value.len() > 10 {
                     return Err(AccountError::InvalidProfile {
                         field,
-                        reason: "must contain at most 10 items",
+                        reason: "must contain at most 10 items".to_owned(),
                     });
                 }
                 if value.iter().any(|item| item.chars().count() > 40) {
                     return Err(AccountError::InvalidProfile {
                         field,
-                        reason: "each item must be at most 40 characters",
+                        reason: "each item must be at most 40 characters".to_owned(),
                     });
                 }
             }
@@ -215,10 +218,7 @@ pub enum AccountError {
     #[error("invalid password: {reason}")]
     InvalidPassword { reason: &'static str },
     #[error("invalid profile field `{field}`: {reason}")]
-    InvalidProfile {
-        field: &'static str,
-        reason: &'static str,
-    },
+    InvalidProfile { field: &'static str, reason: String },
     /// 登录失败统一文案，不区分用户不存在与密码错误。
     #[error("invalid credentials")]
     InvalidCredentials,

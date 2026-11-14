@@ -27,7 +27,7 @@ export const STAGE_NOTES: Record<StageKey, string> = {
   offer: '谈薪与选择',
 }
 
-export type ProjectStatus = 'open' | 'closing' | 'closed'
+export type ProjectStatus = 'open' | 'closed'
 
 export interface RecruitmentProject {
   id: string
@@ -223,8 +223,19 @@ export const APPLICATION_STATUS_LABELS: Record<ApplicationStatus, string> = {
 
 export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
   open: '开放中',
-  closing: '即将截止',
   closed: '已结束',
+}
+
+/** 状态只表示是否手动关闭；deadline 已过（按本地日期比较）对外视为已结束。 */
+export function effectiveProjectStatus(project: {
+  status: ProjectStatus
+  deadline: string
+}): ProjectStatus {
+  if (project.status === 'closed') return 'closed'
+  if (!project.deadline) return 'open'
+  const today = new Date()
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  return project.deadline < todayKey ? 'closed' : 'open'
 }
 
 export function stageIndex(stage: StageKey): number {

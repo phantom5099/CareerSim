@@ -11,9 +11,10 @@ use crate::pipeline::{PipelineDefinition, PipelineError, StageDefinition};
 use super::model::{
     ACCENT_MAX_CHARS, CITY_MAX_CHARS, COMPANY_ACCENTS, COMPANY_DESCRIPTION_MAX_CHARS,
     COMPANY_NAME_MAX_CHARS, COMPANY_SIZES, ENGLISH_NAME_MAX_CHARS, HIGHLIGHT_ITEM_MAX_CHARS,
-    HIGHLIGHT_MAX_ITEMS, INDUSTRY_MAX_CHARS, JOB_DESCRIPTION_MAX_CHARS, JOB_TITLE_MAX_CHARS,
-    JobStatus, JobType, LOGO_TEXT_MAX_CHARS, PROJECT_DESCRIPTION_MAX_CHARS, PROJECT_NAME_MAX_CHARS,
-    ProjectStatus, SEASON_MAX_CHARS, TAGLINE_MAX_CHARS, is_hex_color, normalize_key,
+    HIGHLIGHT_MAX_ITEMS, INDUSTRY_MAX_CHARS, JOB_DESCRIPTION_MAX_CHARS, JOB_TAGS_MAX_ITEMS,
+    JOB_TITLE_MAX_CHARS, JobStatus, JobType, LOGO_TEXT_MAX_CHARS, PROJECT_DESCRIPTION_MAX_CHARS,
+    PROJECT_NAME_MAX_CHARS, ProjectStatus, SALARY_MONTHS_MAX, SEASON_MAX_CHARS, TAGLINE_MAX_CHARS,
+    is_hex_color, normalize_key,
 };
 
 /// 当前模板格式版本；未知版本直接拒绝，不做静默降级。
@@ -429,7 +430,7 @@ fn validate_projects(
                 None => {
                     errors.push(TemplateError::new(
                         format!("{path}.status"),
-                        "must be one of open / closing / closed",
+                        "must be one of open / closed",
                     ));
                     None
                 }
@@ -852,11 +853,11 @@ fn validate_jobs(
         let salary_months = match obj.get("salaryMonths") {
             Some(Value::Null) | None => Some(None),
             Some(value) => match value.as_u64().and_then(|raw| u8::try_from(raw).ok()) {
-                Some(raw) if (1..=24).contains(&raw) => Some(Some(raw)),
+                Some(raw) if (1..=SALARY_MONTHS_MAX).contains(&raw) => Some(Some(raw)),
                 _ => {
                     errors.push(TemplateError::new(
                         format!("{path}.salaryMonths"),
-                        "must be an integer within 1..=24",
+                        format!("must be an integer within 1..={SALARY_MONTHS_MAX}"),
                     ));
                     None
                 }
@@ -875,10 +876,10 @@ fn validate_jobs(
                         )),
                     }
                 }
-                if tags.len() > 12 {
+                if tags.len() > JOB_TAGS_MAX_ITEMS {
                     errors.push(TemplateError::new(
                         format!("{path}.tags"),
-                        "must contain at most 12 items",
+                        format!("must contain at most {JOB_TAGS_MAX_ITEMS} items"),
                     ));
                 }
                 tags

@@ -230,14 +230,7 @@ impl ProjectRequest {
             season: self.season,
             status: self
                 .status
-                .map(|raw| {
-                    parse_status(
-                        &raw,
-                        "status",
-                        "open / closing / closed",
-                        ProjectStatus::parse,
-                    )
-                })
+                .map(|raw| parse_status(&raw, "status", "open / closed", ProjectStatus::parse))
                 .transpose()?,
             deadline: self
                 .deadline
@@ -266,14 +259,7 @@ impl ProjectPatchRequest {
             season: self.season,
             status: self
                 .status
-                .map(|raw| {
-                    parse_status(
-                        &raw,
-                        "status",
-                        "open / closing / closed",
-                        ProjectStatus::parse,
-                    )
-                })
+                .map(|raw| parse_status(&raw, "status", "open / closed", ProjectStatus::parse))
                 .transpose()?,
             deadline: self
                 .deadline

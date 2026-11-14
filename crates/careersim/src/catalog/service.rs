@@ -7,10 +7,10 @@ use std::sync::Arc;
 use chrono::{DateTime, NaiveDate, Utc};
 
 use super::model::{
-    CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySummary, Job, JobId,
-    JobPatch, JobStatus, JobType, ListCursor, NewCompany, NewJob, NewPipeline, NewProject,
-    Pipeline, PipelineId, ProjectId, ProjectPatch, ProjectStatus, RecruitmentProject,
-    validate_company_fields, validate_project_name, validate_salary,
+    CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySummary,
+    JOB_TAGS_MAX_ITEMS, Job, JobId, JobPatch, JobStatus, JobType, ListCursor, NewCompany, NewJob,
+    NewPipeline, NewProject, Pipeline, PipelineId, ProjectId, ProjectPatch, ProjectStatus,
+    RecruitmentProject, validate_company_fields, validate_project_name, validate_salary,
 };
 use super::store::{CatalogScope, CatalogStore};
 use super::template::{self, ValidatedTemplate};
@@ -391,10 +391,10 @@ impl JobInput {
                 reason: "must be a non-empty string".to_owned(),
             });
         }
-        if self.tags.len() > 12 {
+        if self.tags.len() > JOB_TAGS_MAX_ITEMS {
             return Err(CatalogError::InvalidInput {
                 field: "tags",
-                reason: "must contain at most 12 items".to_owned(),
+                reason: format!("must contain at most {JOB_TAGS_MAX_ITEMS} items"),
             });
         }
         validate_salary(self.salary_min, self.salary_max, self.salary_months)?;
@@ -442,11 +442,11 @@ impl JobPatchInput {
             });
         }
         if let Some(tags) = &self.tags
-            && tags.len() > 12
+            && tags.len() > JOB_TAGS_MAX_ITEMS
         {
             return Err(CatalogError::InvalidInput {
                 field: "tags",
-                reason: "must contain at most 12 items".to_owned(),
+                reason: format!("must contain at most {JOB_TAGS_MAX_ITEMS} items"),
             });
         }
         let (min, max, months) = match (self.salary_min, self.salary_max, self.salary_months) {

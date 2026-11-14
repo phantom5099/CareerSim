@@ -10,6 +10,7 @@ import {
   APPLICATION_STATUS_LABELS,
   PROJECT_STATUS_LABELS,
   actionableStage,
+  effectiveProjectStatus,
   formatDate,
 } from '@/domain/types'
 import type { ApplicationStatus, Job, ProjectStatus } from '@/domain/types'
@@ -31,7 +32,6 @@ let flashTimer: number | undefined
 
 const projectTone: Record<ProjectStatus, string> = {
   open: 'border-moss/60 text-moss',
-  closing: 'border-vermilion/50 text-vermilion',
   closed: 'border-line text-ink-faint',
 }
 
@@ -338,9 +338,9 @@ onBeforeUnmount(() => {
                 </h3>
                 <span
                   class="border px-2 py-0.5 text-[0.62rem]"
-                  :class="projectTone[project.status]"
+                  :class="projectTone[effectiveProjectStatus(project)]"
                 >
-                  {{ PROJECT_STATUS_LABELS[project.status] }}
+                  {{ PROJECT_STATUS_LABELS[effectiveProjectStatus(project)] }}
                 </span>
               </div>
               <p class="mt-1.5 text-[0.76rem] leading-6 text-ink-soft">{{ project.description }}</p>
