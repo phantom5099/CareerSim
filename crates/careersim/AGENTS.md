@@ -14,7 +14,7 @@ src/
 ├── app.rs             # 组合根：配置 → 连接池 → 迁移 → 适配器 → Router → 服务
 ├── config.rs          # AppConfig / DbConfig / LlmConfig / HttpConfig / Argon2Config
 ├── error.rs           # ConfigError 与 error_chain
-├── testing.rs         # crate 级测试装配：账户/catalog 端口替身 + Router/oneshot（cfg(test)）
+├── testing.rs         # crate 级测试装配：账户/catalog/resume 端口替身 + Router/oneshot（cfg(test)）
 ├── account.rs         # account 模块入口与公开类型聚合
 ├── account/
 │   ├── model.rs       # UserId/Username/Password/User/ProfilePatch 与字段边界
@@ -38,13 +38,24 @@ src/
 │   ├── template.rs    # CompanyTemplateV1 模板解析与 dry-run 校验
 │   ├── postgres.rs    # PostgreSQL 适配器（可见性 SQL、软删除、唯一冲突）
 │   └── tests.rs       # 仅放该模块单测
+├── resume.rs          # resume 模块入口与公开类型聚合
+├── resume/
+│   ├── model.rs       # Resume/ResumeKind/ResumeAttachment/NewResume/ResumePatch 与限额
+│   ├── content.rs     # ResumeContent 结构化简历与字段校验
+│   ├── parse.rs       # ResumeTextExtractor、附件类型检测与解析草稿构造
+│   ├── service.rs     # ResumeService：CRUD、上传解析、附件打开（≤3 份、默认提升）
+│   ├── store.rs       # ResumeStore trait 与 ResumeStoreError
+│   ├── storage.rs     # AttachmentStore trait（键值字节存储）；实现：LocalFs / S3 兼容
+│   ├── postgres.rs    # PostgreSQL 适配器
+│   └── tests.rs       # 仅放该模块单测
 ├── http.rs            # http 模块入口
 ├── http/
-│   ├── router.rs      # Router 装配、公开/私有分组、AppState
+│   ├── router.rs      # Router 装配、AppState、顶层合并各业务路由（自带分组限流）
 │   ├── auth.rs        # AuthContext 提取器与 Origin 校验
 │   ├── error.rs       # ApiError、ErrorCode 枚举与统一错误体映射
 │   ├── account_routes.rs # 注册/登录/注销/me/改密路由
-│   └── catalog_routes.rs # 公司/项目/流水线/岗位路由与模板导入
+│   ├── catalog_routes.rs # 公司/项目/流水线/岗位路由与模板导入
+│   └── resume_routes.rs # 在线简历 CRUD/设默认路由与附件上传/下载
 ├── agent.rs           # agent 模块入口与公开类型聚合
 ├── agent/
 │   ├── agent_loop.rs  # 回合循环、per-session 互斥、取消、阶段推进
@@ -77,10 +88,11 @@ src/
 
 ```text
 main            → app::run（组合根）
-app             → config / account / catalog / http / llm / store / lib 工厂
-http            → account::{service, model} / catalog::{service, model, store, template} / pipeline（类型）
+app             → config / account / catalog / resume / http / llm / store / lib 工厂
+http            → account::{service, model} / catalog::{service, model, store, template} / resume::{service, model} / pipeline（类型）
 account         → 无业务依赖（除 error）
 catalog         → account（UserId 等类型）/ pipeline（PipelineDefinition）
+resume          → account（UserId 等类型）
 pipeline        → 无业务依赖（纯领域）
 agent_loop      → context / session / stage / tool / llm::{LlmClient} / error
 session         → stage / role / tool / llm::client / store（crate 内）
@@ -205,6 +217,11 @@ config          → error / llm::provider
 
 ### 5.1 存储层
 
+附件二进制存储（`AttachmentStore`，键 `[A-Za-z0-9_-]{1,128}`）由
+`RESUME_STORAGE_BACKEND` 选择：`local`（默认，`RESUME_STORAGE_DIR`）或 `s3`
+（S3 兼容：`S3_ENDPOINT`/`S3_REGION`/`S3_BUCKET`/`S3_ACCESS_KEY_ID`/
+`S3_SECRET_ACCESS_KEY`，path-style，适配 MinIO/SeaweedFS/R2 等）。
+
 - `create`：同一事务写入 `sessions` 行与 `seq = 0` 的 `session_meta`；UUID 冲突有限次
   重试；`append` 拒绝 `SessionMeta`。
 - `append`：空批次直接返回；事务内 `SELECT ... FOR UPDATE` 锁住会话行；用期望的
@@ -291,6 +308,7 @@ cargo test store::memory
 | --- | --- |
 | 新增账户能力或改会话语义 | `account/service.rs` + `account/store.rs` + 测试 |
 | 新增目录能力（公司/项目/流水线/岗位/模板） | `catalog/service.rs` + `catalog/store.rs` + `http/catalog_routes.rs` + 测试 |
+| 新增简历能力（在线内容/附件/解析） | `resume/service.rs` + `resume/store.rs` + `http/resume_routes.rs` + 测试 |
 | 新增 HTTP 路由 | `http/` 下新建路由文件 + `http/router.rs` 追加挂载行 |
 | 新增事件类型 | `agent/session.rs` + `agent/context.rs` 投影 + 测试；必要时迁移 |
 | 调整阶段顺序或新增阶段 | `agent/stage.rs` + `agent/role.rs` + 提示词 + 测试 |

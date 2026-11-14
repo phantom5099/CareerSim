@@ -9,6 +9,7 @@ use axum::routing::{get, patch, post};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tower_http::limit::RequestBodyLimitLayer;
 use uuid::Uuid;
 
 use crate::catalog::model::{Company, CompanySummary};
@@ -25,11 +26,14 @@ use crate::catalog::{
 use crate::pipeline::StageDefinition;
 
 use super::auth::AuthContext;
-use super::error::ApiError;
+use super::error::{ApiError, render_backend_chain};
 use super::router::AppState;
 
 #[cfg(test)]
 mod tests;
+
+/// JSON 请求体上限：与账户/简历 JSON 路由一致（1 MiB）。
+const BODY_LIMIT_BYTES: usize = 1024 * 1024;
 
 /// catalog 路由组；state 由外层 `router()` 统一注入。
 pub fn router() -> Router<AppState> {
@@ -64,6 +68,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/jobs/{jobId}", patch(update_job).delete(delete_job))
         .route("/api/v1/companies/import/validate", post(validate_template))
         .route("/api/v1/companies/import", post(import_template))
+        .layer(RequestBodyLimitLayer::new(BODY_LIMIT_BYTES))
 }
 
 // ---------- 错误映射 ----------
@@ -89,14 +94,7 @@ impl From<CatalogError> for ApiError {
             }
             // 后端错误细节只进日志；不透出 SQL 与连接信息。
             CatalogError::Backend { message, source } => {
-                match source.as_deref() {
-                    Some(inner) => tracing::error!(
-                        operation = %message,
-                        error = %crate::error::error_chain(inner),
-                        "catalog backend error"
-                    ),
-                    None => tracing::error!(operation = %message, "catalog backend error"),
-                }
+                tracing::error!(error = %render_backend_chain(&message, source.as_deref()), "catalog backend error");
                 ApiError::internal_error()
             }
         }

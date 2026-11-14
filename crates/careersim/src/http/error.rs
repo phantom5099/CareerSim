@@ -5,8 +5,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
-use crate::account::model::AccountError;
-
 /// 对外错误码集合；serde 序列化结果即 wire 契约（plan/00 §6.2 的 code）。
 /// 新增变体时必须同步补全 `status()` 的穷尽 match，编译器强制两者同步演进。
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -150,30 +148,8 @@ impl IntoResponse for ApiError {
     }
 }
 
-impl From<AccountError> for ApiError {
-    fn from(err: AccountError) -> Self {
-        match err {
-            AccountError::InvalidUsername { .. } | AccountError::InvalidPassword { .. } => {
-                ApiError::validation_failed(err.to_string())
-            }
-            AccountError::InvalidProfile { field, .. } => {
-                ApiError::validation_fields(err.to_string(), vec![field.to_owned()])
-            }
-            AccountError::InvalidCredentials => ApiError::invalid_credentials(),
-            AccountError::CurrentPasswordMismatch => ApiError::current_password_mismatch(),
-            AccountError::UsernameTaken => ApiError::conflict("username already taken"),
-            AccountError::Unauthenticated => ApiError::unauthenticated(),
-            // 后端错误细节只进日志；对外统一 internal_error，避免泄露内部信息。
-            AccountError::Backend { message, source } => {
-                tracing::error!(error = %render_backend_chain(&message, source.as_deref()), "account backend error");
-                ApiError::internal_error()
-            }
-        }
-    }
-}
-
 /// 把 message 与 source 链拼成一行；后续 `source()` 返回 `&dyn Error`，故游标做窄类型。
-fn render_backend_chain(
+pub(crate) fn render_backend_chain(
     message: &str,
     source: Option<&(dyn std::error::Error + Send + Sync + 'static)>,
 ) -> String {
