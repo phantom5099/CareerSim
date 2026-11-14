@@ -8,11 +8,27 @@ use crate::agent::Message;
 use crate::agent::ToolCall;
 use crate::agent::ToolSpec;
 
+/// 工具选择策略；评估轮强制指定 `Function`。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ToolChoice {
+    /// 模型自行决定是否调用工具。
+    #[default]
+    Auto,
+    /// 强制调用指定函数；评估轮指向 `complete_stage`。
+    Function { name: String },
+}
+
 /// 供应商无关的模型请求；模型名与采样参数由客户端构造时固定。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChatRequest {
     pub messages: Vec<Message>,
     pub tools: Vec<ToolSpec>,
+    /// 工具选择策略；`None` 时按 `Auto` 处理。
+    pub tool_choice: ToolChoice,
+    /// 采样温度；评估轮调低（如 0.2），`None` 时用部署配置。
+    pub temperature: Option<f32>,
+    /// 输出 token 上限；`None` 时用部署配置。
+    pub max_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

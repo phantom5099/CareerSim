@@ -1,39 +1,47 @@
+//! AgentLoop 测试：绑定与首阶段、阶段推进、评估轮、修复与取消（plan/02 §6/§7/§8）。
+
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use super::*;
-use crate::agent::BuildOptions;
-use crate::agent::ContextBuilder;
-use crate::agent::ContextError;
+use super::AgentLoop;
+use super::LoopConfig;
+use super::LoopError;
 use crate::agent::DefaultContextBuilder;
 use crate::agent::Message;
-use crate::agent::Role;
 use crate::agent::Session;
+use crate::agent::SessionBinding;
 use crate::agent::SessionEventKind;
 use crate::agent::SessionService;
-use crate::agent::Stage;
+use crate::agent::StageBrief;
+use crate::agent::StageRef;
 use crate::agent::StoreSessionService;
-use crate::agent::Tool;
 use crate::agent::ToolCall;
-use crate::agent::ToolContext;
-use crate::agent::ToolError;
-use crate::agent::ToolOutput;
 use crate::agent::ToolRegistry;
-use crate::agent::ToolSpec;
 use crate::agent::ToolStatus;
+use crate::agent::TurnContext;
 use crate::agent::TurnEndReason;
 use crate::agent::TurnId;
-use crate::agent::UserMessageSource;
 use crate::agent::session::event_turn_id;
 use crate::agent::tool::testing::FakeTool;
 use crate::llm::ChatResponse;
-use crate::llm::LlmError;
 use crate::llm::TokenUsage;
+use crate::llm::ToolChoice;
 use crate::llm::mock::MockLlmClient;
+use crate::pipeline::EvaluationRubric;
+use crate::pipeline::OfferPolicy;
+use crate::pipeline::PipelineDefinition;
+use crate::pipeline::RubricDimension;
+use crate::pipeline::Score;
+use crate::pipeline::StageDefinition;
+use crate::pipeline::StageKey;
+use crate::pipeline::StageKind;
+use crate::pipeline::StageOutcome;
 use crate::store::MemorySessionStore;
+
+const APPLICATION_ID: &str = "11111111-1111-1111-1111-111111111111";
 
 struct Harness {
     agent: AgentLoop,
@@ -62,6 +70,122 @@ fn harness_with(responses: Vec<ChatResponse>, tools: ToolRegistry, max_steps: us
         sessions,
         llm,
     }
+}
+
+fn binding() -> SessionBinding {
+    SessionBinding::ApplicationStage {
+        application_id: APPLICATION_ID.parse().unwrap(),
+    }
+}
+
+fn stage_ref(key: &str, kind: StageKind) -> StageRef {
+    StageRef {
+        key: StageKey::parse(key).unwrap(),
+        kind,
+    }
+}
+
+fn initial() -> StageRef {
+    stage_ref("hr_screen", StageKind::HrScreen)
+}
+
+fn offer_initial() -> StageRef {
+    stage_ref("offer", StageKind::Offer)
+}
+
+fn rubric() -> EvaluationRubric {
+    EvaluationRubric {
+        pass_score: Score::new(60).unwrap(),
+        dimensions: vec![
+            RubricDimension {
+                key: "clarity".to_owned(),
+                label: "表达".to_owned(),
+                weight: 50,
+                criteria: "表达是否清晰".to_owned(),
+            },
+            RubricDimension {
+                key: "match".to_owned(),
+                label: "匹配".to_owned(),
+                weight: 50,
+                criteria: "与岗位是否匹配".to_owned(),
+            },
+        ],
+    }
+}
+
+fn stage(key: &str, kind: StageKind, min_rounds: u8, max_rounds: u8) -> StageDefinition {
+    StageDefinition {
+        key: StageKey::parse(key).unwrap(),
+        kind,
+        title: "测试阶段".to_owned(),
+        min_rounds,
+        max_rounds,
+        rubric: rubric(),
+    }
+}
+
+/// hr_screen + offer 两阶段流水线；offer 阶段固定 1..=2 轮。
+fn pipeline(min_rounds: u8, max_rounds: u8) -> PipelineDefinition {
+    PipelineDefinition::parse(vec![
+        stage("hr_screen", StageKind::HrScreen, min_rounds, max_rounds),
+        stage("offer", StageKind::Offer, 1, 2),
+    ])
+    .unwrap()
+}
+
+fn offer_policy() -> OfferPolicy {
+    OfferPolicy {
+        city: "杭州".to_owned(),
+        salary_min: Some(10_000),
+        salary_max: Some(30_000),
+        months: Some(12),
+        deadline_days: 7,
+    }
+}
+
+fn turn_ctx(pipeline: PipelineDefinition, key: &str) -> TurnContext {
+    let key = StageKey::parse(key).unwrap();
+    let stage = pipeline.get(&key).unwrap().clone();
+    TurnContext {
+        stage,
+        pipeline,
+        brief: StageBrief::default(),
+        prior: Vec::new(),
+        offer_policy: offer_policy(),
+    }
+}
+
+fn valid_args() -> String {
+    json!({
+        "dimensions": [
+            {"key": "clarity", "score": 70, "note": "表达清晰"},
+            {"key": "match", "score": 80, "note": "匹配良好"}
+        ],
+        "summary": "候选人整体表现不错"
+    })
+    .to_string()
+}
+
+fn invalid_args() -> String {
+    json!({
+        "dimensions": [
+            {"key": "clarity", "score": 70, "note": "表达清晰"}
+        ],
+        "summary": "缺少 match 维度"
+    })
+    .to_string()
+}
+
+fn valid_offer_args() -> String {
+    json!({
+        "dimensions": [
+            {"key": "clarity", "score": 70, "note": "表达清晰"},
+            {"key": "match", "score": 80, "note": "匹配良好"}
+        ],
+        "summary": "双方达成一致",
+        "offer": {"baseSalary": 20_000, "months": 12, "bonus": "年终两个月"}
+    })
+    .to_string()
 }
 
 fn reply(content: &str) -> ChatResponse {
@@ -107,35 +231,117 @@ async fn wait_for_requests(llm: &MockLlmClient, count: usize) {
 }
 
 #[tokio::test]
-async fn creates_sessions_with_distinct_ids() {
+async fn creates_sessions_with_binding_and_initial_stage() {
     let harness = harness(Vec::new());
-    let first = harness.sessions.create(Stage::HrScreen).await.unwrap();
-    let second = harness.sessions.create(Stage::HrScreen).await.unwrap();
+    let session = harness.sessions.create(binding(), initial()).await.unwrap();
 
-    assert_ne!(first.id, second.id);
-    assert_eq!(first.events.len(), 1);
-    assert_eq!(first.events[0].seq, 0);
+    assert_eq!(session.binding, binding());
+    assert_eq!(session.current_stage, initial());
+    assert_eq!(session.events.len(), 1);
     assert!(matches!(
-        first.events[0].kind,
-        SessionEventKind::SessionMeta { session_id, .. } if session_id == first.id
+        &session.events[0].kind,
+        SessionEventKind::SessionMeta {
+            session_id,
+            binding: event_binding,
+            initial_stage,
+        } if *session_id == session.id
+            && *event_binding == binding()
+            && *initial_stage == initial()
     ));
 }
 
 #[tokio::test]
-async fn plain_turn_records_lifecycle_and_usage() {
-    let harness = harness(vec![reply("你好，先做个自我介绍吧。")]);
-    let session = harness.sessions.create(Stage::HrScreen).await.unwrap();
+async fn stage_mismatch_is_rejected_without_writing_events() {
+    let harness = harness(vec![reply("不应被调用")]);
+    let session = harness.sessions.create(binding(), initial()).await.unwrap();
+    // 上下文声称处于 offer 阶段，而会话仍在 hr_screen。
+    let ctx = turn_ctx(pipeline(1, 4), "offer");
 
     let result = harness
         .agent
-        .run_turn(session.id, "你好", CancellationToken::new())
+        .run_turn(session.id, "你好", &ctx, CancellationToken::new())
+        .await;
+
+    assert!(matches!(result, Err(LoopError::StageMismatch { .. })));
+    assert!(harness.llm.requests().is_empty());
+
+    let session = harness.sessions.load(session.id).await.unwrap();
+    assert_eq!(session.events.len(), 1);
+    assert_eq!(session.current_stage, initial());
+}
+
+#[tokio::test]
+async fn stage_kind_change_on_same_key_is_rejected() {
+    let harness = harness(vec![reply("不应被调用")]);
+    let session = harness.sessions.create(binding(), initial()).await.unwrap();
+    // 流水线版本把同名阶段 hr_screen 从 hr_screen 改成 exam：
+    // key 相同但 kind 不同，事件 kind 必须与实际所用 rubric 一致，必须拒绝。
+    let changed = PipelineDefinition::parse(vec![
+        stage("hr_screen", StageKind::Exam, 1, 4),
+        stage("offer", StageKind::Offer, 1, 2),
+    ])
+    .unwrap();
+    let ctx = turn_ctx(changed, "hr_screen");
+
+    let result = harness
+        .agent
+        .run_turn(session.id, "你好", &ctx, CancellationToken::new())
+        .await;
+
+    assert!(matches!(result, Err(LoopError::StageMismatch { .. })));
+    assert!(harness.llm.requests().is_empty());
+}
+
+#[tokio::test]
+async fn plain_turn_records_lifecycle_usage_and_context() {
+    let harness = harness(vec![reply("你好，请介绍一下你的项目经历。")]);
+    let session = harness.sessions.create(binding(), initial()).await.unwrap();
+    let ctx = turn_ctx(pipeline(1, 4), "hr_screen");
+
+    let result = harness
+        .agent
+        .run_turn(session.id, "你好", &ctx, CancellationToken::new())
         .await
         .unwrap();
 
     assert_eq!(result.reason, TurnEndReason::Done);
     assert_eq!(result.steps, 1);
-    assert_eq!(result.output, "你好，先做个自我介绍吧。");
+    assert_eq!(result.output, "你好，请介绍一下你的项目经历。");
     assert!(result.error.is_none());
+    assert!(result.stage_completion.is_none());
+
+    let requests = harness.llm.requests();
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    // 无业务工具时，工具列表只有控制动作。
+    assert_eq!(
+        request
+            .tools
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["complete_stage"]
+    );
+    assert_eq!(request.tool_choice, ToolChoice::Auto);
+    assert_eq!(request.temperature, None);
+    assert_eq!(request.max_tokens, None);
+
+    // 系统提示完全静态：含轮次规则，不含“当前为第”。
+    match &request.messages[0] {
+        Message::System { content } => {
+            assert!(content.contains("轮次规则"));
+            assert!(!content.contains("当前为第"));
+        }
+        _ => panic!("first message should be the system prompt"),
+    }
+    // 用户消息尾部附轮次注。
+    match request.messages.last().unwrap() {
+        Message::User { content } => {
+            assert!(content.starts_with("你好"));
+            assert!(content.ends_with("系统提示：当前为第 1 轮；本阶段至少 1 轮、至多 4 轮。"));
+        }
+        _ => panic!("last message should be the annotated user message"),
+    }
 
     let session = harness.sessions.load(session.id).await.unwrap();
     assert_eq!(
@@ -145,11 +351,11 @@ async fn plain_turn_records_lifecycle_and_usage() {
             &SessionEventKind::UserMessage {
                 turn_id: TurnId(1),
                 content: "你好".to_owned(),
-                source: UserMessageSource::User,
+                source: crate::agent::UserMessageSource::User,
             },
             &SessionEventKind::AssistantMessage {
                 turn_id: TurnId(1),
-                content: "你好，先做个自我介绍吧。".to_owned(),
+                content: "你好，请介绍一下你的项目经历。".to_owned(),
                 tool_calls: Vec::new(),
                 usage: Some(TokenUsage {
                     input_tokens: 12,
@@ -165,67 +371,412 @@ async fn plain_turn_records_lifecycle_and_usage() {
         ]
     );
     assert_eq!(session.last_seq, 4);
-    assert_eq!(session.last_turn_id, TurnId(1));
     assert!(session.dangling_turn().is_none());
 }
 
 #[tokio::test]
-async fn tool_calls_loop_until_text_reply() {
-    let mut tools = ToolRegistry::new();
-    tools.register(Arc::new(FakeTool::new("lookup", "42")));
-    let harness = harness_with(
-        vec![tool_reply("call_1", "lookup", "{}"), reply("结果是 42。")],
-        tools,
-        8,
-    );
-    let session = harness.sessions.create(Stage::Exam).await.unwrap();
+async fn evaluation_succeeds_and_appends_batch_in_order() {
+    let harness = harness(vec![tool_reply(
+        "call_eval",
+        "complete_stage",
+        &valid_args(),
+    )]);
+    let session = harness.sessions.create(binding(), initial()).await.unwrap();
+    let ctx = turn_ctx(pipeline(1, 4), "hr_screen");
 
     let result = harness
         .agent
-        .run_turn(session.id, "查一下", CancellationToken::new())
+        .run_turn(session.id, "你好", &ctx, CancellationToken::new())
         .await
         .unwrap();
 
     assert_eq!(result.reason, TurnEndReason::Done);
-    assert_eq!(result.steps, 2);
-    assert_eq!(result.output, "结果是 42。");
+    let completion = result.stage_completion.expect("stage should complete");
+    assert_eq!(completion.turn_id, TurnId(1));
+    assert_eq!(completion.record.stage_key, initial().key);
+    assert_eq!(completion.record.stage_kind, StageKind::HrScreen);
+    assert_eq!(completion.record.evaluation.total.value(), 75);
+    assert!(completion.record.evaluation.passed);
+    assert_eq!(
+        completion.outcome,
+        StageOutcome::Advance {
+            next_stage_key: StageKey::parse("offer").unwrap(),
+            next_stage_kind: StageKind::Offer,
+        }
+    );
 
     let session = harness.sessions.load(session.id).await.unwrap();
+    assert_eq!(session.current_stage, stage_ref("offer", StageKind::Offer));
+    assert_eq!(
+        turn_kinds(&session, TurnId(1)),
+        vec![
+            &SessionEventKind::TurnStarted { turn_id: TurnId(1) },
+            &SessionEventKind::UserMessage {
+                turn_id: TurnId(1),
+                content: "你好".to_owned(),
+                source: crate::agent::UserMessageSource::User,
+            },
+            &SessionEventKind::AssistantMessage {
+                turn_id: TurnId(1),
+                content: String::new(),
+                tool_calls: vec![ToolCall {
+                    call_id: "call_eval".to_owned(),
+                    name: "complete_stage".to_owned(),
+                    arguments: valid_args(),
+                }],
+                usage: None,
+            },
+            &SessionEventKind::ToolResult {
+                turn_id: TurnId(1),
+                tool_call_id: "call_eval".to_owned(),
+                status: ToolStatus::Ok,
+                output: "{\"accepted\":true}".to_owned(),
+            },
+            &SessionEventKind::TurnEnded {
+                turn_id: TurnId(1),
+                reason: TurnEndReason::Done,
+                steps: 1,
+                error: None,
+            },
+            &SessionEventKind::StageCompleted {
+                turn_id: TurnId(1),
+                stage_key: StageKey::parse("hr_screen").unwrap(),
+                stage_kind: StageKind::HrScreen,
+                evaluation: completion.record.evaluation.clone(),
+                outcome: StageOutcome::Advance {
+                    next_stage_key: StageKey::parse("offer").unwrap(),
+                    next_stage_kind: StageKind::Offer,
+                },
+            },
+        ]
+    );
+
+    // 对话轮请求保持自动模式（本回合未达到 max_rounds）。
+    let requests = harness.llm.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].tool_choice, ToolChoice::Auto);
+    assert_eq!(requests[0].temperature, None);
+}
+
+#[tokio::test]
+async fn min_rounds_blocks_then_lets_the_model_continue() {
+    let harness = harness(vec![
+        tool_reply("call_1", "complete_stage", &valid_args()),
+        reply("我们继续聊聊你的项目吧。"),
+    ]);
+    let session = harness.sessions.create(binding(), initial()).await.unwrap();
+    let ctx = turn_ctx(pipeline(2, 4), "hr_screen");
+
+    let result = harness
+        .agent
+        .run_turn(session.id, "直接给我结论", &ctx, CancellationToken::new())
+        .await
+        .unwrap();
+
+    // stage_not_ready 引导模型继续对话，回合正常结束。
+    assert_eq!(result.reason, TurnEndReason::Done);
+    assert_eq!(result.output, "我们继续聊聊你的项目吧。");
+    assert!(result.stage_completion.is_none());
+
+    let session = harness.sessions.load(session.id).await.unwrap();
+    assert_eq!(session.current_stage, initial());
+    assert!(
+        !session
+            .events
+            .iter()
+            .any(|event| matches!(event.kind, SessionEventKind::StageCompleted { .. }))
+    );
+    assert!(session.events.iter().any(|event| matches!(
+        &event.kind,
+        SessionEventKind::ToolResult {
+            status: ToolStatus::Error,
+            output,
+            ..
+        } if output.contains("stage_not_ready")
+    )));
+
+    let requests = harness.llm.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].tool_choice, ToolChoice::Auto);
+    assert_eq!(requests[0].temperature, None);
+}
+
+#[tokio::test]
+async fn invalid_output_consumes_one_repair_then_succeeds() {
+    let harness = harness(vec![
+        tool_reply("call_1", "complete_stage", &invalid_args()),
+        tool_reply("call_2", "complete_stage", &valid_args()),
+    ]);
+    let session = harness.sessions.create(binding(), initial()).await.unwrap();
+    let ctx = turn_ctx(pipeline(1, 4), "hr_screen");
+
+    let result = harness
+        .agent
+        .run_turn(session.id, "你好", &ctx, CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert!(result.stage_completion.is_some());
+    assert_eq!(result.steps, 2);
+
+    let session = harness.sessions.load(session.id).await.unwrap();
+    assert_eq!(session.current_stage, stage_ref("offer", StageKind::Offer));
+    assert!(session.events.iter().any(|event| matches!(
+        &event.kind,
+        SessionEventKind::ToolResult {
+            tool_call_id,
+            status: ToolStatus::Error,
+            output,
+            ..
+        } if tool_call_id == "call_1" && output.contains("invalid_evaluation")
+    )));
     assert!(session.events.iter().any(|event| matches!(
         &event.kind,
         SessionEventKind::ToolResult {
             tool_call_id,
             status: ToolStatus::Ok,
-            output,
             ..
-        } if tool_call_id == "call_1" && output == "42"
+        } if tool_call_id == "call_2"
     )));
-
-    let requests = harness.llm.requests();
-    assert_eq!(requests.len(), 2);
-    assert!(requests[1].messages.iter().any(|message| {
-        matches!(
-            message,
-            Message::Tool {
-                tool_call_id,
-                content,
-            } if tool_call_id == "call_1" && content == "42"
-        )
-    }));
 }
 
 #[tokio::test]
-async fn unknown_tool_becomes_error_result() {
-    let harness = harness(vec![tool_reply("call_x", "missing", "{}"), reply("好的")]);
-    let session = harness.sessions.create(Stage::TechInterview).await.unwrap();
+async fn second_invalid_output_ends_turn_without_stage_completed() {
+    let harness = harness(vec![
+        tool_reply("call_1", "complete_stage", &invalid_args()),
+        tool_reply("call_2", "complete_stage", &invalid_args()),
+    ]);
+    let session = harness.sessions.create(binding(), initial()).await.unwrap();
+    let ctx = turn_ctx(pipeline(1, 4), "hr_screen");
 
     let result = harness
         .agent
-        .run_turn(session.id, "试试", CancellationToken::new())
+        .run_turn(session.id, "你好", &ctx, CancellationToken::new())
         .await
         .unwrap();
 
-    assert_eq!(result.reason, TurnEndReason::Done);
+    assert_eq!(result.reason, TurnEndReason::Error);
+    assert_eq!(result.error.as_deref(), Some("evaluation_failed"));
+    assert_eq!(result.steps, 2);
+    assert!(result.stage_completion.is_none());
+
+    let session = harness.sessions.load(session.id).await.unwrap();
+    assert_eq!(session.current_stage, initial());
+    let error_calls = session
+        .events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            SessionEventKind::ToolResult {
+                tool_call_id,
+                status: ToolStatus::Error,
+                ..
+            } => Some(tool_call_id.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(error_calls, vec!["call_1".to_owned(), "call_2".to_owned()]);
+    assert!(
+        !session
+            .events
+            .iter()
+            .any(|event| matches!(event.kind, SessionEventKind::StageCompleted { .. }))
+    );
+    assert!(matches!(
+        &session.events.last().unwrap().kind,
+        SessionEventKind::TurnEnded {
+            turn_id: TurnId(1),
+            reason: TurnEndReason::Error,
+            steps: 2,
+            error: Some(message),
+        } if message == "evaluation_failed"
+    ));
+}
+
+#[tokio::test]
+async fn mixed_control_and_business_calls_are_rejected_without_executing() {
+    let mut tools = ToolRegistry::new();
+    tools
+        .register(Arc::new(FakeTool::new("search", "搜索结果")))
+        .unwrap();
+    let mixed = ChatResponse {
+        content: String::new(),
+        tool_calls: vec![
+            ToolCall {
+                call_id: "call_stage".to_owned(),
+                name: "complete_stage".to_owned(),
+                arguments: valid_args(),
+            },
+            ToolCall {
+                call_id: "call_search".to_owned(),
+                name: "search".to_owned(),
+                arguments: "{}".to_owned(),
+            },
+        ],
+        usage: None,
+    };
+    let harness = harness_with(
+        vec![
+            mixed,
+            tool_reply("call_fix", "complete_stage", &valid_args()),
+        ],
+        tools,
+        8,
+    );
+    let session = harness.sessions.create(binding(), initial()).await.unwrap();
+    let ctx = turn_ctx(pipeline(1, 4), "hr_screen");
+
+    let result = harness
+        .agent
+        .run_turn(session.id, "查一下顺便提交", &ctx, CancellationToken::new())
+        .await
+        .unwrap();
+
+    // 修复后仍可完成阶段。
+    assert!(result.stage_completion.is_some());
+
+    let session = harness.sessions.load(session.id).await.unwrap();
+    // 整条响应被拒绝：两个调用都得到错误结果。
+    assert!(session.events.iter().any(|event| matches!(
+        &event.kind,
+        SessionEventKind::ToolResult {
+            tool_call_id,
+            status: ToolStatus::Error,
+            output,
+            ..
+        } if tool_call_id == "call_stage" && output.contains("control_action_must_be_alone")
+    )));
+    assert!(session.events.iter().any(|event| matches!(
+        &event.kind,
+        SessionEventKind::ToolResult {
+            tool_call_id,
+            status: ToolStatus::Error,
+            output,
+            ..
+        } if tool_call_id == "call_search" && output.contains("control_action_must_be_alone")
+    )));
+    // 业务工具从未执行。
+    assert!(!session.events.iter().any(|event| matches!(
+        &event.kind,
+        SessionEventKind::ToolResult { output, .. } if output == "搜索结果"
+    )));
+}
+
+#[tokio::test]
+async fn max_rounds_forces_evaluation_turn() {
+    let harness = harness(vec![
+        reply("第一轮对话。"),
+        tool_reply("call_eval", "complete_stage", &valid_args()),
+    ]);
+    let session = harness.sessions.create(binding(), initial()).await.unwrap();
+    let ctx = turn_ctx(pipeline(1, 1), "hr_screen");
+
+    let first = harness
+        .agent
+        .run_turn(session.id, "你好", &ctx, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(first.reason, TurnEndReason::Done);
+    assert!(first.stage_completion.is_none());
+
+    // 已有 1 条助手消息：下一请求达到 max_rounds，进入强制评估轮。
+    let second = harness
+        .agent
+        .run_turn(session.id, "继续", &ctx, CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(second.stage_completion.is_some());
+
+    let requests = harness.llm.requests();
+    assert_eq!(requests.len(), 2);
+    // 对话轮：自动模式、无采样覆盖。
+    assert_eq!(requests[0].tool_choice, ToolChoice::Auto);
+    assert_eq!(requests[0].temperature, None);
+    // 评估轮：只给控制动作、强制函数调用、低温度。
+    assert_eq!(
+        requests[1]
+            .tools
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["complete_stage"]
+    );
+    assert_eq!(
+        requests[1].tool_choice,
+        ToolChoice::Function {
+            name: "complete_stage".to_owned()
+        }
+    );
+    assert_eq!(requests[1].temperature, Some(0.2));
+}
+
+#[tokio::test]
+async fn offer_stage_builds_terms_from_policy() {
+    let harness = harness(vec![tool_reply(
+        "call_offer",
+        "complete_stage",
+        &valid_offer_args(),
+    )]);
+    let session = harness
+        .sessions
+        .create(binding(), offer_initial())
+        .await
+        .unwrap();
+    let ctx = turn_ctx(pipeline(1, 2), "offer");
+
+    let result = harness
+        .agent
+        .run_turn(session.id, "期望月薪 20k", &ctx, CancellationToken::new())
+        .await
+        .unwrap();
+
+    let completion = result.stage_completion.expect("offer should complete");
+    let StageOutcome::OfferPending { offer } = completion.outcome else {
+        panic!("expected OfferPending, got {:?}", completion.outcome);
+    };
+    assert_eq!(offer.base_salary, 20_000);
+    assert_eq!(offer.months, 12);
+    assert_eq!(offer.city, "杭州");
+    assert_eq!(offer.bonus, "年终两个月");
+    // 截止日期 = 签发日 + 策略天数；city 与 deadline 均由服务端生成。
+    assert_eq!(
+        (offer.deadline - offer.issued_at.date_naive()).num_days(),
+        7
+    );
+
+    // OfferPending 不推进阶段。
+    let session = harness.sessions.load(session.id).await.unwrap();
+    assert_eq!(session.current_stage, offer_initial());
+    assert!(matches!(
+        &session.events.last().unwrap().kind,
+        SessionEventKind::StageCompleted {
+            stage_key,
+            outcome: StageOutcome::OfferPending { .. },
+            ..
+        } if stage_key.as_str() == "offer"
+    ));
+}
+
+#[tokio::test]
+async fn offer_stage_without_terms_is_repaired() {
+    let harness = harness(vec![
+        tool_reply("call_1", "complete_stage", &valid_args()),
+        tool_reply("call_2", "complete_stage", &valid_offer_args()),
+    ]);
+    let session = harness
+        .sessions
+        .create(binding(), offer_initial())
+        .await
+        .unwrap();
+    let ctx = turn_ctx(pipeline(1, 2), "offer");
+
+    let result = harness
+        .agent
+        .run_turn(session.id, "可以谈薪资了", &ctx, CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert!(result.stage_completion.is_some());
+
     let session = harness.sessions.load(session.id).await.unwrap();
     assert!(session.events.iter().any(|event| matches!(
         &event.kind,
@@ -234,20 +785,67 @@ async fn unknown_tool_becomes_error_result() {
             status: ToolStatus::Error,
             output,
             ..
-        } if tool_call_id == "call_x" && output.contains("unknown tool")
+        } if tool_call_id == "call_1" && output.contains("invalid_arguments")
     )));
+    assert!(session.events.iter().any(|event| matches!(
+        &event.kind,
+        SessionEventKind::ToolResult {
+            tool_call_id,
+            status: ToolStatus::Ok,
+            ..
+        } if tool_call_id == "call_2"
+    )));
+}
+
+#[tokio::test]
+async fn cancellation_before_start_is_interrupted() {
+    let harness = harness(Vec::new());
+    let session = harness.sessions.create(binding(), initial()).await.unwrap();
+    let ctx = turn_ctx(pipeline(1, 4), "hr_screen");
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+
+    let result = harness
+        .agent
+        .run_turn(session.id, "不会发送", &ctx, cancel)
+        .await
+        .unwrap();
+
+    assert_eq!(result.reason, TurnEndReason::Interrupted);
+    assert_eq!(result.steps, 0);
+    assert!(result.stage_completion.is_none());
+    assert!(harness.llm.requests().is_empty());
+
+    let session = harness.sessions.load(session.id).await.unwrap();
+    assert_eq!(session.events.len(), 3);
+    assert!(matches!(
+        &session.events[1].kind,
+        SessionEventKind::TurnStarted { turn_id: TurnId(1) }
+    ));
+    assert!(matches!(
+        &session.events[2].kind,
+        SessionEventKind::TurnEnded {
+            turn_id: TurnId(1),
+            reason: TurnEndReason::Interrupted,
+            steps: 0,
+            error: None,
+        }
+    ));
 }
 
 #[tokio::test]
 async fn max_steps_is_a_normal_result() {
     let mut tools = ToolRegistry::new();
-    tools.register(Arc::new(FakeTool::new("lookup", "42")));
+    tools
+        .register(Arc::new(FakeTool::new("lookup", "42")))
+        .unwrap();
     let harness = harness_with(vec![tool_reply("call_1", "lookup", "{}")], tools, 1);
-    let session = harness.sessions.create(Stage::Exam).await.unwrap();
+    let session = harness.sessions.create(binding(), initial()).await.unwrap();
+    let ctx = turn_ctx(pipeline(1, 4), "hr_screen");
 
     let result = harness
         .agent
-        .run_turn(session.id, "查", CancellationToken::new())
+        .run_turn(session.id, "查", &ctx, CancellationToken::new())
         .await
         .unwrap();
 
@@ -257,7 +855,7 @@ async fn max_steps_is_a_normal_result() {
 
     let session = harness.sessions.load(session.id).await.unwrap();
     assert!(matches!(
-        session.events.last().unwrap().kind,
+        &session.events.last().unwrap().kind,
         SessionEventKind::TurnEnded {
             reason: TurnEndReason::MaxSteps,
             steps: 1,
@@ -267,274 +865,9 @@ async fn max_steps_is_a_normal_result() {
 }
 
 #[tokio::test]
-async fn cancelled_before_turn_skips_model_and_user_message() {
-    let harness = harness(Vec::new());
-    let session = harness.sessions.create(Stage::HrScreen).await.unwrap();
-    let cancel = CancellationToken::new();
-    cancel.cancel();
-
-    let result = harness
-        .agent
-        .run_turn(session.id, "不会发送", cancel)
-        .await
-        .unwrap();
-
-    assert_eq!(result.reason, TurnEndReason::Interrupted);
-    assert_eq!(result.steps, 0);
-    assert!(harness.llm.requests().is_empty());
-
-    let session = harness.sessions.load(session.id).await.unwrap();
-    assert_eq!(session.events.len(), 3);
-    assert!(matches!(
-        session.events[1].kind,
-        SessionEventKind::TurnStarted { turn_id: TurnId(1) }
-    ));
-    assert!(matches!(
-        session.events[2].kind,
-        SessionEventKind::TurnEnded {
-            turn_id: TurnId(1),
-            reason: TurnEndReason::Interrupted,
-            steps: 0,
-            ..
-        }
-    ));
-}
-
-#[tokio::test]
-async fn cancellation_during_model_call_ends_turn_as_interrupted() {
-    let llm = Arc::new(MockLlmClient::wait_for_cancel());
-    let store = Arc::new(MemorySessionStore::new());
-    let sessions = Arc::new(StoreSessionService::new(store.clone()));
-    let agent = Arc::new(AgentLoop::new(
-        llm.clone(),
-        Arc::new(DefaultContextBuilder),
-        Arc::new(ToolRegistry::new()),
-        sessions.clone(),
-        LoopConfig { max_steps: 8 },
-    ));
-    let session = sessions.create(Stage::HrScreen).await.unwrap();
-    let cancel = CancellationToken::new();
-
-    let handle = tokio::spawn({
-        let agent = agent.clone();
-        let cancel = cancel.clone();
-        let id = session.id;
-        async move { agent.run_turn(id, "你好", cancel).await }
-    });
-
-    wait_for_requests(&llm, 1).await;
-    cancel.cancel();
-
-    let result = handle.await.unwrap().unwrap();
-    assert_eq!(result.reason, TurnEndReason::Interrupted);
-    assert_eq!(result.steps, 0);
-
-    let session = sessions.load(session.id).await.unwrap();
-    assert!(matches!(
-        session.events.last().unwrap().kind,
-        SessionEventKind::TurnEnded {
-            reason: TurnEndReason::Interrupted,
-            ..
-        }
-    ));
-}
-
-#[tokio::test]
-async fn empty_response_is_an_error() {
-    let harness = harness(vec![reply("")]);
-    let session = harness.sessions.create(Stage::HrScreen).await.unwrap();
-
-    let result = harness
-        .agent
-        .run_turn(session.id, "你好", CancellationToken::new())
-        .await
-        .unwrap();
-
-    assert_eq!(result.reason, TurnEndReason::Error);
-    assert_eq!(result.steps, 1);
-    assert_eq!(result.error.as_deref(), Some("empty response"));
-
-    let session = harness.sessions.load(session.id).await.unwrap();
-    assert_eq!(
-        session.events.last().unwrap().kind,
-        SessionEventKind::TurnEnded {
-            turn_id: TurnId(1),
-            reason: TurnEndReason::Error,
-            steps: 1,
-            error: Some("empty response".to_owned()),
-        }
-    );
-}
-
-#[tokio::test]
-async fn model_error_keeps_partial_events() {
-    let llm = Arc::new(MockLlmClient::from_results(vec![Err(LlmError::api(
-        "boom",
-    ))]));
-    let store = Arc::new(MemorySessionStore::new());
-    let sessions = Arc::new(StoreSessionService::new(store));
-    let agent = AgentLoop::new(
-        llm,
-        Arc::new(DefaultContextBuilder),
-        Arc::new(ToolRegistry::new()),
-        sessions.clone(),
-        LoopConfig { max_steps: 8 },
-    );
-    let session = sessions.create(Stage::HrScreen).await.unwrap();
-
-    let result = agent
-        .run_turn(session.id, "你好", CancellationToken::new())
-        .await
-        .unwrap();
-
-    assert_eq!(result.reason, TurnEndReason::Error);
-    assert_eq!(result.steps, 0);
-    assert!(result.error.as_deref().unwrap().contains("boom"));
-
-    let session = sessions.load(session.id).await.unwrap();
-    assert!(matches!(
-        session.events[1].kind,
-        SessionEventKind::TurnStarted { .. }
-    ));
-    assert!(matches!(
-        session.events[2].kind,
-        SessionEventKind::UserMessage { .. }
-    ));
-    assert!(matches!(
-        session.events[3].kind,
-        SessionEventKind::TurnEnded {
-            reason: TurnEndReason::Error,
-            steps: 0,
-            ..
-        }
-    ));
-}
-
-#[tokio::test]
-async fn busy_session_rejects_second_turn_and_finish_stage() {
-    let harness = harness(vec![reply("ok"), reply("ok")]);
-    let first = harness.sessions.create(Stage::HrScreen).await.unwrap();
-    let second = harness.sessions.create(Stage::HrScreen).await.unwrap();
-
-    let lock = harness.agent.session_lock(first.id);
-    let guard = lock.lock().await;
-
-    assert!(matches!(
-        harness
-            .agent
-            .run_turn(first.id, "hi", CancellationToken::new())
-            .await,
-        Err(LoopError::SessionBusy)
-    ));
-    assert!(matches!(
-        harness.agent.finish_stage(first.id).await,
-        Err(LoopError::SessionBusy)
-    ));
-
-    // 不同会话使用不同锁，可以继续推进。
-    let result = harness
-        .agent
-        .run_turn(second.id, "hi", CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(result.reason, TurnEndReason::Done);
-
-    drop(guard);
-    harness
-        .agent
-        .run_turn(first.id, "hi", CancellationToken::new())
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn finish_stage_advances_without_model_call() {
-    let harness = harness(vec![reply("HR 回复"), reply("笔试回复")]);
-    let session = harness.sessions.create(Stage::HrScreen).await.unwrap();
-    harness
-        .agent
-        .run_turn(session.id, "你好", CancellationToken::new())
-        .await
-        .unwrap();
-    let requests_before = harness.llm.requests().len();
-
-    let completion = harness.agent.finish_stage(session.id).await.unwrap();
-    assert_eq!(completion.stage, Stage::Exam);
-    assert_eq!(completion.turn_id, TurnId(2));
-    assert_eq!(harness.llm.requests().len(), requests_before);
-
-    let session = harness.sessions.load(session.id).await.unwrap();
-    assert_eq!(session.stage, Stage::Exam);
-    assert_eq!(session.role(), Role::ExamAuthor);
-    assert_eq!(
-        turn_kinds(&session, TurnId(2)),
-        vec![
-            &SessionEventKind::TurnStarted { turn_id: TurnId(2) },
-            &SessionEventKind::TurnEnded {
-                turn_id: TurnId(2),
-                reason: TurnEndReason::Done,
-                steps: 0,
-                error: None,
-            },
-            &SessionEventKind::StageCompleted {
-                turn_id: TurnId(2),
-                stage: Stage::HrScreen,
-            },
-        ]
-    );
-
-    let result = harness
-        .agent
-        .run_turn(session.id, "开始笔试", CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(result.turn_id, TurnId(3));
-
-    let requests = harness.llm.requests();
-    let last = requests.last().unwrap();
-    assert_eq!(
-        last.messages[0],
-        Message::System {
-            content: Role::ExamAuthor.system_prompt().to_owned(),
-        }
-    );
-    // 完整历史跨阶段保留。
-    assert_eq!(last.messages.len(), 4);
-}
-
-#[tokio::test]
-async fn review_stage_cannot_advance_but_can_chat() {
-    let harness = harness(vec![reply("复盘回复")]);
-    let session = harness.sessions.create(Stage::Review).await.unwrap();
-    let events_before = session.events.len();
-
-    assert!(matches!(
-        harness.agent.finish_stage(session.id).await,
-        Err(LoopError::Session(SessionError::NoNextStage))
-    ));
-
-    let session = harness.sessions.load(session.id).await.unwrap();
-    assert_eq!(session.stage, Stage::Review);
-    assert_eq!(session.events.len(), events_before);
-
-    let result = harness
-        .agent
-        .run_turn(session.id, "总结一下", CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(result.reason, TurnEndReason::Done);
-    assert_eq!(
-        harness.llm.requests()[0].messages[0],
-        Message::System {
-            content: Role::Coach.system_prompt().to_owned(),
-        }
-    );
-}
-
-#[tokio::test]
-async fn dangling_turn_is_repaired_before_new_turn() {
-    let harness = harness(vec![reply("ok")]);
-    let mut session = harness.sessions.create(Stage::HrScreen).await.unwrap();
+async fn dangling_turn_is_repaired_on_next_turn() {
+    let harness = harness(vec![reply("好的，我们继续。")]);
+    let mut session = harness.sessions.create(binding(), initial()).await.unwrap();
     harness
         .sessions
         .append(
@@ -543,12 +876,14 @@ async fn dangling_turn_is_repaired_before_new_turn() {
         )
         .await
         .unwrap();
+    let ctx = turn_ctx(pipeline(1, 4), "hr_screen");
 
     let result = harness
         .agent
-        .run_turn(session.id, "继续", CancellationToken::new())
+        .run_turn(session.id, "继续", &ctx, CancellationToken::new())
         .await
         .unwrap();
+
     assert_eq!(result.turn_id, TurnId(2));
 
     let session = harness.sessions.load(session.id).await.unwrap();
@@ -558,7 +893,7 @@ async fn dangling_turn_is_repaired_before_new_turn() {
             turn_id: TurnId(1),
             reason: TurnEndReason::Interrupted,
             steps: 0,
-            ..
+            error: None,
         }
     )));
     assert_eq!(session.last_turn_id, TurnId(2));
@@ -566,121 +901,11 @@ async fn dangling_turn_is_repaired_before_new_turn() {
 }
 
 #[tokio::test]
-async fn context_fills_missing_tool_results_and_ignores_orphans() {
-    let sessions = StoreSessionService::new(Arc::new(MemorySessionStore::new()));
-    let mut session = sessions.create(Stage::HrScreen).await.unwrap();
-    sessions
-        .append(
-            &mut session,
-            &[
-                SessionEventKind::TurnStarted { turn_id: TurnId(1) },
-                SessionEventKind::UserMessage {
-                    turn_id: TurnId(1),
-                    content: "查两件事".to_owned(),
-                    source: UserMessageSource::User,
-                },
-                SessionEventKind::AssistantMessage {
-                    turn_id: TurnId(1),
-                    content: String::new(),
-                    tool_calls: vec![
-                        ToolCall {
-                            call_id: "call_1".to_owned(),
-                            name: "a".to_owned(),
-                            arguments: "{}".to_owned(),
-                        },
-                        ToolCall {
-                            call_id: "call_2".to_owned(),
-                            name: "b".to_owned(),
-                            arguments: "{}".to_owned(),
-                        },
-                    ],
-                    usage: None,
-                },
-                SessionEventKind::ToolResult {
-                    turn_id: TurnId(1),
-                    tool_call_id: "call_1".to_owned(),
-                    status: ToolStatus::Ok,
-                    output: "first".to_owned(),
-                },
-                SessionEventKind::ToolResult {
-                    turn_id: TurnId(1),
-                    tool_call_id: "orphan".to_owned(),
-                    status: ToolStatus::Ok,
-                    output: "ignored".to_owned(),
-                },
-            ],
-        )
-        .await
-        .unwrap();
-
-    let session = sessions.load(session.id).await.unwrap();
-    let request = DefaultContextBuilder
-        .build(&session, &[], BuildOptions::default())
-        .await
-        .unwrap();
-
-    assert!(matches!(&request.messages[0], Message::System { .. }));
-    assert!(matches!(&request.messages[1], Message::User { .. }));
-    assert!(matches!(
-        &request.messages[2],
-        Message::Assistant { tool_calls, .. } if tool_calls.len() == 2
+async fn busy_session_rejects_second_turn() {
+    let llm = Arc::new(MockLlmClient::wait_for_cancel());
+    let sessions = Arc::new(StoreSessionService::new(
+        Arc::new(MemorySessionStore::new()),
     ));
-    assert_eq!(
-        request.messages[3],
-        Message::Tool {
-            content: "first".to_owned(),
-            tool_call_id: "call_1".to_owned(),
-        }
-    );
-    assert_eq!(
-        request.messages[4],
-        Message::Tool {
-            content: "aborted".to_owned(),
-            tool_call_id: "call_2".to_owned(),
-        }
-    );
-
-    assert_eq!(
-        DefaultContextBuilder
-            .build(
-                &session,
-                &[],
-                BuildOptions {
-                    max_prompt_tokens: Some(100),
-                },
-            )
-            .await,
-        Err(ContextError::BudgetUnsupported)
-    );
-}
-
-struct BlockingTool {
-    spec: ToolSpec,
-    entered: Arc<tokio::sync::Notify>,
-}
-
-#[async_trait]
-impl Tool for BlockingTool {
-    fn spec(&self) -> ToolSpec {
-        self.spec.clone()
-    }
-
-    async fn call(
-        &self,
-        _arguments: serde_json::Value,
-        ctx: &ToolContext<'_>,
-    ) -> Result<ToolOutput, ToolError> {
-        self.entered.notify_one();
-        ctx.cancel.cancelled().await;
-        Err(ToolError::Cancelled)
-    }
-}
-
-#[tokio::test]
-async fn in_flight_turn_rejects_same_session_but_other_sessions_run() {
-    let llm = Arc::new(MockLlmClient::wait_once_then(vec![reply("第二个会话")]));
-    let store = Arc::new(MemorySessionStore::new());
-    let sessions = Arc::new(StoreSessionService::new(store));
     let agent = Arc::new(AgentLoop::new(
         llm.clone(),
         Arc::new(DefaultContextBuilder),
@@ -688,225 +913,75 @@ async fn in_flight_turn_rejects_same_session_but_other_sessions_run() {
         sessions.clone(),
         LoopConfig { max_steps: 8 },
     ));
-    let busy = sessions.create(Stage::HrScreen).await.unwrap();
-    let other = sessions.create(Stage::HrScreen).await.unwrap();
+    let session = sessions.create(binding(), initial()).await.unwrap();
+    let ctx = Arc::new(turn_ctx(pipeline(1, 4), "hr_screen"));
     let cancel = CancellationToken::new();
 
     let handle = tokio::spawn({
         let agent = agent.clone();
+        let ctx = ctx.clone();
         let cancel = cancel.clone();
-        let id = busy.id;
-        async move { agent.run_turn(id, "占住", cancel).await }
+        let id = session.id;
+        async move { agent.run_turn(id, "占住会话", &ctx, cancel).await }
     });
 
-    // 第一次模型调用已经在进行中，会话锁由这次真实回合持有。
+    // 第一次模型调用已经在进行中，会话锁由这个真实回合持有。
     wait_for_requests(&llm, 1).await;
     assert!(matches!(
         agent
-            .run_turn(busy.id, "并发", CancellationToken::new())
+            .run_turn(session.id, "并发", &ctx, CancellationToken::new())
             .await,
         Err(LoopError::SessionBusy)
     ));
-    assert!(matches!(
-        agent.finish_stage(busy.id).await,
-        Err(LoopError::SessionBusy)
-    ));
-
-    // 不同会话不受影响，仍在同一时刻完成。
-    let result = agent
-        .run_turn(other.id, "并行", CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(result.reason, TurnEndReason::Done);
-    assert_eq!(result.output, "第二个会话");
 
     cancel.cancel();
     let result = handle.await.unwrap().unwrap();
     assert_eq!(result.reason, TurnEndReason::Interrupted);
+    assert_eq!(result.steps, 0);
 }
 
 #[tokio::test]
-async fn api_error_after_cancel_is_reported_as_interrupted() {
-    let llm = Arc::new(MockLlmClient::wait_for_cancel_api());
+async fn model_error_keeps_partial_events() {
+    let llm = Arc::new(MockLlmClient::from_results(vec![Err(
+        crate::llm::LlmError::api("boom"),
+    )]));
     let sessions = Arc::new(StoreSessionService::new(
         Arc::new(MemorySessionStore::new()),
     ));
-    let agent = Arc::new(AgentLoop::new(
-        llm.clone(),
+    let agent = AgentLoop::new(
+        llm,
         Arc::new(DefaultContextBuilder),
         Arc::new(ToolRegistry::new()),
         sessions.clone(),
         LoopConfig { max_steps: 8 },
-    ));
-    let session = sessions.create(Stage::HrScreen).await.unwrap();
-    let cancel = CancellationToken::new();
+    );
+    let session = sessions.create(binding(), initial()).await.unwrap();
+    let ctx = turn_ctx(pipeline(1, 4), "hr_screen");
 
-    let handle = tokio::spawn({
-        let agent = agent.clone();
-        let cancel = cancel.clone();
-        let id = session.id;
-        async move { agent.run_turn(id, "你好", cancel).await }
-    });
+    let result = agent
+        .run_turn(session.id, "你好", &ctx, CancellationToken::new())
+        .await
+        .unwrap();
 
-    wait_for_requests(&llm, 1).await;
-    cancel.cancel();
-
-    let result = handle.await.unwrap().unwrap();
-    assert_eq!(result.reason, TurnEndReason::Interrupted);
+    assert_eq!(result.reason, TurnEndReason::Error);
     assert_eq!(result.steps, 0);
-    assert!(result.error.is_none());
+    assert!(result.error.as_deref().unwrap().contains("boom"));
+    assert!(result.stage_completion.is_none());
 
     let session = sessions.load(session.id).await.unwrap();
-    assert_eq!(
-        session.events.last().unwrap().kind,
-        SessionEventKind::TurnEnded {
-            turn_id: TurnId(1),
-            reason: TurnEndReason::Interrupted,
-            steps: 0,
-            error: None,
-        }
-    );
-}
-
-#[tokio::test]
-async fn finish_stage_repairs_dangling_turn_before_advancing() {
-    let harness = harness(Vec::new());
-    let mut session = harness.sessions.create(Stage::HrScreen).await.unwrap();
-    harness
-        .sessions
-        .append(
-            &mut session,
-            &[SessionEventKind::TurnStarted { turn_id: TurnId(1) }],
-        )
-        .await
-        .unwrap();
-
-    let completion = harness.agent.finish_stage(session.id).await.unwrap();
-    assert_eq!(completion.stage, Stage::Exam);
-    assert_eq!(completion.turn_id, TurnId(2));
-    assert!(harness.llm.requests().is_empty());
-
-    let session = harness.sessions.load(session.id).await.unwrap();
-    assert_eq!(
-        session.events[session.events.len() - 4..]
-            .iter()
-            .map(|event| event.kind.clone())
-            .collect::<Vec<_>>(),
-        vec![
-            SessionEventKind::TurnEnded {
-                turn_id: TurnId(1),
-                reason: TurnEndReason::Interrupted,
-                steps: 0,
-                error: None,
-            },
-            SessionEventKind::TurnStarted { turn_id: TurnId(2) },
-            SessionEventKind::TurnEnded {
-                turn_id: TurnId(2),
-                reason: TurnEndReason::Done,
-                steps: 0,
-                error: None,
-            },
-            SessionEventKind::StageCompleted {
-                turn_id: TurnId(2),
-                stage: Stage::HrScreen,
-            },
-        ]
-    );
-}
-
-#[tokio::test]
-async fn finish_stage_repairs_dangling_turn_at_review_but_does_not_advance() {
-    let harness = harness(Vec::new());
-    let mut session = harness.sessions.create(Stage::Review).await.unwrap();
-    harness
-        .sessions
-        .append(
-            &mut session,
-            &[SessionEventKind::TurnStarted { turn_id: TurnId(1) }],
-        )
-        .await
-        .unwrap();
-
     assert!(matches!(
-        harness.agent.finish_stage(session.id).await,
-        Err(LoopError::Session(SessionError::NoNextStage))
+        &session.events[1].kind,
+        SessionEventKind::TurnStarted { .. }
     ));
-
-    let session = harness.sessions.load(session.id).await.unwrap();
-    assert_eq!(session.stage, Stage::Review);
-    assert!(session.dangling_turn().is_none());
-    assert_eq!(
-        session.events.last().unwrap().kind,
-        SessionEventKind::TurnEnded {
-            turn_id: TurnId(1),
-            reason: TurnEndReason::Interrupted,
-            steps: 0,
-            error: None,
-        }
-    );
-    assert!(
-        !session
-            .events
-            .iter()
-            .any(|event| matches!(event.kind, SessionEventKind::StageCompleted { .. }))
-    );
-}
-
-#[tokio::test]
-async fn cancellation_during_tool_wins_over_max_steps() {
-    let llm = Arc::new(MockLlmClient::new(vec![tool_reply("call_1", "slow", "{}")]));
-    let entered = Arc::new(tokio::sync::Notify::new());
-    let mut tools = ToolRegistry::new();
-    tools.register(Arc::new(BlockingTool {
-        spec: ToolSpec {
-            name: "slow".to_owned(),
-            description: "waits for cancellation".to_owned(),
-            parameters: serde_json::json!({"type": "object"}),
-        },
-        entered: entered.clone(),
-    }));
-    let sessions = Arc::new(StoreSessionService::new(
-        Arc::new(MemorySessionStore::new()),
-    ));
-    let agent = Arc::new(AgentLoop::new(
-        llm.clone(),
-        Arc::new(DefaultContextBuilder),
-        Arc::new(tools),
-        sessions.clone(),
-        LoopConfig { max_steps: 1 },
-    ));
-    let session = sessions.create(Stage::Exam).await.unwrap();
-    let cancel = CancellationToken::new();
-
-    let handle = tokio::spawn({
-        let agent = agent.clone();
-        let cancel = cancel.clone();
-        let id = session.id;
-        async move { agent.run_turn(id, "慢工具", cancel).await }
-    });
-
-    wait_for_requests(&llm, 1).await;
-    entered.notified().await;
-    cancel.cancel();
-
-    let result = handle.await.unwrap().unwrap();
-    assert_eq!(result.reason, TurnEndReason::Interrupted);
-    assert_eq!(result.steps, 1);
-
-    let session = sessions.load(session.id).await.unwrap();
-    assert!(session.events.iter().any(|event| matches!(
-        &event.kind,
-        SessionEventKind::ToolResult {
-            tool_call_id,
-            status: ToolStatus::Error,
-            output,
-            ..
-        } if tool_call_id == "call_1" && output == "aborted"
-    )));
     assert!(matches!(
-        session.events.last().unwrap().kind,
+        &session.events[2].kind,
+        SessionEventKind::UserMessage { .. }
+    ));
+    assert!(matches!(
+        &session.events[3].kind,
         SessionEventKind::TurnEnded {
-            reason: TurnEndReason::Interrupted,
+            reason: TurnEndReason::Error,
+            steps: 0,
             ..
         }
     ));

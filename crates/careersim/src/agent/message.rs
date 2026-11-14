@@ -50,4 +50,24 @@ impl Message {
             tool_call_id: tool_call_id.into(),
         }
     }
+
+    /// 消息角色标签；投影分组与预算估算用。
+    pub fn role_kind(&self) -> &'static str {
+        match self {
+            Self::System { .. } => "system",
+            Self::User { .. } => "user",
+            Self::Assistant { .. } => "assistant",
+            Self::Tool { .. } => "tool",
+        }
+    }
+
+    /// 消息文本内容；预算估算用（工具调用列表不计）。
+    pub fn text(&self) -> &str {
+        match self {
+            Self::System { content }
+            | Self::User { content }
+            | Self::Tool { content, .. }
+            | Self::Assistant { content, .. } => content,
+        }
+    }
 }

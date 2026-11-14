@@ -12,8 +12,15 @@ mod validate;
 #[cfg(test)]
 mod tests;
 
-pub use model::{PipelineDefinition, StageDefinition, StageKey, StageKind};
-pub use rubric::{EvaluationRubric, RubricDimension, Score};
+pub use model::{
+    OfferError, OfferPolicy, OfferTerms, OfferTermsInput, PipelineDefinition, StageDefinition,
+    StageKey, StageKind, StageOutcome, StageTransition, TransitionError, build_offer_terms,
+    plan_transition,
+};
+pub use rubric::{
+    DimensionScore, EvaluationError, EvaluationRubric, RubricDimension, Score, StageEvaluation,
+    evaluate,
+};
 
 /// 流水线构造与校验错误。
 #[derive(Debug, Error, PartialEq, Eq)]

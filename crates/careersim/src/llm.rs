@@ -6,6 +6,6 @@ pub mod mock;
 pub mod openai_compat;
 pub mod provider;
 
-pub use client::{ChatRequest, ChatResponse, LlmClient, LlmError, TokenUsage};
+pub use client::{ChatRequest, ChatResponse, LlmClient, LlmError, TokenUsage, ToolChoice};
 pub use openai_compat::OpenAiCompatibleClient;
 pub use provider::ModelProvider;

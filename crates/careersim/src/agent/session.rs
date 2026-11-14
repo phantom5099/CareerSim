@@ -1,4 +1,4 @@
-//! 会话、事件信封与事件类型。
+//! 会话、事件信封与事件类型（事件 v2）。
 
 use std::fmt;
 use std::str::FromStr;
@@ -11,9 +11,9 @@ use tracing::info;
 use uuid::Uuid;
 
 use super::Role;
-use super::Stage;
 use super::tool::ToolCall;
 use crate::llm::client::TokenUsage;
+use crate::pipeline::{StageEvaluation, StageKey, StageKind, StageOutcome};
 use crate::store::AppendBatch;
 use crate::store::EVENT_VERSION;
 use crate::store::ExpectedState;
@@ -21,6 +21,35 @@ use crate::store::SessionStore;
 use crate::store::StoreError;
 use crate::store::StoredEvent;
 use crate::store::StoredSession;
+
+/// 投递归属标识；事件绑定自描述用，不构成第二份状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ApplicationId(Uuid);
+
+impl ApplicationId {
+    pub fn from_uuid(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+
+    pub fn into_uuid(self) -> Uuid {
+        self.0
+    }
+}
+
+impl fmt::Display for ApplicationId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FromStr for ApplicationId {
+    type Err = uuid::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Uuid::parse_str(value).map(Self)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -58,6 +87,31 @@ impl FromStr for SessionId {
 #[serde(transparent)]
 pub struct TurnId(pub u64);
 
+/// 会话与业务聚合的绑定；不携带阶段，阶段由事件折叠得出。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionBinding {
+    /// 流水线阶段会话；每个投递同一时刻只有一个进行中的阶段会话。
+    ApplicationStage { application_id: ApplicationId },
+}
+
+impl SessionBinding {
+    /// 归属的投递标识。
+    pub fn application_id(self) -> ApplicationId {
+        match self {
+            Self::ApplicationStage { application_id } => application_id,
+        }
+    }
+}
+
+/// 阶段引用：稳定键 + 类型；类型决定角色与执行策略。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageRef {
+    pub key: StageKey,
+    pub kind: StageKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionEvent {
     pub v: u32,
@@ -72,7 +126,8 @@ pub struct SessionEvent {
 pub enum SessionEventKind {
     SessionMeta {
         session_id: SessionId,
-        stage: Stage,
+        binding: SessionBinding,
+        initial_stage: StageRef,
     },
     TurnStarted {
         turn_id: TurnId,
@@ -105,7 +160,14 @@ pub enum SessionEventKind {
     },
     StageCompleted {
         turn_id: TurnId,
-        stage: Stage,
+        /// 完成的阶段键；必须等于会话当前阶段。
+        stage_key: StageKey,
+        /// 完成阶段的类型。
+        stage_kind: StageKind,
+        /// 服务端评估结论。
+        evaluation: StageEvaluation,
+        /// 转移结果。
+        outcome: StageOutcome,
     },
 }
 
@@ -147,7 +209,9 @@ pub(crate) fn event_turn_id(kind: &SessionEventKind) -> Option<TurnId> {
 #[derive(Debug, Clone)]
 pub struct Session {
     pub id: SessionId,
-    pub stage: Stage,
+    pub binding: SessionBinding,
+    /// 当前阶段；由 `initial_stage` 初始化，仅由 `StageCompleted` 更新。
+    pub current_stage: StageRef,
     pub events: Vec<SessionEvent>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -157,7 +221,7 @@ pub struct Session {
 
 impl Session {
     pub fn role(&self) -> Role {
-        self.stage.role()
+        self.current_stage.kind.role()
     }
 
     /// 最后一个回合只有 `turn_started`、没有 `turn_ended` 时返回它的编号。
@@ -182,13 +246,19 @@ impl Session {
         (started && !ended).then_some(self.last_turn_id)
     }
 
-    /// 把已落库的事件折叠进内存视图。
+    /// 把已落库的事件折叠进内存视图；阶段推进只由 `Advance` 驱动。
     pub(crate) fn absorb(&mut self, events: &[SessionEvent]) {
         for event in events {
-            if let SessionEventKind::StageCompleted { stage, .. } = &event.kind
-                && let Some(next) = stage.next()
+            if let SessionEventKind::StageCompleted { outcome, .. } = &event.kind
+                && let StageOutcome::Advance {
+                    next_stage_key,
+                    next_stage_kind,
+                } = outcome
             {
-                self.stage = next;
+                self.current_stage = StageRef {
+                    key: next_stage_key.clone(),
+                    kind: *next_stage_kind,
+                };
             }
             if let Some(turn_id) = event_turn_id(&event.kind) {
                 self.last_turn_id = self.last_turn_id.max(turn_id);
@@ -202,26 +272,48 @@ impl Session {
 #[derive(Debug, Clone)]
 pub struct SessionSummary {
     pub id: SessionId,
-    pub stage: Stage,
+    /// 缓存的当前阶段键；类型在行缓存中不可得，按需加载会话。
+    pub stage_key: StageKey,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_seq: u64,
     pub last_turn_id: TurnId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 一次阶段完成的评估记录；事件之外的服务层视图。
+#[derive(Debug, Clone, PartialEq)]
+pub struct StageEvaluationRecord {
+    pub turn_id: TurnId,
+    pub stage_key: StageKey,
+    pub stage_kind: StageKind,
+    pub evaluation: StageEvaluation,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct StageCompletion {
     pub turn_id: TurnId,
-    /// 推进后的阶段。
-    pub stage: Stage,
+    pub record: StageEvaluationRecord,
+    pub outcome: StageOutcome,
+}
+
+/// `SessionService::complete_stage` 的入参：把评估回合的事件批次一次写入。
+#[derive(Debug, Clone)]
+pub struct CompleteStageBatch {
+    pub turn_id: TurnId,
+    pub steps: u32,
+    pub assistant_content: String,
+    pub assistant_tool_calls: Vec<ToolCall>,
+    pub usage: Option<TokenUsage>,
+    /// 控制动作的 tool_call_id；工具结果回填给它。
+    pub control_call_id: String,
+    pub record: StageEvaluationRecord,
+    pub outcome: StageOutcome,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
     #[error("session not found")]
     NotFound,
-    #[error("current stage has no next stage")]
-    NoNextStage,
     #[error("session state changed concurrently")]
     Conflict,
     #[error("corrupt session: {0}")]
@@ -266,11 +358,14 @@ impl From<StoreError> for SessionError {
     }
 }
 
-/// 校验一个追加批次；返回 `stage_completed` 推进后的阶段。
+/// 单个事件 payload 的大小上限（plan/02 §10.1 第 5 条）。
+const MAX_EVENT_PAYLOAD_BYTES: usize = 64 * 1024;
+
+/// 校验一个追加批次；返回 `StageCompleted` 推进后的阶段。
 fn validate_batch(
-    current: Stage,
+    current: &StageRef,
     events: &[SessionEventKind],
-) -> Result<Option<Stage>, SessionError> {
+) -> Result<Option<StageRef>, SessionError> {
     let mut next = None;
     for (index, event) in events.iter().enumerate() {
         match event {
@@ -279,21 +374,47 @@ fn validate_batch(
                     "session_meta is only written by create".to_owned(),
                 ));
             }
-            SessionEventKind::StageCompleted { stage, .. } => {
+            SessionEventKind::StageCompleted {
+                stage_key,
+                stage_kind,
+                outcome,
+                ..
+            } => {
                 if index + 1 != events.len() {
                     return Err(SessionError::InvalidEvent(
                         "stage_completed must be the last event".to_owned(),
                     ));
                 }
-                if *stage != current {
+                if stage_key != &current.key {
                     return Err(SessionError::InvalidEvent(format!(
-                        "stage_completed for {stage} but current stage is {current}"
+                        "stage_completed for {stage_key} but current stage is {}",
+                        current.key
                     )));
                 }
-                let next_stage = current.next().ok_or_else(|| {
-                    SessionError::InvalidEvent(format!("stage {current} has no next stage"))
-                })?;
-                next = Some(next_stage);
+                if stage_kind != &current.kind {
+                    return Err(SessionError::InvalidEvent(format!(
+                        "stage_completed for kind {stage_kind:?} but current stage is {:?}",
+                        current.kind
+                    )));
+                }
+                match outcome {
+                    StageOutcome::Advance {
+                        next_stage_key,
+                        next_stage_kind,
+                    } => {
+                        if next_stage_key == &current.key {
+                            return Err(SessionError::InvalidEvent(
+                                "advance next_stage_key must differ from the current stage"
+                                    .to_owned(),
+                            ));
+                        }
+                        next = Some(StageRef {
+                            key: next_stage_key.clone(),
+                            kind: *next_stage_kind,
+                        });
+                    }
+                    StageOutcome::OfferPending { .. } | StageOutcome::Rejected => {}
+                }
             }
             _ => {}
         }
@@ -329,11 +450,11 @@ fn decode_event(stored: StoredEvent) -> Result<SessionEvent, SessionError> {
 }
 
 fn summary_from_row(row: StoredSession) -> Result<SessionSummary, SessionError> {
-    let stage =
-        Stage::from_str(&row.stage).map_err(|err| SessionError::Corrupt(err.to_string()))?;
+    let stage_key =
+        StageKey::parse(&row.stage).map_err(|err| SessionError::Corrupt(err.to_string()))?;
     Ok(SessionSummary {
         id: SessionId::from_uuid(row.id),
-        stage,
+        stage_key,
         created_at: row.created_at,
         updated_at: row.updated_at,
         last_seq: row.last_seq,
@@ -347,8 +468,8 @@ fn fold_session(
     stored_events: Vec<StoredEvent>,
 ) -> Result<Session, SessionError> {
     let id = SessionId::from_uuid(row.id);
-    let row_stage =
-        Stage::from_str(&row.stage).map_err(|err| SessionError::Corrupt(err.to_string()))?;
+    let row_stage_key =
+        StageKey::parse(&row.stage).map_err(|err| SessionError::Corrupt(err.to_string()))?;
 
     let events = stored_events
         .into_iter()
@@ -359,14 +480,20 @@ fn fold_session(
         .first()
         .ok_or_else(|| SessionError::Corrupt("event log is empty".to_owned()))?;
 
-    let mut stage = match &first.kind {
-        SessionEventKind::SessionMeta { session_id, stage } if first.seq == 0 => {
+    let binding;
+    let mut current_stage = match &first.kind {
+        SessionEventKind::SessionMeta {
+            session_id,
+            binding: event_binding,
+            initial_stage,
+        } if first.seq == 0 => {
             if *session_id != id {
                 return Err(SessionError::Corrupt(
                     "session_meta has a different session_id".to_owned(),
                 ));
             }
-            *stage
+            binding = *event_binding;
+            initial_stage.clone()
         }
         SessionEventKind::SessionMeta { .. } => {
             return Err(SessionError::Corrupt(
@@ -394,17 +521,28 @@ fn fold_session(
         previous_seq = Some(event.seq);
 
         if let SessionEventKind::StageCompleted {
-            stage: completed, ..
+            stage_key,
+            stage_kind,
+            outcome,
+            ..
         } = &event.kind
         {
-            if *completed != stage {
+            if *stage_key != current_stage.key || *stage_kind != current_stage.kind {
                 return Err(SessionError::Corrupt(format!(
-                    "stage_completed for {completed} while the log is at {stage}"
+                    "stage_completed for {stage_key} while the log is at {}",
+                    current_stage.key
                 )));
             }
-            stage = completed.next().ok_or_else(|| {
-                SessionError::Corrupt(format!("stage_completed after final stage {completed}"))
-            })?;
+            if let StageOutcome::Advance {
+                next_stage_key,
+                next_stage_kind,
+            } = outcome
+            {
+                current_stage = StageRef {
+                    key: next_stage_key.clone(),
+                    kind: *next_stage_kind,
+                };
+            }
         }
         if let Some(turn_id) = event_turn_id(&event.kind) {
             max_turn = max_turn.max(turn_id);
@@ -425,15 +563,17 @@ fn fold_session(
             last_turn_id.0, max_turn.0
         )));
     }
-    if stage != row_stage {
+    if current_stage.key != row_stage_key {
         return Err(SessionError::Corrupt(format!(
-            "row stage is {row_stage} but the event log folds to {stage}"
+            "row stage is {row_stage_key} but the event log folds to {}",
+            current_stage.key
         )));
     }
 
     Ok(Session {
         id,
-        stage,
+        binding,
+        current_stage,
         events,
         created_at: row.created_at,
         updated_at: row.updated_at,
@@ -442,13 +582,45 @@ fn fold_session(
     })
 }
 
+/// 最后一个 `StageCompleted` 之后的事件起点；当前阶段的事件区间起点。
+pub(crate) fn stage_started_at(session: &Session) -> usize {
+    session
+        .events
+        .iter()
+        .rposition(|event| matches!(event.kind, SessionEventKind::StageCompleted { .. }))
+        .map_or(0, |index| index + 1)
+}
+
+/// 当前阶段内的助手消息数；`max_rounds` 与评估轮触发依据。
+pub(crate) fn assistant_count_in_stage(session: &Session) -> usize {
+    let start = stage_started_at(session);
+    session.events[start..]
+        .iter()
+        .filter(|event| matches!(event.kind, SessionEventKind::AssistantMessage { .. }))
+        .count()
+}
+
+/// 当前阶段内的用户消息数（对话轮次）；`min_rounds` 校验与轮次注一致。
+pub(crate) fn user_round_in_stage(session: &Session) -> usize {
+    let start = stage_started_at(session);
+    session.events[start..]
+        .iter()
+        .filter(|event| matches!(event.kind, SessionEventKind::UserMessage { .. }))
+        .count()
+}
+
 /// 会话事件的持久化入口。
 ///
 /// 回合事件如何追加、半截回合如何修复、阶段完成如何与回合事件同批写入，
 /// 都由实现决定；`AgentLoop` 只依赖本 trait。
 #[async_trait]
 pub trait SessionService: Send + Sync {
-    async fn create(&self, stage: Stage) -> Result<Session, SessionError>;
+    /// 创建会话并写入绑定与首阶段。
+    async fn create(
+        &self,
+        binding: SessionBinding,
+        initial_stage: StageRef,
+    ) -> Result<Session, SessionError>;
 
     async fn load(&self, id: SessionId) -> Result<Session, SessionError>;
 
@@ -500,9 +672,13 @@ pub trait SessionService: Send + Sync {
         error: Option<String>,
     ) -> Result<(), SessionError>;
 
-    /// 结束当前阶段并推进到下一阶段；`Stage::Review` 没有下一阶段，返回
-    /// `NoNextStage` 且不写事件。
-    async fn finish_stage(&self, session: &mut Session) -> Result<StageCompletion, SessionError>;
+    /// 把评估结论与阶段完成批次一次性写入：助手消息、控制动作工具结果、
+    /// 回合终止与 `StageCompleted` 同批落库；返回服务层评估记录。
+    async fn complete_stage(
+        &self,
+        session: &mut Session,
+        batch: CompleteStageBatch,
+    ) -> Result<StageCompletion, SessionError>;
 }
 
 /// 基于 `SessionStore` 的会话服务实现。
@@ -545,12 +721,18 @@ impl StoreSessionService {
 
 #[async_trait]
 impl SessionService for StoreSessionService {
-    async fn create(&self, stage: Stage) -> Result<Session, SessionError> {
+    async fn create(
+        &self,
+        binding: SessionBinding,
+        initial_stage: StageRef,
+    ) -> Result<Session, SessionError> {
         for _ in 0..SESSION_ID_RETRIES {
             let id = SessionId::generate();
+            let stage = initial_stage.key.clone();
             let meta = SessionEventKind::SessionMeta {
                 session_id: id,
-                stage,
+                binding,
+                initial_stage: initial_stage.clone(),
             };
             let payload = serde_json::to_value(&meta)
                 .map_err(|err| SessionError::backend_with_source("encode session_meta", err))?;
@@ -598,13 +780,22 @@ impl SessionService for StoreSessionService {
             return Ok(());
         }
 
-        let next_stage = validate_batch(session.stage, events)?;
+        let next_stage = validate_batch(&session.current_stage, events)?;
         let last_turn_id = max_turn_id(events).map_or(0, |turn_id| turn_id.0);
-        let payloads = events
-            .iter()
-            .map(serde_json::to_value)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| SessionError::backend_with_source("encode event", err))?;
+        let mut payloads = Vec::with_capacity(events.len());
+        for event in events {
+            let payload = serde_json::to_value(event)
+                .map_err(|err| SessionError::backend_with_source("encode event", err))?;
+            let size = serde_json::to_vec(&payload)
+                .map_err(|err| SessionError::backend_with_source("measure event payload", err))?
+                .len();
+            if size > MAX_EVENT_PAYLOAD_BYTES {
+                return Err(SessionError::InvalidEvent(format!(
+                    "event payload is {size} bytes, limit is {MAX_EVENT_PAYLOAD_BYTES}"
+                )));
+            }
+            payloads.push(payload);
+        }
 
         let stored = self
             .store
@@ -612,12 +803,12 @@ impl SessionService for StoreSessionService {
                 session.id.into_uuid(),
                 AppendBatch {
                     expected: ExpectedState {
-                        stage: session.stage.as_str(),
+                        stage: session.current_stage.key.as_str(),
                         last_seq: session.last_seq,
                     },
                     events: &payloads,
                     last_turn_id,
-                    next_stage: next_stage.map(Stage::as_str),
+                    next_stage: next_stage.as_ref().map(|stage| stage.key.as_str()),
                 },
             )
             .await?;
@@ -716,34 +907,50 @@ impl SessionService for StoreSessionService {
         .await
     }
 
-    async fn finish_stage(&self, session: &mut Session) -> Result<StageCompletion, SessionError> {
-        self.repair_dangling(session).await?;
-
-        let from = session.stage;
-        let next = from.next().ok_or(SessionError::NoNextStage)?;
-        let turn_id = TurnId(session.last_turn_id.0 + 1);
-
+    async fn complete_stage(
+        &self,
+        session: &mut Session,
+        batch: CompleteStageBatch,
+    ) -> Result<StageCompletion, SessionError> {
+        // 评估回合进行中，不做半截回合修复；`start_turn` 已负责。
+        let record = batch.record;
+        let outcome = batch.outcome;
         self.append(
             session,
             &[
-                SessionEventKind::TurnStarted { turn_id },
+                SessionEventKind::AssistantMessage {
+                    turn_id: batch.turn_id,
+                    content: batch.assistant_content,
+                    tool_calls: batch.assistant_tool_calls,
+                    usage: batch.usage,
+                },
+                SessionEventKind::ToolResult {
+                    turn_id: batch.turn_id,
+                    tool_call_id: batch.control_call_id,
+                    status: ToolStatus::Ok,
+                    output: "{\"accepted\":true}".to_owned(),
+                },
                 SessionEventKind::TurnEnded {
-                    turn_id,
+                    turn_id: batch.turn_id,
                     reason: TurnEndReason::Done,
-                    steps: 0,
+                    steps: batch.steps,
                     error: None,
                 },
                 SessionEventKind::StageCompleted {
-                    turn_id,
-                    stage: from,
+                    turn_id: record.turn_id,
+                    stage_key: record.stage_key.clone(),
+                    stage_kind: record.stage_kind,
+                    evaluation: record.evaluation.clone(),
+                    outcome: outcome.clone(),
                 },
             ],
         )
         .await?;
 
         Ok(StageCompletion {
-            turn_id,
-            stage: next,
+            turn_id: record.turn_id,
+            record,
+            outcome,
         })
     }
 }

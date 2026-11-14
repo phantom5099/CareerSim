@@ -26,8 +26,8 @@ src/
 │   └── tests.rs       # 仅放该模块单测
 ├── pipeline.rs        # pipeline 模块入口（纯领域，无 IO）
 ├── pipeline/
-│   ├── model.rs       # StageKey/StageKind/StageDefinition/PipelineDefinition/Score
-│   ├── rubric.rs      # EvaluationRubric 与加权评估
+│   ├── model.rs       # StageKey/StageKind/StageDefinition/PipelineDefinition/Score、StageTransition/plan_transition、OfferTerms/build_offer_terms
+│   ├── rubric.rs      # EvaluationRubric 与加权评估；StageEvaluation/DimensionScore/evaluate
 │   ├── validate.rs    # 纯校验函数与 PipelineError
 │   └── tests.rs
 ├── resume.rs          # resume 模块入口与公开类型聚合
@@ -54,13 +54,13 @@ src/
 │   ├── message.rs     # 模型消息类型（system / user / assistant / tool）
 │   ├── role.rs        # 招聘角色枚举与系统提示词加载
 │   ├── role/prompts/  # 角色提示词（Markdown，include_str! 嵌入）
-│   ├── session.rs     # Session、事件类型、SessionService、折叠与修复
+│   ├── session.rs     # Session、事件类型（v2，含 SessionBinding/ApplicationId）、SessionService、折叠与修复
 │   ├── stage.rs       # 阶段枚举、Stage::role()、Stage::next()
 │   ├── tool.rs        # Tool trait、ToolSpec、ToolRegistry、执行语义
 │   └── tool/testing.rs# 测试用 FakeTool（cfg(test)）
 ├── llm.rs             # llm 模块入口与公开类型聚合
 ├── llm/
-│   ├── client.rs      # LlmClient trait、ChatRequest/ChatResponse、LlmError
+│   ├── client.rs      # LlmClient trait、ChatRequest/ChatResponse/ToolChoice、LlmError
 │   ├── provider.rs    # 供应商枚举、base URL 与 API Key 变量名
 │   ├── openai_compat.rs # async-openai 适配与取消
 │   └── mock.rs        # MockLlmClient（cfg(test)）
@@ -301,6 +301,7 @@ cargo test store::memory
 | 新增 HTTP 路由 | `http/` 下新建路由文件 + `http/router.rs` 追加挂载行 |
 | 新增事件类型 | `agent/session.rs` + `agent/context.rs` 投影 + 测试；必要时迁移 |
 | 调整阶段顺序或新增阶段 | `agent/stage.rs` + `agent/role.rs` + 提示词 + 测试 |
+| 改阶段评估或录用条款 | `pipeline/rubric.rs`（评估）/ `pipeline/model.rs`（`plan_transition`、`build_offer_terms`）+ 测试 |
 | 新增角色 | `agent/role.rs` + `role/prompts/` + `Stage::role()` + 测试 |
 | 新增工具 | `agent/tool.rs` 的 `Tool` 实现与注册；生产注册表当前为空 |
 | 改模型映射 | `llm/openai_compat.rs` |
