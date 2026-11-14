@@ -236,9 +236,17 @@ export const companiesApi: CompaniesApi = {
     )
     // 概要列表不含项目与岗位；并行拉取详情补全（数量上限 50）。
     const details = await Promise.allSettled(list.items.map((item) => fetchDetail(item.id)))
-    return details
+    const companies = details
       .filter((entry): entry is PromiseFulfilledResult<Company> => entry.status === 'fulfilled')
       .map((entry) => entry.value)
+    // 有条目但详情全部失败时按失败处理，避免被误渲染成"筛选无结果"。
+    if (list.items.length > 0 && companies.length === 0) {
+      const firstError = details.find(
+        (entry): entry is PromiseRejectedResult => entry.status === 'rejected',
+      )
+      throw firstError?.reason ?? new Error('公司详情加载失败')
+    }
+    return companies
   },
 
   async get(id: string): Promise<Company | undefined> {
