@@ -22,21 +22,22 @@ export const useCompanyCatalogStore = defineStore('companyCatalog', () => {
     return initPromise
   }
 
-  function findCompany(id: string): Company | undefined {
-    return companies.value.find((company) => company.id === id)
+  /** 写操作（导入/编辑/删除）后重新拉取，保证列表与详情页看到最新数据。 */
+  async function refresh(): Promise<void> {
+    const value = await companiesApi.list()
+    companies.value = value
+    initPromise = Promise.resolve()
   }
 
-  async function addCompany(company: Company): Promise<Company> {
-    const created = await companiesApi.create(company)
-    companies.value = [created, ...companies.value]
-    return created
+  function findCompany(id: string): Company | undefined {
+    return companies.value.find((company) => company.id === id)
   }
 
   return {
     companies,
     jobCount,
     init,
+    refresh,
     findCompany,
-    addCompany,
   }
 })

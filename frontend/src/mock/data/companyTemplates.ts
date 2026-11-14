@@ -466,19 +466,75 @@ export const englishSuffixes = ['LABS', 'STUDIO', 'WORKS', 'DATA', 'SYSTEMS', 'T
 export const companySizes = ['20–99 人', '100–499 人', '500–999 人', '1000–4999 人']
 export const workStyles = ['双休 · 弹性工作', '导师制 · 每周复盘', '小团队闭环 · 决策快', '远程友好 · 异步协作']
 
+/** 默认面试流程（hr_screen → 技术面 → Offer）；升级旧模板与生成草稿共用。 */
+export function defaultTemplateStages() {
+  return [
+    {
+      key: 'screen',
+      kind: 'hr_screen',
+      title: '简历初筛',
+      minRounds: 1,
+      maxRounds: 1,
+      rubric: {
+        passScore: 60,
+        dimensions: [
+          { key: 'match', label: '岗位匹配', weight: 100, criteria: '简历与岗位要求的匹配程度。' },
+        ],
+      },
+    },
+    {
+      key: 'tech',
+      kind: 'tech_interview',
+      title: '技术面试',
+      minRounds: 2,
+      maxRounds: 4,
+      rubric: {
+        passScore: 70,
+        dimensions: [
+          { key: 'fundamentals', label: '专业基础', weight: 60, criteria: '专业知识与问题分析的扎实程度。' },
+          { key: 'communication', label: '沟通表达', weight: 40, criteria: '思路表达清晰，能说清取舍。' },
+        ],
+      },
+    },
+    {
+      key: 'offer',
+      kind: 'offer',
+      title: 'Offer 沟通',
+      minRounds: 1,
+      maxRounds: 2,
+      rubric: {
+        passScore: 60,
+        dimensions: [
+          {
+            key: 'expectation',
+            label: '期望匹配',
+            weight: 100,
+            criteria: '薪资、地点与到岗时间是否达成一致。',
+          },
+        ],
+      },
+    },
+  ]
+}
+
 export const companyTemplateSample = {
-  name: '南风数据',
-  englishName: 'SOUTHWIND DATA',
-  industry: '数据服务',
-  city: '深圳',
-  size: '100–499 人',
-  tagline: '把报表做成一次真正的决策',
-  description: '南风数据为零售与消费品牌提供经营分析平台，团队由分析师、工程师与行业顾问组成。',
-  highlights: ['服务 200+ 消费品牌', '每周五下午固定研究时间', '深圳南山 · 地铁直达'],
-  logoText: '南风',
-  accent: '#3D5A45',
+  schemaVersion: 1,
+  company: {
+    name: '南风数据',
+    englishName: 'SOUTHWIND DATA',
+    industry: '数据服务',
+    city: '深圳',
+    size: '100–499 人',
+    tagline: '把报表做成一次真正的决策',
+    description:
+      '南风数据为零售与消费品牌提供经营分析平台，团队由分析师、工程师与行业顾问组成。',
+    highlights: ['服务 200+ 消费品牌', '每周五下午固定研究时间', '深圳南山 · 地铁直达'],
+    logoText: '南风',
+    accent: '#3D5A45',
+  },
   projects: [
     {
+      key: 'p1',
       name: '2026 秋季校园招聘',
       season: '2026 秋招',
       status: 'open',
@@ -486,14 +542,25 @@ export const companyTemplateSample = {
       description: '面向 2026 届毕业生，开放数据分析与前端方向。',
     },
   ],
+  pipelines: [
+    {
+      key: 'pl1',
+      projectKey: 'p1',
+      name: '标准面试流程',
+      stages: defaultTemplateStages(),
+    },
+  ],
   jobs: [
     {
+      key: 'j1',
+      projectKey: 'p1',
+      pipelineKey: 'pl1',
       title: '数据分析师',
-      project: '2026 秋季校园招聘',
-      industry: '商业分析',
       city: '深圳',
-      type: '校招',
-      salary: '16–24K · 14 薪',
+      jobType: 'campus',
+      salaryMin: 16000,
+      salaryMax: 24000,
+      salaryMonths: 14,
       tags: ['SQL', 'BI', '零售'],
       description: '负责经营指标体系搭建与专题分析，和业务团队一起做决策。',
     },

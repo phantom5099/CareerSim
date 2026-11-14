@@ -71,11 +71,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             ))
         }
     };
-    let resume = postgres_resume_service(pool, attachment_store);
+    let resume = postgres_resume_service(pool.clone(), attachment_store);
+
+    // 公司模板目录（plan/01 §4.3）；PostgreSQL 适配。
+    let catalog = crate::catalog::postgres_catalog_service(pool);
 
     let state = AppState {
         account: Arc::new(account),
         resume: Arc::new(resume),
+        catalog: Arc::new(catalog),
         allowed_origins: config.http.allowed_origins.clone().into(),
         cookie_secure: config.http.cookie_secure,
     };

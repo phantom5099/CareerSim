@@ -4,7 +4,6 @@ import { RouterLink } from 'vue-router'
 
 import CompanyMark from '@/components/CompanyMark.vue'
 import MultiSelect from '@/components/MultiSelect.vue'
-import { companiesApi } from '@/api/endpoints/companies'
 import { PROJECT_STATUS_LABELS, formatDate } from '@/domain/types'
 import type { Company, ProjectStatus } from '@/domain/types'
 import { useCompanyCatalogStore } from '@/stores/companyCatalog'
@@ -13,16 +12,10 @@ const catalog = useCompanyCatalogStore()
 
 const query = ref('')
 const searchInput = ref<HTMLInputElement | null>(null)
-const industries = ref<string[]>([])
+const industries = computed(() => [
+  ...new Set(catalog.companies.map((company) => company.industry)),
+])
 const activeIndustries = ref<string[]>([])
-
-onMounted(async () => {
-  try {
-    industries.value = (await companiesApi.industries()).industries
-  } catch {
-    industries.value = []
-  }
-})
 
 const visibleCompanies = computed(() => {
   const keyword = query.value.trim().toLowerCase()
@@ -290,7 +283,7 @@ function clearFilters() {
                           {{ headlineCompany.name }}
                         </h2>
                         <span
-                          v-if="headlineCompany.imported"
+                          v-if="headlineCompany.source === 'user'"
                           class="border border-vermilion/40 px-1.5 py-0.5 text-[0.62rem] text-vermilion"
                         >
                           我的模板
@@ -423,7 +416,7 @@ function clearFilters() {
                 {{ company.englishName }}
               </span>
               <span
-                v-if="company.imported"
+                v-if="company.source === 'user'"
                 class="border border-vermilion/40 px-1.5 py-0.5 text-[0.6rem] text-vermilion"
               >
                 我的模板

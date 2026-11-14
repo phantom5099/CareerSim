@@ -4,10 +4,9 @@ import { RouterLink, useRouter } from 'vue-router'
 
 import { companiesApi } from '@/api/endpoints/companies'
 import CompanyMark from '@/components/CompanyMark.vue'
+import { useCompanyCatalogStore } from '@/stores/companyCatalog'
 import { PROJECT_STATUS_LABELS, formatDate } from '@/domain/types'
 import type { Company } from '@/domain/types'
-import { useCompanyCatalogStore } from '@/stores/companyCatalog'
-
 const router = useRouter()
 const catalog = useCompanyCatalogStore()
 
@@ -155,8 +154,16 @@ async function save() {
     await validate()
     return
   }
-  const company = preview.value
-  const saved = await catalog.addCompany(company)
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(jsonText.value)
+  } catch {
+    errors.value = ['JSON 解析失败，请检查逗号、引号与括号是否完整。']
+    return
+  }
+  const saved = await companiesApi.importTemplate(parsed)
+  // 刷新目录缓存后再跳转，详情页立即可见，无需手动刷新。
+  await catalog.refresh()
   router.push({ name: 'companyDetail', params: { id: saved.id } })
 }
 </script>
