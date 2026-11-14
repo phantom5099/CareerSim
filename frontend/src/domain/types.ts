@@ -305,3 +305,10 @@ export const TEMPLATE_LIMITS = {
   jobTitle: 60,
   jobDescription: 600,
 } as const
+
+/** 简历枚举选项；与后端 resume::content 的常量严格一致。 */
+export const RESUME_JOB_TYPES = ['校招', '实习', '社招'] as const
+export const DEGREE_OPTIONS = ['大专', '本科', '硕士', '博士', '其他'] as const
+export const EXPERIENCE_TYPE_OPTIONS = ['实习', '全职', '兼职'] as const
+export const SKILL_LEVEL_OPTIONS = ['了解', '掌握', '熟练'] as const
+export const HONOR_LEVEL_OPTIONS = ['国家级', '省级', '市级', '校级', '院级', '其他'] as const

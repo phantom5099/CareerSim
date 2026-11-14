@@ -501,6 +501,31 @@ fn pick_by_score<'a>(
     best.map(|(_, chunk)| chunk)
 }
 
+/// 学历自由文本归一到 `content::DEGREES` 档位：按关键词优先级判定档次，
+/// 仅含"在读/应届/辅修"等状态词、无法判断档次的归为"其他"，无关键词返回空串。
+fn normalize_degree(raw: &str) -> String {
+    let lower = raw.to_ascii_lowercase();
+    const RANKED: [(&[&str], &str); 4] = [
+        (&["博士", "phd", "ph.d", "doctor"], "博士"),
+        (&["硕士", "研究生", "mba", "m.s.", "m.a.", "master"], "硕士"),
+        (
+            &["本科", "学士", "b.s.", "b.a.", "bachelor", "双学位"],
+            "本科",
+        ),
+        (&["大专", "专科", "associate"], "大专"),
+    ];
+    for (keys, degree) in RANKED {
+        if keys.iter().any(|key| lower.contains(key)) {
+            return degree.to_owned();
+        }
+    }
+    if DEGREE_KEYWORDS.iter().any(|key| lower.contains(key)) {
+        "其他".to_owned()
+    } else {
+        String::new()
+    }
+}
+
 fn parse_education_entry(entry: &Entry) -> Option<ResumeEducation> {
     let chunks = split_headline(&entry.headline);
     let lower_chunks: Vec<String> = chunks.iter().map(|c| c.to_ascii_lowercase()).collect();
@@ -570,6 +595,7 @@ fn parse_education_entry(entry: &Entry) -> Option<ResumeEducation> {
         .map(|line| cut(line, MAX_ITEM_CHARS))
         .unwrap_or_default();
 
+    let degree = normalize_degree(&degree);
     if school.is_empty() && major.is_empty() && degree.is_empty() {
         return None;
     }
@@ -604,7 +630,7 @@ fn parse_experience_entry(entry: &Entry, internship: bool) -> Option<ResumeExper
     let kind = if internship || entry.headline.contains("实习") {
         "实习"
     } else {
-        "工作"
+        "全职"
     };
     if company.is_empty() && role.is_empty() {
         return None;

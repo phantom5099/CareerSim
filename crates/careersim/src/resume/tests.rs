@@ -294,7 +294,7 @@ fn structurize_parses_company_line_then_role_with_date() {
     assert_eq!(parsed.experiences.len(), 1);
     assert_eq!(parsed.experiences[0].company, "阿里巴巴集团");
     assert_eq!(parsed.experiences[0].role, "高级开发工程师");
-    assert_eq!(parsed.experiences[0].kind, "工作");
+    assert_eq!(parsed.experiences[0].kind, "全职");
     assert!(parsed.experiences[0].description.contains("交易链路"));
 }
 
