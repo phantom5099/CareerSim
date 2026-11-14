@@ -3,4 +3,5 @@
 pub mod account_routes;
 pub mod auth;
 pub mod error;
+pub mod resume_routes;
 pub mod router;

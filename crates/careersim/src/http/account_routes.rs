@@ -1,17 +1,35 @@
 //! 账户路由处理器：注册、登录、注销、资料与改密（plan/01 §6.1）。
 
 use axum::Json;
+use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::routing::{get, patch, post};
 use serde::{Deserialize, Serialize};
+use tower_http::limit::RequestBodyLimitLayer;
 
-use crate::account::model::{ProfilePatch, User};
+use crate::account::model::{AccountError, ProfilePatch, User};
 use crate::account::service::SessionGrant;
 
 use super::auth::{AuthContext, clear_session_cookie_header, session_cookie_header};
-use super::error::ApiError;
+use super::error::{ApiError, render_backend_chain};
 use super::router::AppState;
+
+/// JSON 请求体上限：与全局一致（1 MiB）。
+const BODY_LIMIT_BYTES: usize = 1024 * 1024;
+
+/// 账户路由装配；注册/登录无需认证（由处理器是否接收 `AuthContext` 决定）。
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/api/v1/auth/register", post(register))
+        .route("/api/v1/auth/login", post(login))
+        .route("/api/v1/auth/logout", post(logout))
+        .route("/api/v1/auth/me", get(me))
+        .route("/api/v1/me", patch(update_profile))
+        .route("/api/v1/me/password", post(change_password))
+        .layer(RequestBodyLimitLayer::new(BODY_LIMIT_BYTES))
+}
 
 /// 用户 DTO；`avatarText`/`avatarColor` 由展示名稳定派生，不持久化。
 #[derive(Debug, Serialize)]
@@ -72,6 +90,29 @@ fn fnv1a(input: &str) -> usize {
         hash = hash.wrapping_mul(0x0100_0193);
     }
     hash as usize
+}
+
+/// `AccountError` → 统一错误体；后端错误细节只进日志。
+impl From<AccountError> for ApiError {
+    fn from(err: AccountError) -> Self {
+        match err {
+            AccountError::InvalidUsername { .. } | AccountError::InvalidPassword { .. } => {
+                ApiError::validation_failed(err.to_string())
+            }
+            AccountError::InvalidProfile { field, .. } => {
+                ApiError::validation_fields(err.to_string(), vec![field.to_owned()])
+            }
+            AccountError::InvalidCredentials => ApiError::invalid_credentials(),
+            AccountError::CurrentPasswordMismatch => ApiError::current_password_mismatch(),
+            AccountError::UsernameTaken => ApiError::conflict("username already taken"),
+            AccountError::Unauthenticated => ApiError::unauthenticated(),
+            // 后端错误细节只进日志；对外统一 internal_error，避免泄露内部信息。
+            AccountError::Backend { message, source } => {
+                tracing::error!(error = %render_backend_chain(&message, source.as_deref()), "account backend error");
+                ApiError::internal_error()
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
