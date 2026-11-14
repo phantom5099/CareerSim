@@ -170,6 +170,16 @@ function clearFilters() {
   query.value = ''
   activeIndustries.value = []
 }
+
+/** 首屏加载失败后的手动重试；store 侧失败不缓存，直接再拉一次。 */
+async function retryLoad() {
+  try {
+    await catalog.init()
+  } catch {
+    // 错误详情已写入 catalog.loadError，由模板展示。
+  }
+}
+
 </script>
 
 <template>
@@ -387,8 +397,20 @@ function clearFilters() {
         </div>
       </div>
 
+      <!-- 加载失败：显示真实原因并允许重试；与"筛选无结果"区分开。 -->
       <div
-        v-if="!rest.length"
+        v-if="catalog.loadError"
+        class="mt-6 border border-vermilion/40 bg-vermilion/5 px-6 py-10 text-center"
+      >
+        <p class="font-display text-xl">公司条目加载失败</p>
+        <p class="mt-2 text-[0.78rem] leading-6 text-ink-faint">{{ catalog.loadError }}</p>
+        <button type="button" class="btn-line mt-5 py-1.5 text-[0.72rem]" @click="retryLoad">
+          重新加载
+        </button>
+      </div>
+
+      <div
+        v-else-if="!rest.length"
         class="mt-6 border border-dashed border-line-strong px-6 py-12 text-center"
       >
         <p class="font-display text-xl">没有找到匹配的公司</p>

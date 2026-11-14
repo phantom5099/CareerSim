@@ -112,7 +112,9 @@ router.beforeEach(async (to) => {
     }
   }
 
-  await Promise.all([
+  // 各 store 的首屏加载互不阻塞；失败由各自页面显示错误态并允许重试，
+  // 不让单个接口故障卡死整次导航。
+  await Promise.allSettled([
     useCompanyCatalogStore().init(),
     useApplicationsStore().init(),
     useOffersStore().init(),
