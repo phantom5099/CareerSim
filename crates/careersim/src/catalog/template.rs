@@ -9,8 +9,11 @@ use serde_json::{Map, Value};
 use crate::pipeline::{PipelineDefinition, PipelineError, StageDefinition};
 
 use super::model::{
-    ACCENT_MAX_CHARS, COMPANY_NAME_MAX_CHARS, HIGHLIGHT_ITEM_MAX_CHARS, HIGHLIGHT_MAX_ITEMS,
-    JobStatus, JobType, LOGO_TEXT_MAX_CHARS, PROJECT_NAME_MAX_CHARS, ProjectStatus, normalize_key,
+    ACCENT_MAX_CHARS, CITY_MAX_CHARS, COMPANY_ACCENTS, COMPANY_DESCRIPTION_MAX_CHARS,
+    COMPANY_NAME_MAX_CHARS, COMPANY_SIZES, ENGLISH_NAME_MAX_CHARS, HIGHLIGHT_ITEM_MAX_CHARS,
+    HIGHLIGHT_MAX_ITEMS, INDUSTRY_MAX_CHARS, JOB_DESCRIPTION_MAX_CHARS, JOB_TITLE_MAX_CHARS,
+    JobStatus, JobType, LOGO_TEXT_MAX_CHARS, PROJECT_DESCRIPTION_MAX_CHARS, PROJECT_NAME_MAX_CHARS,
+    ProjectStatus, SEASON_MAX_CHARS, TAGLINE_MAX_CHARS, is_hex_color, normalize_key,
 };
 
 /// 当前模板格式版本；未知版本直接拒绝，不做静默降级。
@@ -199,13 +202,46 @@ fn required_text(
     }
 }
 
-/// 读取可选字符串；缺省返回 `default_value`，显式 null 同缺省。
-fn optional_text(obj: &Map<String, Value>, key: &str, default_value: &str) -> Option<String> {
-    match obj.get(key) {
+/// 读取有长度上限的文本字段；`required` 时缺失或空白即报错，
+/// 否则空值放行为空串。超长一律报错。
+fn bounded_text(
+    obj: &Map<String, Value>,
+    key: &str,
+    path: &str,
+    required: bool,
+    max_chars: usize,
+    errors: &mut Vec<TemplateError>,
+) -> Option<String> {
+    let text = match obj.get(key) {
         Some(Value::String(text)) => Some(text.trim().to_owned()),
-        Some(Value::Null) | None => Some(default_value.to_owned()),
-        _ => None,
+        Some(Value::Null) | None => {
+            if required {
+                errors.push(TemplateError::new(path, "is required"));
+                return None;
+            }
+            return Some(String::new());
+        }
+        Some(_) => {
+            errors.push(TemplateError::new(path, "must be a string"));
+            return None;
+        }
+    };
+    let text = text.expect("string branch returns Some");
+    if text.is_empty() {
+        if required {
+            errors.push(TemplateError::new(path, "must be a non-empty string"));
+            return None;
+        }
+        return Some(text);
     }
+    if text.chars().count() > max_chars {
+        errors.push(TemplateError::new(
+            path,
+            format!("must be 1..={max_chars} characters"),
+        ));
+        return None;
+    }
+    Some(text)
 }
 
 fn validate_company(
@@ -213,8 +249,22 @@ fn validate_company(
     errors: &mut Vec<TemplateError>,
 ) -> Option<ValidatedCompany> {
     let obj = object_of(value, "company", errors)?;
-    let name = required_text(obj, "name", "company.name", errors);
-    let industry = required_text(obj, "industry", "company.industry", errors);
+    let name = bounded_text(
+        obj,
+        "name",
+        "company.name",
+        true,
+        COMPANY_NAME_MAX_CHARS,
+        errors,
+    );
+    let industry = bounded_text(
+        obj,
+        "industry",
+        "company.industry",
+        true,
+        INDUSTRY_MAX_CHARS,
+        errors,
+    );
 
     let is_private = match obj.get("isPrivate") {
         Some(Value::Bool(flag)) => *flag,
@@ -259,52 +309,80 @@ fn validate_company(
         None => Vec::new(),
     };
 
-    let name_ok = name
-        .as_ref()
-        .is_some_and(|name| name.chars().count() <= COMPANY_NAME_MAX_CHARS);
-    if !name_ok {
-        errors.push(TemplateError::new(
-            "company.name",
-            format!("must be 1..={COMPANY_NAME_MAX_CHARS} characters"),
-        ));
-    }
-    let logo_text = optional_text(obj, "logoText", "").unwrap_or_default();
-    if logo_text.chars().count() > LOGO_TEXT_MAX_CHARS {
-        errors.push(TemplateError::new(
-            "company.logoText",
-            format!("must be at most {LOGO_TEXT_MAX_CHARS} characters"),
-        ));
-    }
-    let accent = optional_text(obj, "accent", "").unwrap_or_default();
-    if accent.chars().count() > ACCENT_MAX_CHARS {
+    let logo_text = bounded_text(
+        obj,
+        "logoText",
+        "company.logoText",
+        true,
+        LOGO_TEXT_MAX_CHARS,
+        errors,
+    );
+    let accent = bounded_text(
+        obj,
+        "accent",
+        "company.accent",
+        false,
+        ACCENT_MAX_CHARS,
+        errors,
+    );
+    if let Some(color) = &accent
+        && !color.is_empty()
+        && (!is_hex_color(color) || !COMPANY_ACCENTS.contains(&color.as_str()))
+    {
         errors.push(TemplateError::new(
             "company.accent",
-            format!("must be at most {ACCENT_MAX_CHARS} characters"),
+            format!("must be one of {}", COMPANY_ACCENTS.join(" / ")),
         ));
     }
 
-    let defaults = ["englishName", "city", "size", "tagline", "description"];
-    for key in defaults {
-        if optional_text(obj, key, "").is_none() {
-            errors.push(TemplateError::new(
-                format!("company.{key}"),
-                "must be a string",
-            ));
-        }
+    let english_name = bounded_text(
+        obj,
+        "englishName",
+        "company.englishName",
+        true,
+        ENGLISH_NAME_MAX_CHARS,
+        errors,
+    );
+    let city = bounded_text(obj, "city", "company.city", true, CITY_MAX_CHARS, errors);
+    // size 的真实约束是枚举归属；长度上限只作兜底，取值由下方 membership 校验。
+    let size = bounded_text(obj, "size", "company.size", true, CITY_MAX_CHARS, errors);
+    if let Some(size_text) = &size
+        && !COMPANY_SIZES.contains(&size_text.as_str())
+    {
+        errors.push(TemplateError::new(
+            "company.size",
+            format!("must be one of {}", COMPANY_SIZES.join(" / ")),
+        ));
     }
+    let tagline = bounded_text(
+        obj,
+        "tagline",
+        "company.tagline",
+        true,
+        TAGLINE_MAX_CHARS,
+        errors,
+    );
+    let description = bounded_text(
+        obj,
+        "description",
+        "company.description",
+        true,
+        COMPANY_DESCRIPTION_MAX_CHARS,
+        errors,
+    );
 
     Some(ValidatedCompany {
         name: name?,
-        english_name: optional_text(obj, "englishName", "").unwrap_or_default(),
+        english_name: english_name?,
         is_private,
         industry: industry?,
-        city: optional_text(obj, "city", "").unwrap_or_default(),
-        size: optional_text(obj, "size", "").unwrap_or_default(),
-        tagline: optional_text(obj, "tagline", "").unwrap_or_default(),
-        description: optional_text(obj, "description", "").unwrap_or_default(),
+        city: city?,
+        size: size?,
+        tagline: tagline?,
+        description: description?,
         highlights,
-        logo_text,
-        accent,
+        logo_text: logo_text?,
+        accent: accent.unwrap_or_default(),
     })
 }
 
@@ -394,13 +472,31 @@ fn validate_projects(
         }
 
         if let (Some(key), Some(name), Some(status)) = (key, name, status) {
+            let season = bounded_text(
+                obj,
+                "season",
+                &format!("{path}.season"),
+                false,
+                SEASON_MAX_CHARS,
+                errors,
+            )
+            .unwrap_or_default();
+            let description = bounded_text(
+                obj,
+                "description",
+                &format!("{path}.description"),
+                false,
+                PROJECT_DESCRIPTION_MAX_CHARS,
+                errors,
+            )
+            .unwrap_or_default();
             projects.push(ValidatedProject {
                 key,
                 name,
-                season: optional_text(obj, "season", "").unwrap_or_default(),
+                season,
                 status,
                 deadline,
-                description: optional_text(obj, "description", "").unwrap_or_default(),
+                description,
             });
         }
     }
@@ -639,7 +735,14 @@ fn validate_jobs(
         let project_key = required_text(obj, "projectKey", &format!("{path}.projectKey"), errors);
         let pipeline_key =
             required_text(obj, "pipelineKey", &format!("{path}.pipelineKey"), errors);
-        let title = required_text(obj, "title", &format!("{path}.title"), errors);
+        let title = bounded_text(
+            obj,
+            "title",
+            &format!("{path}.title"),
+            true,
+            JOB_TITLE_MAX_CHARS,
+            errors,
+        );
 
         let job_type = match obj.get("jobType") {
             Some(Value::String(raw)) => match JobType::parse(raw.trim()) {
@@ -809,13 +912,29 @@ fn validate_jobs(
                 project_key,
                 pipeline_key,
                 title,
-                city: optional_text(obj, "city", "").unwrap_or_default(),
+                city: bounded_text(
+                    obj,
+                    "city",
+                    &format!("{path}.city"),
+                    false,
+                    CITY_MAX_CHARS,
+                    errors,
+                )
+                .unwrap_or_default(),
                 job_type,
                 salary_min,
                 salary_max,
                 salary_months,
                 tags,
-                description: optional_text(obj, "description", "").unwrap_or_default(),
+                description: bounded_text(
+                    obj,
+                    "description",
+                    &format!("{path}.description"),
+                    false,
+                    JOB_DESCRIPTION_MAX_CHARS,
+                    errors,
+                )
+                .unwrap_or_default(),
                 status,
             });
         }

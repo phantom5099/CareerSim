@@ -526,7 +526,17 @@ fn valid_template() -> Value {
     };
     json!({
         "schemaVersion": 1,
-        "company": { "name": "虚构星桥科技", "industry": "人工智能" },
+        "company": {
+            "name": "虚构星桥科技",
+            "englishName": "Fictional Starbridge",
+            "industry": "人工智能",
+            "city": "上海",
+            "size": "100–499 人",
+            "tagline": "连接想象与现实",
+            "description": "一家专注于人工智能的虚构科技公司。",
+            "logoText": "星桥",
+            "accent": "#3D5A45",
+        },
         "projects": [ { "key": "p1", "name": "2027 校招" } ],
         "pipelines": [ {
             "key": "pipe1", "projectKey": "p1", "name": "校招主流程",

@@ -264,3 +264,44 @@ export function formatDateLong(value: string): string {
     day: 'numeric',
   }).format(date)
 }
+
+/** 团队规模枚举；与后端 COMPANY_SIZES 严格一致，表单下拉与草稿生成共用。 */
+export const COMPANY_SIZE_OPTIONS = [
+  '50 人以下',
+  '50–200 人',
+  '100–499 人',
+  '500–2000 人',
+  '2000 人以上',
+] as const
+
+/** 品牌色枚举；与后端 COMPANY_ACCENTS 严格一致，只允许点选，不允许自由输入。 */
+export const ACCENT_OPTIONS = [
+  { value: '#3D5A45', label: '苔绿' },
+  { value: '#2F5D50', label: '松绿' },
+  { value: '#4F6042', label: '橄榄' },
+  { value: '#A4482F', label: '朱砂' },
+  { value: '#8A5A2B', label: '赭石' },
+  { value: '#5B4A7A', label: '黛紫' },
+  { value: '#29405E', label: '靛青' },
+  { value: '#2C4A7C', label: '藏蓝' },
+] as const
+
+export const DEFAULT_ACCENT = ACCENT_OPTIONS[0].value
+
+/** 模板文本字段上限；与后端 catalog::model 的 MAX_CHARS 常量严格一致。 */
+export const TEMPLATE_LIMITS = {
+  name: 80,
+  englishName: 40,
+  industry: 24,
+  city: 24,
+  tagline: 60,
+  description: 600,
+  logoText: 8,
+  highlightItem: 60,
+  highlightItems: 12,
+  projectName: 60,
+  season: 24,
+  projectDescription: 300,
+  jobTitle: 60,
+  jobDescription: 600,
+} as const

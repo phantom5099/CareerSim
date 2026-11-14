@@ -312,8 +312,40 @@ pub(crate) const COMPANY_NAME_MAX_CHARS: usize = 80;
 pub(crate) const HIGHLIGHT_MAX_ITEMS: usize = 12;
 pub(crate) const HIGHLIGHT_ITEM_MAX_CHARS: usize = 60;
 pub(crate) const LOGO_TEXT_MAX_CHARS: usize = 8;
-pub(crate) const ACCENT_MAX_CHARS: usize = 16;
+pub(crate) const ACCENT_MAX_CHARS: usize = 7;
 pub(crate) const PROJECT_NAME_MAX_CHARS: usize = 60;
+
+/// 公司模板各文本字段的长度上限；前端表单 maxlength 与此严格一致。
+pub(crate) const ENGLISH_NAME_MAX_CHARS: usize = 40;
+pub(crate) const INDUSTRY_MAX_CHARS: usize = 24;
+pub(crate) const CITY_MAX_CHARS: usize = 24;
+pub(crate) const TAGLINE_MAX_CHARS: usize = 60;
+pub(crate) const COMPANY_DESCRIPTION_MAX_CHARS: usize = 600;
+pub(crate) const SEASON_MAX_CHARS: usize = 24;
+pub(crate) const PROJECT_DESCRIPTION_MAX_CHARS: usize = 300;
+pub(crate) const JOB_TITLE_MAX_CHARS: usize = 60;
+pub(crate) const JOB_DESCRIPTION_MAX_CHARS: usize = 600;
+
+/// 团队规模枚举：模板导入与前端表单下拉共用这套取值。
+pub(crate) const COMPANY_SIZES: [&str; 5] = [
+    "50 人以下",
+    "50–200 人",
+    "100–499 人",
+    "500–2000 人",
+    "2000 人以上",
+];
+
+/// 品牌色枚举：表单色板、内置公司模板与导入校验共用这套取值；允许留空表示用默认色。
+pub(crate) const COMPANY_ACCENTS: [&str; 8] = [
+    "#3D5A45", "#2F5D50", "#4F6042", "#A4482F", "#8A5A2B", "#5B4A7A", "#29405E", "#2C4A7C",
+];
+
+/// 品牌色必须是 `#RRGGBB` 六位十六进制；模板导入允许留空。
+pub(crate) fn is_hex_color(text: &str) -> bool {
+    text.len() == 7
+        && text.starts_with('#')
+        && text[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
 
 pub(crate) fn validate_company_fields(
     name: &str,
@@ -348,10 +380,10 @@ pub(crate) fn validate_company_fields(
             reason: "must be at most 8 characters".to_owned(),
         });
     }
-    if accent.chars().count() > 16 {
+    if !accent.is_empty() && !is_hex_color(accent) {
         return Err(CatalogError::InvalidInput {
             field: "accent",
-            reason: "must be at most 16 characters".to_owned(),
+            reason: "must be a #RRGGBB hex color".to_owned(),
         });
     }
     Ok(())

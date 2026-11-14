@@ -1,3 +1,4 @@
+import { COMPANY_SIZE_OPTIONS } from '@/domain/types'
 import type { Job } from '@/domain/types'
 
 export interface JobDraft {
@@ -463,7 +464,7 @@ export const namePrefixes = ['云岫', '知微', '栖野', '格物', '星澜', '
 export const nameSuffixes = ['科技', '智能', '实验室', '数据', '互动', '软件', '数字']
 export const englishPrefixes = ['NOVA', 'ORBIT', 'LUMEN', 'ECHO', 'NORTH', 'VELLUM', 'ATLAS', 'KITE']
 export const englishSuffixes = ['LABS', 'STUDIO', 'WORKS', 'DATA', 'SYSTEMS', 'TECH']
-export const companySizes = ['20–99 人', '100–499 人', '500–999 人', '1000–4999 人']
+export const companySizes: string[] = [...COMPANY_SIZE_OPTIONS]
 export const workStyles = ['双休 · 弹性工作', '导师制 · 每周复盘', '小团队闭环 · 决策快', '远程友好 · 异步协作']
 
 /** 默认面试流程（hr_screen → 技术面 → Offer）；升级旧模板与生成草稿共用。 */
