@@ -12,6 +12,9 @@ use crate::config::AppConfig;
 use crate::http::router::{AppState, router};
 use crate::llm::OpenAiCompatibleClient;
 use crate::postgres_session_service;
+use crate::resume::{
+    AttachmentStore, LocalFsAttachmentStore, S3AttachmentStore, postgres_resume_service,
+};
 
 const MODEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
@@ -45,10 +48,34 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         config.argon2.t_cost,
         config.argon2.p_cost,
     )?;
-    let account = postgres_account_service(pool, Arc::new(hasher));
+    let account = postgres_account_service(pool.clone(), Arc::new(hasher));
+    let attachment_store: Arc<dyn AttachmentStore> = match &config.storage {
+        crate::config::AttachmentStorageConfig::LocalFs { dir } => {
+            tracing::info!(dir = %dir, "attachment storage: local filesystem");
+            Arc::new(LocalFsAttachmentStore::new(dir))
+        }
+        crate::config::AttachmentStorageConfig::S3 {
+            endpoint,
+            region,
+            bucket,
+            access_key_id,
+            secret_access_key,
+        } => {
+            tracing::info!(endpoint = %endpoint, bucket = %bucket, "attachment storage: s3");
+            Arc::new(S3AttachmentStore::new(
+                endpoint,
+                region,
+                bucket.clone(),
+                access_key_id,
+                secret_access_key,
+            ))
+        }
+    };
+    let resume = postgres_resume_service(pool, attachment_store);
 
     let state = AppState {
         account: Arc::new(account),
+        resume: Arc::new(resume),
         allowed_origins: config.http.allowed_origins.clone().into(),
         cookie_secure: config.http.cookie_secure,
     };

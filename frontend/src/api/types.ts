@@ -112,7 +112,6 @@ export interface ResumePayload {
 
 export interface ResumeAttachment {
   fileName: string
-  fileSize: number
 }
 
 interface ResumeMeta {
@@ -122,21 +121,27 @@ interface ResumeMeta {
   isDefault: boolean
 }
 
-export interface OnlineResume extends ResumeMeta {
-  kind: 'online'
+export type ResumeParseStatus = 'not_applicable' | 'pending' | 'ready' | 'failed'
+
+/** 简历文档：结构化在线内容必有；附件可选（解析结果回填 payload）。 */
+export interface ResumeDocument extends ResumeMeta {
+  payload: ResumePayload
+  attachment?: ResumeAttachment
+  /** 无附件时为 not_applicable；有附件时为解析状态。 */
+  parseStatus: ResumeParseStatus
+  /** 解析失败时的固定错误码；存储键与哈希不对外返回。 */
+  parseErrorCode?: string
+}
+
+export interface ResumeCreateInput {
+  title: string
   payload: ResumePayload
 }
 
-export interface AttachmentResume extends ResumeMeta {
-  kind: 'attachment'
-  attachment: ResumeAttachment
+export interface ResumeUpdateInput {
+  title?: string
+  payload?: ResumePayload
 }
-
-export type ResumeDocument = OnlineResume | AttachmentResume
-
-export type ResumeInput =
-  | { title: string; kind: 'online'; payload: ResumePayload }
-  | { title: string; kind: 'attachment'; attachment: ResumeAttachment }
 
 export const RESUME_LIMIT = 3
 

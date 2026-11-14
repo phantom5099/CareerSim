@@ -12,6 +12,7 @@ pub mod error;
 pub mod http;
 pub mod llm;
 pub mod pipeline;
+pub mod resume;
 pub(crate) mod store;
 
 #[cfg(test)]

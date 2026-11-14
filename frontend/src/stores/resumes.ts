@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import { resumeApi } from '@/api/endpoints/resume'
-import type { ResumeDocument, ResumeInput } from '@/api/types'
+import type { ResumeCreateInput, ResumeDocument, ResumeUpdateInput } from '@/api/types'
 
 export const useResumesStore = defineStore('resumes', () => {
   const resumes = ref<ResumeDocument[]>([])
@@ -26,13 +26,31 @@ export const useResumesStore = defineStore('resumes', () => {
     return resumes.value.find((resume) => resume.id === id)
   }
 
-  async function create(input: ResumeInput): Promise<ResumeDocument> {
+  async function createOnline(input: ResumeCreateInput): Promise<ResumeDocument> {
     const created = await resumeApi.create(input)
     resumes.value = [created, ...resumes.value]
     return created
   }
 
-  async function update(id: string, input: ResumeInput): Promise<ResumeDocument> {
+  async function uploadAttachment(title: string, file: File): Promise<ResumeDocument> {
+    const created = await resumeApi.uploadAttachment(title, file)
+    resumes.value = [created, ...resumes.value]
+    return created
+  }
+
+  async function attachToResume(id: string, file: File): Promise<ResumeDocument> {
+    const updated = await resumeApi.attachToResume(id, file)
+    resumes.value = resumes.value.map((resume) => (resume.id === id ? updated : resume))
+    return updated
+  }
+
+  async function removeAttachment(id: string): Promise<ResumeDocument> {
+    const updated = await resumeApi.removeAttachment(id)
+    resumes.value = resumes.value.map((resume) => (resume.id === id ? updated : resume))
+    return updated
+  }
+
+  async function update(id: string, input: ResumeUpdateInput): Promise<ResumeDocument> {
     const updated = await resumeApi.update(id, input)
     resumes.value = resumes.value.map((resume) => (resume.id === id ? updated : resume))
     return updated
@@ -40,6 +58,7 @@ export const useResumesStore = defineStore('resumes', () => {
 
   async function remove(id: string): Promise<void> {
     await resumeApi.remove(id)
+    // 删除默认简历时后端会提升最新一份，整表重拉保证默认标记正确。
     resumes.value = await resumeApi.list()
   }
 
@@ -57,7 +76,10 @@ export const useResumesStore = defineStore('resumes', () => {
     defaultResume,
     init,
     byId,
-    create,
+    createOnline,
+    uploadAttachment,
+    attachToResume,
+    removeAttachment,
     update,
     remove,
     setDefault,
