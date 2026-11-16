@@ -17,6 +17,17 @@ pub const MAX_ITEM_DESCRIPTION_CHARS: usize = 2000;
 /// 序列化后的整体字节数上限（与迁移 `resumes_content_size` 一致）。
 pub const MAX_SERIALIZED_BYTES: usize = 262_144;
 
+/// 求职类型枚举；空串表示未选择。前端下拉与 API 校验共用。
+pub const JOB_TYPES: [&str; 3] = ["校招", "实习", "社招"];
+/// 学历档位枚举；附件解析产出的自由文本经 `normalize_degree` 归一到这套取值。
+pub const DEGREES: [&str; 5] = ["大专", "本科", "硕士", "博士", "其他"];
+/// 经历类型枚举；附件解析对非实习经历统一产出"全职"。
+pub const EXPERIENCE_TYPES: [&str; 3] = ["实习", "全职", "兼职"];
+/// 技能熟练度枚举；附件解析不填该字段（恒为空串）。
+pub const SKILL_LEVELS: [&str; 3] = ["了解", "掌握", "熟练"];
+/// 荣誉级别枚举；"市级/院级"来自附件解析的关键词命中。
+pub const HONOR_LEVELS: [&str; 6] = ["国家级", "省级", "市级", "校级", "院级", "其他"];
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeEducation {
@@ -120,6 +131,7 @@ impl ResumeContent {
             check_field(field, value, MAX_FIELD_CHARS)?;
         }
         check_field("summary", &self.summary, MAX_SUMMARY_CHARS)?;
+        check_enum("jobType", &self.job_type, &JOB_TYPES)?;
 
         check_items("educations", self.educations.len())?;
         for (index, item) in self.educations.iter().enumerate() {
@@ -133,6 +145,12 @@ impl ResumeContent {
             ] {
                 check_item_field("educations", index, field, value, MAX_ITEM_CHARS)?;
             }
+            // ranking 保留自由文本：附件解析会写入 GPA/绩点等描述。
+            check_enum(
+                &format!("educations[{index}].degree"),
+                &item.degree,
+                &DEGREES,
+            )?;
         }
 
         check_items("experiences", self.experiences.len())?;
@@ -152,6 +170,11 @@ impl ResumeContent {
                 "description",
                 &item.description,
                 MAX_ITEM_DESCRIPTION_CHARS,
+            )?;
+            check_enum(
+                &format!("experiences[{index}].type"),
+                &item.kind,
+                &EXPERIENCE_TYPES,
             )?;
         }
 
@@ -197,6 +220,11 @@ impl ResumeContent {
         for (index, item) in self.skills.iter().enumerate() {
             check_item_field("skills", index, "name", &item.name, MAX_ITEM_CHARS)?;
             check_item_field("skills", index, "level", &item.level, MAX_ITEM_CHARS)?;
+            check_enum(
+                &format!("skills[{index}].level"),
+                &item.level,
+                &SKILL_LEVELS,
+            )?;
         }
 
         check_items("certificates", self.certificates.len())?;
@@ -210,6 +238,11 @@ impl ResumeContent {
             check_item_field("honors", index, "name", &item.name, MAX_ITEM_CHARS)?;
             check_item_field("honors", index, "level", &item.level, MAX_ITEM_CHARS)?;
             check_item_field("honors", index, "date", &item.date, MAX_ITEM_CHARS)?;
+            check_enum(
+                &format!("honors[{index}].level"),
+                &item.level,
+                &HONOR_LEVELS,
+            )?;
         }
         Ok(())
     }
@@ -242,6 +275,17 @@ fn check_field(field: &'static str, value: &str, max: usize) -> Result<(), Resum
         });
     }
     Ok(())
+}
+
+/// 枚举字段校验：空串表示未选择，放行；非空必须在白名单内。
+fn check_enum(field: &str, value: &str, allowed: &[&str]) -> Result<(), ResumeError> {
+    if value.is_empty() || allowed.contains(&value) {
+        return Ok(());
+    }
+    Err(ResumeError::InvalidContent {
+        field: field.to_owned(),
+        reason: "must be empty or one of the allowed options",
+    })
 }
 
 fn check_items(field: &'static str, len: usize) -> Result<(), ResumeError> {

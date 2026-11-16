@@ -4,28 +4,40 @@ import { RouterLink } from 'vue-router'
 
 import CompanyMark from '@/components/CompanyMark.vue'
 import MultiSelect from '@/components/MultiSelect.vue'
-import { companiesApi } from '@/api/endpoints/companies'
-import { PROJECT_STATUS_LABELS, formatDate } from '@/domain/types'
+import { PROJECT_STATUS_LABELS, effectiveProjectStatus, formatDate } from '@/domain/types'
 import type { Company, ProjectStatus } from '@/domain/types'
 import { useCompanyCatalogStore } from '@/stores/companyCatalog'
 
 const catalog = useCompanyCatalogStore()
 
 const query = ref('')
+// 搜索确认后才生效：回车或点搜索按钮，避免逐键触发（也避开输入法组词过程）。
+const appliedQuery = ref('')
 const searchInput = ref<HTMLInputElement | null>(null)
-const industries = ref<string[]>([])
+
+function applySearch() {
+  appliedQuery.value = query.value
+}
+
+function onSearchEnter(event: KeyboardEvent) {
+  // 中文输入法选词的回车不触发搜索。
+  if (!event.isComposing) {
+    applySearch()
+  }
+}
+
+function clearSearch() {
+  query.value = ''
+  appliedQuery.value = ''
+  searchInput.value?.focus()
+}
+const industries = computed(() => [
+  ...new Set(catalog.companies.map((company) => company.industry)),
+])
 const activeIndustries = ref<string[]>([])
 
-onMounted(async () => {
-  try {
-    industries.value = (await companiesApi.industries()).industries
-  } catch {
-    industries.value = []
-  }
-})
-
 const visibleCompanies = computed(() => {
-  const keyword = query.value.trim().toLowerCase()
+  const keyword = appliedQuery.value.trim().toLowerCase()
   return catalog.companies.filter((company) => {
     if (activeIndustries.value.length && !activeIndustries.value.includes(company.industry)) {
       return false
@@ -47,10 +59,9 @@ const headlineHovered = ref(false)
 const headlineFocused = ref(false)
 let headlineTimer: number | undefined
 
+// 搜索时隐藏轮播；行业筛选不影响轮播，只作用于下方列表。
 const headlinePool = computed(() =>
-  query.value.trim() || activeIndustries.value.length
-    ? []
-    : visibleCompanies.value.slice(0, HEADLINE_COUNT),
+  appliedQuery.value.trim() ? [] : catalog.companies.slice(0, HEADLINE_COUNT),
 )
 
 const headlineCompany = computed(() => {
@@ -63,15 +74,8 @@ const headlineActive = computed(() => {
   return pool.length ? headlineIndex.value % pool.length : 0
 })
 
-const rest = computed(() => {
-  const headlines = headlinePool.value
-  if (!headlines.length) {
-    return visibleCompanies.value
-  }
-  return visibleCompanies.value.filter(
-    (company) => !headlines.some((item) => item.id === company.id),
-  )
-})
+// 列表始终展示全部筛选结果；轮播只是精选横幅，不从列表扣除条目。
+const rest = computed(() => visibleCompanies.value)
 
 function stepHeadline(step: number) {
   const pool = headlinePool.value
@@ -151,16 +155,16 @@ onBeforeUnmount(stopHeadlineTimer)
 
 const projectTone: Record<ProjectStatus, string> = {
   open: 'border-moss/60 text-moss',
-  closing: 'border-vermilion/50 text-vermilion',
   closed: 'border-line text-ink-faint',
 }
 
 function activeProject(company: Company) {
-  return company.projects.find((project) => project.status !== 'closed') ?? company.projects[0]
+  return company.projects.find((project) => effectiveProjectStatus(project) !== 'closed') ?? company.projects[0]
 }
 
 function projectStatus(company: Company): ProjectStatus | undefined {
-  return activeProject(company)?.status
+  const project = activeProject(company)
+  return project ? effectiveProjectStatus(project) : undefined
 }
 
 function projectToneOf(company: Company): string {
@@ -177,6 +181,16 @@ function clearFilters() {
   query.value = ''
   activeIndustries.value = []
 }
+
+/** 首屏加载失败后的手动重试；store 侧失败不缓存，直接再拉一次。 */
+async function retryLoad() {
+  try {
+    await catalog.init()
+  } catch {
+    // 错误详情已写入 catalog.loadError，由模板展示。
+  }
+}
+
 </script>
 
 <template>
@@ -198,22 +212,23 @@ function clearFilters() {
             v-model="query"
             type="text"
             class="min-w-0 flex-1 bg-transparent py-2.5 pl-4 pr-3 text-[0.86rem] text-ink outline-none placeholder:text-ink-faint sm:pl-3"
-            placeholder="搜索公司名称、行业或城市"
+            placeholder="搜索公司名称、行业或城市，回车确认"
             aria-label="搜索公司"
             autocomplete="off"
+            @keyup.enter="onSearchEnter"
           />
           <button
             v-if="query"
             type="button"
             class="shrink-0 px-2 text-[0.66rem] text-ink-soft transition hover:text-vermilion"
-            @click="query = ''"
+            @click="clearSearch"
           >
             清除
           </button>
           <button
             type="button"
             class="flex shrink-0 items-center gap-1.5 border-l border-line px-4 text-[0.74rem] text-ink-soft transition hover:bg-ink hover:text-paper-light"
-            @click="searchInput?.focus()"
+            @click="applySearch"
           >
             <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
               <circle cx="7" cy="7" r="4.5" />
@@ -290,7 +305,7 @@ function clearFilters() {
                           {{ headlineCompany.name }}
                         </h2>
                         <span
-                          v-if="headlineCompany.imported"
+                          v-if="headlineCompany.source === 'user'"
                           class="border border-vermilion/40 px-1.5 py-0.5 text-[0.62rem] text-vermilion"
                         >
                           我的模板
@@ -389,13 +404,26 @@ function clearFilters() {
             :options="industries"
           />
           <span class="text-[0.66rem] text-ink-faint">
-            {{ rest.length }} 条{{ query.trim() ? ' · 搜索结果' : '' }}
+            {{ visibleCompanies.length }} 条{{ appliedQuery.trim() ? ' · 搜索结果' : '' }}
           </span>
         </div>
       </div>
 
+      <!-- 加载失败：显示真实原因并允许重试；与"筛选无结果"区分开。 -->
       <div
-        v-if="!rest.length"
+        v-if="catalog.loadError"
+        class="mt-6 border border-vermilion/40 bg-vermilion/5 px-6 py-10 text-center"
+      >
+        <p class="font-display text-xl">公司条目加载失败</p>
+        <p class="mt-2 text-[0.78rem] leading-6 text-ink-faint">{{ catalog.loadError }}</p>
+        <button type="button" class="btn-line mt-5 py-1.5 text-[0.72rem]" @click="retryLoad">
+          重新加载
+        </button>
+      </div>
+
+      <!-- 空状态只看全部可见公司；条目全部进轮播时列表区留空，不算"无匹配"。 -->
+      <div
+        v-else-if="!visibleCompanies.length"
         class="mt-6 border border-dashed border-line-strong px-6 py-12 text-center"
       >
         <p class="font-display text-xl">没有找到匹配的公司</p>
@@ -423,7 +451,7 @@ function clearFilters() {
                 {{ company.englishName }}
               </span>
               <span
-                v-if="company.imported"
+                v-if="company.source === 'user'"
                 class="border border-vermilion/40 px-1.5 py-0.5 text-[0.6rem] text-vermilion"
               >
                 我的模板

@@ -4,6 +4,7 @@ import AppLayout from '@/layouts/AppLayout.vue'
 import ApplicationsPage from '@/pages/ApplicationsPage.vue'
 import CompaniesPage from '@/pages/CompaniesPage.vue'
 import CompanyDetailPage from '@/pages/CompanyDetailPage.vue'
+import CompanyEditPage from '@/pages/CompanyEditPage.vue'
 import ImportCompanyPage from '@/pages/ImportCompanyPage.vue'
 import InterviewRoomPage from '@/pages/InterviewRoomPage.vue'
 import LoginPage from '@/pages/LoginPage.vue'
@@ -53,6 +54,12 @@ const router = createRouter({
           name: 'companyImport',
           component: ImportCompanyPage,
           meta: { title: '录入公司模板' },
+        },
+        {
+          path: 'companies/:id/edit',
+          name: 'companyEdit',
+          component: CompanyEditPage,
+          meta: { title: '编辑公司' },
         },
         {
           path: 'companies/:id',
@@ -112,7 +119,9 @@ router.beforeEach(async (to) => {
     }
   }
 
-  await Promise.all([
+  // 各 store 的首屏加载互不阻塞；失败由各自页面显示错误态并允许重试，
+  // 不让单个接口故障卡死整次导航。
+  await Promise.allSettled([
     useCompanyCatalogStore().init(),
     useApplicationsStore().init(),
     useOffersStore().init(),

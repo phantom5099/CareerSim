@@ -13,7 +13,14 @@ import type {
   ResumeProject,
   ResumeSkill,
 } from '@/api/types'
-import { formatDate } from '@/domain/types'
+import {
+  DEGREE_OPTIONS,
+  EXPERIENCE_TYPE_OPTIONS,
+  HONOR_LEVEL_OPTIONS,
+  RESUME_JOB_TYPES,
+  SKILL_LEVEL_OPTIONS,
+  formatDate,
+} from '@/domain/types'
 import { useResumesStore } from '@/stores/resumes'
 
 const resumes = useResumesStore()
@@ -876,9 +883,9 @@ const previewHonors = computed(() => draft.value.honors.filter((item) => item.na
                       <span class="text-[0.62rem] text-ink-faint">工作类型</span>
                       <select v-model="draft.jobType" class="field mt-1.5 text-sm">
                         <option value="">未选择</option>
-                        <option>校招</option>
-                        <option>实习</option>
-                        <option>社招</option>
+                        <option v-for="jobType in RESUME_JOB_TYPES" :key="jobType">
+                          {{ jobType }}
+                        </option>
                       </select>
                     </label>
                     <label class="block">
@@ -938,11 +945,9 @@ const previewHonors = computed(() => draft.value.honors.filter((item) => item.na
                       <label class="block">
                         <span class="text-[0.6rem] text-ink-faint">学历</span>
                         <select v-model="education.degree" class="field mt-1 text-sm">
-                          <option>本科</option>
-                          <option>硕士</option>
-                          <option>博士</option>
-                          <option>大专</option>
-                          <option>其他</option>
+                          <option v-for="degree in DEGREE_OPTIONS" :key="degree">
+                            {{ degree }}
+                          </option>
                         </select>
                       </label>
                       <label class="block">
@@ -1049,9 +1054,9 @@ const previewHonors = computed(() => draft.value.honors.filter((item) => item.na
                       <label class="block">
                         <span class="text-[0.6rem] text-ink-faint">类型</span>
                         <select v-model="experience.type" class="field mt-1 text-sm">
-                          <option>实习</option>
-                          <option>全职</option>
-                          <option>兼职</option>
+                          <option v-for="kind in EXPERIENCE_TYPE_OPTIONS" :key="kind">
+                            {{ kind }}
+                          </option>
                         </select>
                       </label>
                       <div class="block">
@@ -1304,9 +1309,9 @@ const previewHonors = computed(() => draft.value.honors.filter((item) => item.na
                       autocomplete="off"
                     />
                     <select v-model="skill.level" class="field w-24 shrink-0 text-sm">
-                      <option>熟练</option>
-                      <option>掌握</option>
-                      <option>了解</option>
+                      <option v-for="level in SKILL_LEVEL_OPTIONS" :key="level">
+                        {{ level }}
+                      </option>
                     </select>
                     <button
                       type="button"
@@ -1376,10 +1381,9 @@ const previewHonors = computed(() => draft.value.honors.filter((item) => item.na
                       autocomplete="off"
                     />
                     <select v-model="honor.level" class="field w-24 shrink-0 text-sm">
-                      <option>国家级</option>
-                      <option>省级</option>
-                      <option>校级</option>
-                      <option>其他</option>
+                      <option v-for="level in HONOR_LEVEL_OPTIONS" :key="level">
+                        {{ level }}
+                      </option>
                     </select>
                     <input
                       v-model="honor.date"
