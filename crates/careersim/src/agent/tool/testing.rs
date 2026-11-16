@@ -2,11 +2,7 @@
 
 use async_trait::async_trait;
 
-use super::Tool;
-use super::ToolContext;
-use super::ToolError;
-use super::ToolOutput;
-use super::ToolSpec;
+use super::{Tool, ToolContext, ToolError, ToolOutput, ToolSpec};
 
 pub struct FakeTool {
     spec: ToolSpec,

@@ -7,8 +7,7 @@ use std::fmt;
 use chrono::{DateTime, NaiveDate, Utc};
 use uuid::Uuid;
 
-use crate::account::UserId;
-use crate::pipeline::PipelineDefinition;
+use crate::{account::model::UserId, pipeline::model::PipelineDefinition};
 
 /// 公司模板 ID。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

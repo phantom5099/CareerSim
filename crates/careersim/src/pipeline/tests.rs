@@ -2,24 +2,14 @@
 
 use chrono::Utc;
 
-use super::PipelineError;
-use super::model::OfferError;
-use super::model::OfferPolicy;
-use super::model::OfferTermsInput;
-use super::model::PipelineDefinition;
-use super::model::StageDefinition;
-use super::model::StageKey;
-use super::model::StageKind;
-use super::model::StageOutcome;
-use super::model::TransitionError;
-use super::model::build_offer_terms;
-use super::model::plan_transition;
-use super::rubric::DimensionScore;
-use super::rubric::EvaluationError;
-use super::rubric::EvaluationRubric;
-use super::rubric::RubricDimension;
-use super::rubric::Score;
-use super::rubric::evaluate;
+use super::{
+    PipelineError,
+    model::{
+        OfferError, OfferPolicy, OfferTermsInput, PipelineDefinition, StageDefinition, StageKey,
+        StageKind, StageOutcome, TransitionError, build_offer_terms, plan_transition,
+    },
+    rubric::{DimensionScore, EvaluationError, EvaluationRubric, RubricDimension, Score, evaluate},
+};
 
 fn dimension(key: &str, weight: u16) -> RubricDimension {
     RubricDimension {

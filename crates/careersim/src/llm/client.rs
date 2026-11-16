@@ -4,9 +4,10 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use crate::agent::Message;
-use crate::agent::ToolCall;
-use crate::agent::ToolSpec;
+use crate::agent::{
+    message::Message,
+    tool::{ToolCall, ToolSpec},
+};
 
 /// 工具选择策略；评估轮强制指定 `Function`。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

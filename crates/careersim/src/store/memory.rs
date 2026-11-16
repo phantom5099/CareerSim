@@ -8,12 +8,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use super::AppendBatch;
-use super::EVENT_VERSION;
-use super::SessionStore;
-use super::StoreError;
-use super::StoredEvent;
-use super::StoredSession;
+use super::{AppendBatch, EVENT_VERSION, SessionStore, StoreError, StoredEvent, StoredSession};
 
 #[derive(Default)]
 pub(crate) struct MemorySessionStore {

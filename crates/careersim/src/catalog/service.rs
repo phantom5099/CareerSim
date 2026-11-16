@@ -6,16 +6,21 @@ use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDate, Utc};
 
-use super::model::{
-    CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySummary,
-    JOB_TAGS_MAX_ITEMS, Job, JobId, JobPatch, JobStatus, JobType, ListCursor, NewCompany, NewJob,
-    NewPipeline, NewProject, Pipeline, PipelineId, ProjectId, ProjectPatch, ProjectStatus,
-    RecruitmentProject, validate_company_fields, validate_project_name, validate_salary,
+use super::{
+    model::{
+        CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySummary,
+        JOB_TAGS_MAX_ITEMS, Job, JobId, JobPatch, JobStatus, JobType, ListCursor, NewCompany,
+        NewJob, NewPipeline, NewProject, Pipeline, PipelineId, ProjectId, ProjectPatch,
+        ProjectStatus, RecruitmentProject, validate_company_fields, validate_project_name,
+        validate_salary,
+    },
+    store::{CatalogScope, CatalogStore},
+    template::{self, ValidatedTemplate},
 };
-use super::store::{CatalogScope, CatalogStore};
-use super::template::{self, ValidatedTemplate};
-use crate::account::UserId;
-use crate::pipeline::{PipelineDefinition, StageDefinition};
+use crate::{
+    account::model::UserId,
+    pipeline::model::{PipelineDefinition, StageDefinition},
+};
 
 /// catalog 对外服务；HTTP 层经 [`AppState`](crate::http::router::AppState) 持有。
 pub struct CatalogService {

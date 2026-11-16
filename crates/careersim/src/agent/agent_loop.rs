@@ -1,8 +1,7 @@
 //! 会话回合循环：per-session 互斥、对话/评估两种回合模式、控制动作
 //! `complete_stage` 的识别与一次修复、取消与阶段推进（plan/02 §8）。
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use chrono::Utc;
 use serde_json::json;
@@ -10,36 +9,26 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
-use super::BuildOptions;
-use super::CompleteStageBatch;
-use super::ContextBuilder;
-use super::Session;
-use super::SessionError;
-use super::SessionId;
-use super::SessionService;
-use super::StageCompletion;
-use super::StageEvaluationRecord;
-use super::ToolCall;
-use super::ToolRegistry;
-use super::ToolStatus;
-use super::TurnContext;
-use super::TurnEndReason;
-use super::TurnId;
-use super::session::assistant_count_in_stage;
-use super::session::user_round_in_stage;
-use super::tool::CONTROL_ACTION_NAME;
-use super::tool::CompleteStageArgs;
-use super::tool::CompleteStageError;
-use super::tool::complete_stage_spec;
-use crate::error::error_chain;
-use crate::llm::LlmClient;
-use crate::llm::LlmError;
-use crate::llm::ToolChoice;
-use crate::pipeline::StageKind;
-use crate::pipeline::StageOutcome;
-use crate::pipeline::build_offer_terms;
-use crate::pipeline::evaluate;
-use crate::pipeline::plan_transition;
+use super::{
+    context::{BuildOptions, ContextBuilder, TurnContext},
+    session::{
+        CompleteStageBatch, Session, SessionError, SessionId, SessionService, StageCompletion,
+        StageEvaluationRecord, ToolStatus, TurnEndReason, TurnId, assistant_count_in_stage,
+        user_round_in_stage,
+    },
+    tool::{
+        CONTROL_ACTION_NAME, CompleteStageArgs, CompleteStageError, ToolCall, ToolRegistry,
+        complete_stage_spec,
+    },
+};
+use crate::{
+    error::error_chain,
+    llm::client::{LlmClient, LlmError, ToolChoice},
+    pipeline::{
+        model::{StageKind, StageOutcome, build_offer_terms, plan_transition},
+        rubric::evaluate,
+    },
+};
 
 /// 评估轮采样温度（plan/02 §7.5）；低于对话轮，减少评分抖动。
 const EVALUATION_TEMPERATURE: f32 = 0.2;

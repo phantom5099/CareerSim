@@ -1,2 +1,7 @@
 edition = "2024"
 style_edition = "2024"
+
+# 这两项是 rustfmt 的 unstable 选项，只在 nightly 生效（stable rustfmt 会忽略并告警）；
+# 格式检查与写入须用 `cargo +nightly fmt`，见 crates/careersim/AGENTS.md §8。
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"

@@ -6,10 +6,11 @@ use chrono::{DateTime, Days, NaiveDate, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
-use super::PipelineError;
-use super::rubric::EvaluationRubric;
-use super::rubric::StageEvaluation;
-use super::validate;
+use super::{
+    PipelineError,
+    rubric::{EvaluationRubric, StageEvaluation},
+    validate,
+};
 
 /// 阶段稳定标识：`^[a-z][a-z0-9_]{1,31}$`，流水线内唯一。
 ///

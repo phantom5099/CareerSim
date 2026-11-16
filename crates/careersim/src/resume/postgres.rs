@@ -3,11 +3,13 @@
 use async_trait::async_trait;
 use sqlx::{PgPool, Row, postgres::PgRow};
 
-use super::model::{
-    NewResume, NewResumeAttachment, ParseErrorCode, ParseStatus, RESUME_LIMIT, Resume,
-    ResumeAttachment, ResumeId, ResumePatch,
+use super::{
+    model::{
+        NewResume, NewResumeAttachment, ParseErrorCode, ParseStatus, RESUME_LIMIT, Resume,
+        ResumeAttachment, ResumeId, ResumePatch,
+    },
+    store::{ResumeStore, ResumeStoreError},
 };
-use super::store::{ResumeStore, ResumeStoreError};
 use crate::account::model::UserId;
 
 /// SELECT 列清单；所有 SQL 均为编译期字面量（sqlx 0.9 `SqlSafeStr` 要求），

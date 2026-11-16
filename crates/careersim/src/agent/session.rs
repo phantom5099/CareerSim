@@ -1,8 +1,6 @@
 //! 会话、事件信封与事件类型（事件 v2）。
 
-use std::fmt;
-use std::str::FromStr;
-use std::sync::Arc;
+use std::{fmt, str::FromStr, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -10,17 +8,18 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 use uuid::Uuid;
 
-use super::Role;
-use super::tool::ToolCall;
-use crate::llm::client::TokenUsage;
-use crate::pipeline::{StageEvaluation, StageKey, StageKind, StageOutcome};
-use crate::store::AppendBatch;
-use crate::store::EVENT_VERSION;
-use crate::store::ExpectedState;
-use crate::store::SessionStore;
-use crate::store::StoreError;
-use crate::store::StoredEvent;
-use crate::store::StoredSession;
+use super::{role::Role, tool::ToolCall};
+use crate::{
+    llm::client::TokenUsage,
+    pipeline::{
+        model::{StageKey, StageKind, StageOutcome},
+        rubric::StageEvaluation,
+    },
+    store::{
+        AppendBatch, EVENT_VERSION, ExpectedState, SessionStore, StoreError, StoredEvent,
+        StoredSession,
+    },
+};
 
 /// 投递归属标识；事件绑定自描述用，不构成第二份状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

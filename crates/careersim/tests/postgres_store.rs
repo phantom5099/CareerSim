@@ -2,22 +2,17 @@
 
 use std::sync::Arc;
 
-use careersim::agent::ApplicationId;
-use careersim::agent::SessionBinding;
-use careersim::agent::SessionError;
-use careersim::agent::SessionEventKind;
-use careersim::agent::SessionService;
-use careersim::agent::StageRef;
-use careersim::agent::StoreSessionService;
-use careersim::agent::TurnEndReason;
-use careersim::agent::TurnId;
-use careersim::agent::UserMessageSource;
-use careersim::pipeline::Score;
-use careersim::pipeline::StageEvaluation;
-use careersim::pipeline::StageKey;
-use careersim::pipeline::StageKind;
-use careersim::pipeline::StageOutcome;
-use careersim::postgres_session_service;
+use careersim::{
+    agent::session::{
+        ApplicationId, SessionBinding, SessionError, SessionEventKind, SessionService, StageRef,
+        StoreSessionService, TurnEndReason, TurnId, UserMessageSource,
+    },
+    pipeline::{
+        model::{StageKey, StageKind, StageOutcome},
+        rubric::{Score, StageEvaluation},
+    },
+    postgres_session_service,
+};
 use sqlx::postgres::PgPoolOptions;
 
 fn binding() -> SessionBinding {

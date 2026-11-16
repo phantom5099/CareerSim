@@ -1,15 +1,11 @@
 //! 测试用模型客户端：按预设顺序返回响应，并可模拟等待取消。
 
-use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::{collections::VecDeque, sync::Mutex};
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use super::client::ChatRequest;
-use super::client::ChatResponse;
-use super::client::LlmClient;
-use super::client::LlmError;
+use super::client::{ChatRequest, ChatResponse, LlmClient, LlmError};
 
 enum Mode {
     Scripted,

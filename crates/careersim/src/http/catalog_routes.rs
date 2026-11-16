@@ -1,33 +1,38 @@
 //! catalog 路由处理器：目录浏览、模板 CRUD 与 CompanyTemplateV1 导入
 //! （plan/01 §6.2）。所有路由都需要登录；可见性与写权限由存储层保证。
 
-use axum::Json;
-use axum::Router;
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
-use axum::routing::{get, patch, post};
+use axum::{
+    Json, Router,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    routing::{get, patch, post},
+};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tower_http::limit::RequestBodyLimitLayer;
 use uuid::Uuid;
 
-use crate::catalog::model::{Company, CompanySummary};
-use crate::catalog::service::{
-    CatalogService, CompanyInput, CompanyPatchInput, JobInput, JobPatchInput, PipelineInput,
-    ProjectInput, ProjectPatchInput,
+use super::{
+    auth::AuthContext,
+    error::{ApiError, render_backend_chain},
+    router::AppState,
 };
-use crate::catalog::store::CatalogScope;
-use crate::catalog::template::TemplateError;
-use crate::catalog::{
-    CatalogError, CompanyId, JobId, JobStatus, JobType, ListCursor, PipelineId, ProjectId,
-    ProjectStatus,
+use crate::{
+    catalog::{
+        model::{
+            CatalogError, Company, CompanyId, CompanySummary, JobId, JobStatus, JobType,
+            ListCursor, PipelineId, ProjectId, ProjectStatus,
+        },
+        service::{
+            CatalogService, CompanyInput, CompanyPatchInput, JobInput, JobPatchInput,
+            PipelineInput, ProjectInput, ProjectPatchInput,
+        },
+        store::CatalogScope,
+        template::TemplateError,
+    },
+    pipeline::model::StageDefinition,
 };
-use crate::pipeline::StageDefinition;
-
-use super::auth::AuthContext;
-use super::error::{ApiError, render_backend_chain};
-use super::router::AppState;
 
 #[cfg(test)]
 mod tests;

@@ -6,8 +6,6 @@
 use chrono::NaiveDate;
 use serde_json::{Map, Value};
 
-use crate::pipeline::{PipelineDefinition, PipelineError, StageDefinition};
-
 use super::model::{
     ACCENT_MAX_CHARS, CITY_MAX_CHARS, COMPANY_ACCENTS, COMPANY_DESCRIPTION_MAX_CHARS,
     COMPANY_NAME_MAX_CHARS, COMPANY_SIZES, ENGLISH_NAME_MAX_CHARS, HIGHLIGHT_ITEM_MAX_CHARS,
@@ -15,6 +13,10 @@ use super::model::{
     JOB_TITLE_MAX_CHARS, JobStatus, JobType, LOGO_TEXT_MAX_CHARS, PROJECT_DESCRIPTION_MAX_CHARS,
     PROJECT_NAME_MAX_CHARS, ProjectStatus, SALARY_MONTHS_MAX, SEASON_MAX_CHARS, TAGLINE_MAX_CHARS,
     is_hex_color, normalize_key,
+};
+use crate::pipeline::{
+    PipelineError,
+    model::{PipelineDefinition, StageDefinition},
 };
 
 /// 当前模板格式版本；未知版本直接拒绝，不做静默降级。

@@ -3,14 +3,13 @@ use std::sync::Arc;
 use chrono::Utc;
 
 use super::*;
-use crate::pipeline::DimensionScore;
-use crate::pipeline::Score;
-use crate::pipeline::StageEvaluation;
-use crate::pipeline::StageKey;
-use crate::pipeline::StageKind;
-use crate::pipeline::StageOutcome;
-use crate::store::EVENT_VERSION;
-use crate::store::MemorySessionStore;
+use crate::{
+    pipeline::{
+        model::{StageKey, StageKind, StageOutcome},
+        rubric::{DimensionScore, Score, StageEvaluation},
+    },
+    store::{EVENT_VERSION, MemorySessionStore},
+};
 
 fn service() -> StoreSessionService {
     StoreSessionService::new(Arc::new(MemorySessionStore::new()))

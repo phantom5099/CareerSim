@@ -1,31 +1,32 @@
 //! 基于 `async-openai` 的 Chat Completions 适配层。
 
-use async_openai::Client;
-use async_openai::config::OpenAIConfig;
-use async_openai::types::chat::{
-    ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls, ChatCompletionNamedToolChoice,
-    ChatCompletionRequestAssistantMessage, ChatCompletionRequestAssistantMessageContent,
-    ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
-    ChatCompletionRequestSystemMessageContent, ChatCompletionRequestToolMessage,
-    ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessage,
-    ChatCompletionRequestUserMessageContent, ChatCompletionTool, ChatCompletionToolChoiceOption,
-    ChatCompletionTools, CreateChatCompletionRequest, CreateChatCompletionRequestArgs,
-    FunctionCall, FunctionName, FunctionObject, ToolChoiceOptions,
+use async_openai::{
+    Client,
+    config::OpenAIConfig,
+    types::chat::{
+        ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
+        ChatCompletionNamedToolChoice, ChatCompletionRequestAssistantMessage,
+        ChatCompletionRequestAssistantMessageContent, ChatCompletionRequestMessage,
+        ChatCompletionRequestSystemMessage, ChatCompletionRequestSystemMessageContent,
+        ChatCompletionRequestToolMessage, ChatCompletionRequestToolMessageContent,
+        ChatCompletionRequestUserMessage, ChatCompletionRequestUserMessageContent,
+        ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionTools,
+        CreateChatCompletionRequest, CreateChatCompletionRequestArgs, FunctionCall, FunctionName,
+        FunctionObject, ToolChoiceOptions,
+    },
 };
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use super::client::ChatRequest;
-use super::client::ChatResponse;
-use super::client::LlmClient;
-use super::client::LlmError;
-use super::client::TokenUsage;
-use super::client::ToolChoice;
-use crate::agent::Message;
-use crate::agent::ToolCall;
-use crate::agent::ToolSpec;
-use crate::config::LlmConfig;
+use super::client::{ChatRequest, ChatResponse, LlmClient, LlmError, TokenUsage, ToolChoice};
+use crate::{
+    agent::{
+        message::Message,
+        tool::{ToolCall, ToolSpec},
+    },
+    config::LlmConfig,
+};
 
 pub struct OpenAiCompatibleClient {
     client: Client<OpenAIConfig>,

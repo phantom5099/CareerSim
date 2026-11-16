@@ -4,19 +4,18 @@ use std::fmt::Write as _;
 
 use async_trait::async_trait;
 
-use super::Message;
-use super::Session;
-use super::SessionEventKind;
-use super::ToolSpec;
-use super::session::stage_started_at;
-use crate::llm::client::ChatRequest;
-use crate::llm::client::ToolChoice;
-use crate::pipeline::OfferPolicy;
-use crate::pipeline::PipelineDefinition;
-use crate::pipeline::Score;
-use crate::pipeline::StageDefinition;
-use crate::pipeline::StageKey;
-use crate::pipeline::StageKind;
+use super::{
+    message::Message,
+    session::{Session, SessionEventKind, stage_started_at},
+    tool::ToolSpec,
+};
+use crate::{
+    llm::client::{ChatRequest, ToolChoice},
+    pipeline::{
+        model::{OfferPolicy, PipelineDefinition, StageDefinition, StageKey, StageKind},
+        rubric::Score,
+    },
+};
 
 /// 单回合输入上下文；由 application 服务按投递引用构造。
 #[derive(Debug, Clone)]

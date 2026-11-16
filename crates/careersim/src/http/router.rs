@@ -2,20 +2,18 @@
 
 use std::sync::Arc;
 
-use axum::Router;
-use axum::http::StatusCode;
-use axum::middleware;
-use axum::routing::get;
+use axum::{Router, http::StatusCode, middleware, routing::get};
 use tower::ServiceBuilder;
-use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
-use tower_http::trace::TraceLayer;
+use tower_http::{
+    request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
+    trace::TraceLayer,
+};
 
-use crate::account::service::AccountService;
-use crate::catalog::CatalogService;
-use crate::resume::service::ResumeService;
-
-use super::auth::origin_check;
-use super::{account_routes, catalog_routes, resume_routes};
+use super::{account_routes, auth::origin_check, catalog_routes, resume_routes};
+use crate::{
+    account::service::AccountService, catalog::service::CatalogService,
+    resume::service::ResumeService,
+};
 
 #[derive(Clone)]
 pub struct AppState {

@@ -4,26 +4,30 @@
 //! 覆盖：种子只读、可见性（他人公开可读不可写、他人私有不可见）、
 //! 跨用户写拒绝、命名冲突、软删后重建、流水线跨项目引用。
 
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use careersim::account::UserId;
-use careersim::account::password::Argon2idHasher;
-use careersim::account::postgres_account_service;
-use careersim::catalog::model::{CatalogError, Company, CompanySource};
-use careersim::catalog::service::{
-    CompanyInput, CompanyPatchInput, JobInput, JobPatchInput, PipelineInput, ProjectInput,
-    ProjectPatchInput,
+use careersim::{
+    account::{
+        model::UserId, password::Argon2idHasher, postgres_account_service, service::AccountService,
+    },
+    catalog::{
+        model::{
+            CatalogError, Company, CompanyId, CompanySource, JobStatus, ProjectId, ProjectStatus,
+        },
+        postgres_catalog_service,
+        service::{
+            CatalogService, CompanyInput, CompanyPatchInput, JobInput, JobPatchInput,
+            PipelineInput, ProjectInput, ProjectPatchInput,
+        },
+        store::CatalogScope,
+    },
+    pipeline::model::StageDefinition,
 };
-use careersim::catalog::store::CatalogScope;
-use careersim::catalog::{
-    CatalogService, CompanyId, JobStatus, ProjectId, ProjectStatus, postgres_catalog_service,
-};
-use careersim::pipeline::StageDefinition;
 use serde_json::{Value, json};
 use sqlx::postgres::PgPoolOptions;
-
-use careersim::account::AccountService;
 
 async fn setup() -> Option<(AccountService, CatalogService)> {
     let Ok(url) = std::env::var("DATABASE_URL") else {

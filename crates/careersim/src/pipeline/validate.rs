@@ -2,8 +2,10 @@
 
 use std::collections::HashSet;
 
-use super::PipelineError;
-use super::model::{StageDefinition, StageKind};
+use super::{
+    PipelineError,
+    model::{StageDefinition, StageKind},
+};
 
 /// 阶段标题长度上限（plan/01 §3.2）。
 const TITLE_MAX_CHARS: usize = 40;

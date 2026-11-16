@@ -1,45 +1,33 @@
 //! AgentLoop 测试：绑定与首阶段、阶段推进、评估轮、修复与取消（plan/02 §6/§7/§8）。
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use super::AgentLoop;
-use super::LoopConfig;
-use super::LoopError;
-use crate::agent::DefaultContextBuilder;
-use crate::agent::Message;
-use crate::agent::Session;
-use crate::agent::SessionBinding;
-use crate::agent::SessionEventKind;
-use crate::agent::SessionService;
-use crate::agent::StageBrief;
-use crate::agent::StageRef;
-use crate::agent::StoreSessionService;
-use crate::agent::ToolCall;
-use crate::agent::ToolRegistry;
-use crate::agent::ToolStatus;
-use crate::agent::TurnContext;
-use crate::agent::TurnEndReason;
-use crate::agent::TurnId;
-use crate::agent::session::event_turn_id;
-use crate::agent::tool::testing::FakeTool;
-use crate::llm::ChatResponse;
-use crate::llm::TokenUsage;
-use crate::llm::ToolChoice;
-use crate::llm::mock::MockLlmClient;
-use crate::pipeline::EvaluationRubric;
-use crate::pipeline::OfferPolicy;
-use crate::pipeline::PipelineDefinition;
-use crate::pipeline::RubricDimension;
-use crate::pipeline::Score;
-use crate::pipeline::StageDefinition;
-use crate::pipeline::StageKey;
-use crate::pipeline::StageKind;
-use crate::pipeline::StageOutcome;
-use crate::store::MemorySessionStore;
+use super::{AgentLoop, LoopConfig, LoopError};
+use crate::{
+    agent::{
+        context::{DefaultContextBuilder, StageBrief, TurnContext},
+        message::Message,
+        session::{
+            Session, SessionBinding, SessionEventKind, SessionService, StageRef,
+            StoreSessionService, ToolStatus, TurnEndReason, TurnId, event_turn_id,
+        },
+        tool::{ToolCall, ToolRegistry, testing::FakeTool},
+    },
+    llm::{
+        client::{ChatResponse, TokenUsage, ToolChoice},
+        mock::MockLlmClient,
+    },
+    pipeline::{
+        model::{
+            OfferPolicy, PipelineDefinition, StageDefinition, StageKey, StageKind, StageOutcome,
+        },
+        rubric::{EvaluationRubric, RubricDimension, Score},
+    },
+    store::MemorySessionStore,
+};
 
 const APPLICATION_ID: &str = "11111111-1111-1111-1111-111111111111";
 

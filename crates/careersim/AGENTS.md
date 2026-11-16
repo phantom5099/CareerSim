@@ -137,7 +137,8 @@ config          → error / llm::provider
 
 ### 4.1 格式与静态检查
 
-- 格式以 `rustfmt.toml` 为准，不手工重排。
+- 格式以 `rustfmt.toml` 为准，不手工重排；import 粒度与分组由 nightly rustfmt 强制
+  （unstable 选项 stable 不识别，只告警），格式检查与写入用 `cargo +nightly fmt`。
 - Clippy 必须零警告（`-D warnings`）；命令见 §8。
 - 新增 `#[allow(...)]` 必须说明原因并优先重构。
 - 不新增 `unsafe`；确需使用时必须由用户明确要求，并在注释中写明安全前提。
@@ -284,7 +285,8 @@ config          → error / llm::provider
 
 ```bash
 # 仓库根执行
-cargo fmt --all --check
+rustup toolchain install nightly --profile minimal --component rustfmt  # fmt 所需，一次性
+cargo +nightly fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
 DATABASE_URL=postgres://careersim:careersim@127.0.0.1:5432/careersim_test \

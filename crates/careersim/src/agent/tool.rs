@@ -1,21 +1,17 @@
 //! 工具定义与注册表、控制动作 `complete_stage` 的参数与 Schema。
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use super::SessionId;
-use super::TurnId;
-use super::session::ToolStatus;
-use crate::pipeline::DimensionScore;
-use crate::pipeline::OfferTermsInput;
-use crate::pipeline::StageDefinition;
-use crate::pipeline::StageKind;
+use super::session::{SessionId, ToolStatus, TurnId};
+use crate::pipeline::{
+    model::{OfferTermsInput, StageDefinition, StageKind},
+    rubric::DimensionScore,
+};
 
 /// 控制动作保留名；业务工具不得占用。
 pub(crate) const CONTROL_ACTION_NAME: &str = "complete_stage";

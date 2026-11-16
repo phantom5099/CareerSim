@@ -6,13 +6,15 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use super::model::{
-    CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySummary, Job, JobId,
-    JobPatch, ListCursor, NewCompany, NewJob, NewPipeline, NewProject, Pipeline, PipelineId,
-    ProjectId, ProjectPatch, RecruitmentProject,
+use super::{
+    model::{
+        CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySummary, Job, JobId,
+        JobPatch, ListCursor, NewCompany, NewJob, NewPipeline, NewProject, Pipeline, PipelineId,
+        ProjectId, ProjectPatch, RecruitmentProject,
+    },
+    template::ValidatedTemplate,
 };
-use super::template::ValidatedTemplate;
-use crate::account::UserId;
+use crate::account::model::UserId;
 
 /// 列表范围（plan/01 §4.3）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

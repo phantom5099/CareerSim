@@ -1,7 +1,7 @@
 //! 阶段类型到角色的映射；阶段键与流水线定义在 `pipeline` 域。
 
-use super::Role;
-use crate::pipeline::StageKind;
+use super::role::Role;
+use crate::pipeline::model::StageKind;
 
 impl StageKind {
     /// 当前阶段唯一决定当前角色；`Coach` 不对应流水线阶段。

@@ -2,29 +2,23 @@
 
 use std::sync::Arc;
 
-use super::BuildOptions;
-use super::ContextBuilder;
-use super::DefaultContextBuilder;
-use super::StageBrief;
-use super::TurnContext;
-use crate::agent::Message;
-use crate::agent::SessionBinding;
-use crate::agent::SessionEventKind;
-use crate::agent::SessionService;
-use crate::agent::StageRef;
-use crate::agent::StoreSessionService;
-use crate::agent::ToolCall;
-use crate::pipeline::EvaluationRubric;
-use crate::pipeline::OfferPolicy;
-use crate::pipeline::PipelineDefinition;
-use crate::pipeline::RubricDimension;
-use crate::pipeline::Score;
-use crate::pipeline::StageDefinition;
-use crate::pipeline::StageEvaluation;
-use crate::pipeline::StageKey;
-use crate::pipeline::StageKind;
-use crate::pipeline::StageOutcome;
-use crate::store::MemorySessionStore;
+use super::{BuildOptions, ContextBuilder, DefaultContextBuilder, StageBrief, TurnContext};
+use crate::{
+    agent::{
+        message::Message,
+        session::{
+            SessionBinding, SessionEventKind, SessionService, StageRef, StoreSessionService,
+        },
+        tool::ToolCall,
+    },
+    pipeline::{
+        model::{
+            OfferPolicy, PipelineDefinition, StageDefinition, StageKey, StageKind, StageOutcome,
+        },
+        rubric::{EvaluationRubric, RubricDimension, Score, StageEvaluation},
+    },
+    store::MemorySessionStore,
+};
 
 const APPLICATION_ID: &str = "22222222-2222-2222-2222-222222222222";
 

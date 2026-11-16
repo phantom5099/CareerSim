@@ -1,5 +1,4 @@
-use crate::agent::Role;
-use crate::pipeline::StageKind;
+use crate::{agent::role::Role, pipeline::model::StageKind};
 
 #[test]
 fn role_follows_stage_kind() {

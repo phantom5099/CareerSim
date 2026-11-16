@@ -3,8 +3,10 @@
 //! 通过完整路由 + oneshot 发请求；存储用 [`InMemoryCatalogStore`]
 //! （镜像 PG 的可见性、归属链与唯一约束语义）。
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use serde_json::{Value, json};
 
 use crate::testing::{ALLOWED_ORIGIN, body_json, json_request, registered_cookie, send};
