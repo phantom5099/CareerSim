@@ -62,8 +62,8 @@ pub struct EvaluationRubric {
 
 /// 维度评分上限（评估依据长度，plan/02 §4.3）。
 pub(crate) const NOTE_MAX_CHARS: usize = 500;
-/// 阶段总评长度上限。
-pub(crate) const SUMMARY_MAX_CHARS: usize = 2000;
+/// 阶段总评长度上限；评估校验与工具 Schema 共用此唯一定义。
+pub(crate) const SUMMARY_MAX_CHARS: usize = 3000;
 
 /// 模型提交的单个维度评分与依据。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,7 +87,7 @@ pub struct StageEvaluation {
     pub total: Score,
     /// total >= rubric.pass_score；服务端判定。
     pub passed: bool,
-    /// 阶段总评，1..=2000 字符；注入后续阶段上下文。
+    /// 阶段总评，1..=3000 字符；注入后续阶段上下文。
     pub summary: String,
 }
 

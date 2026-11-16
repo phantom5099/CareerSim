@@ -343,7 +343,7 @@ fn evaluate_rejects_overlong_text() {
         Err(EvaluationError::InvalidSummary)
     ));
     assert!(matches!(
-        evaluate(&rule, submitted(&[("d0", 70)]), "评".repeat(2001)),
+        evaluate(&rule, submitted(&[("d0", 70)]), "评".repeat(3001)),
         Err(EvaluationError::InvalidSummary)
     ));
 

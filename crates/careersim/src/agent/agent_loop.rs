@@ -26,7 +26,7 @@ use crate::{
     llm::client::{LlmClient, LlmError, ToolChoice},
     pipeline::{
         model::{StageKind, StageOutcome, build_offer_terms, plan_transition},
-        rubric::evaluate,
+        rubric::{SUMMARY_MAX_CHARS, evaluate},
     },
 };
 
@@ -395,10 +395,12 @@ impl AgentLoop {
             let call = &response.tool_calls[index];
             match Self::validate_control(&session, ctx, turn_id, call) {
                 Ok((record, outcome)) => {
-                    let completion = self
-                        .sessions
-                        .complete_stage(
+                    return self
+                        .seal_stage(
                             &mut session,
+                            id,
+                            steps,
+                            output,
                             CompleteStageBatch {
                                 turn_id,
                                 steps,
@@ -410,27 +412,37 @@ impl AgentLoop {
                                 outcome,
                             },
                         )
-                        .await?;
-
-                    info!(
-                        session_id = %id,
-                        turn_id = turn_id.0,
-                        stage = %completion.record.stage_key,
-                        "stage completed"
-                    );
-
-                    return Ok(TurnResult {
-                        turn_id,
-                        reason: TurnEndReason::Done,
-                        steps,
-                        output,
-                        error: None,
-                        stage_completion: Some(completion),
-                    });
+                        .await;
                 }
                 Err(err) => {
                     // stage_not_ready 引导继续对话，不消耗修复预算（§6.4）。
                     let not_ready = matches!(err, CompleteStageError::StageNotReady(_));
+                    if !not_ready && repairs_left == 0 {
+                        // 修复预算耗尽且唯一失败是总评超长：截断后完成阶段收尾；
+                        // 维度、轮数或条款仍有问题时兜底不生效，仍按评估失败结束。
+                        if let Some((record, outcome)) =
+                            Self::rescue_with_truncated_summary(&session, ctx, turn_id, call)
+                        {
+                            return self
+                                .seal_stage(
+                                    &mut session,
+                                    id,
+                                    steps,
+                                    output,
+                                    CompleteStageBatch {
+                                        turn_id,
+                                        steps,
+                                        assistant_content: response.content.clone(),
+                                        assistant_tool_calls: response.tool_calls.clone(),
+                                        usage: response.usage,
+                                        control_call_id: call.call_id.clone(),
+                                        record,
+                                        outcome,
+                                    },
+                                )
+                                .await;
+                        }
+                    }
                     let payload = error_payload(err.code(), &err.to_string());
                     let results = vec![(call.call_id.clone(), ToolStatus::Error, payload)];
                     self.sessions
@@ -491,7 +503,16 @@ impl AgentLoop {
         }
         let args: CompleteStageArgs = serde_json::from_str(&call.arguments)
             .map_err(|err| CompleteStageError::InvalidArguments(err.to_string()))?;
+        Self::validate_submission(session, ctx, turn_id, args)
+    }
 
+    /// 解析后的提交校验；正常评估与截断兜底共用。
+    fn validate_submission(
+        session: &Session,
+        ctx: &TurnContext,
+        turn_id: TurnId,
+        args: CompleteStageArgs,
+    ) -> Result<(StageEvaluationRecord, StageOutcome), CompleteStageError> {
         if ctx.stage.kind != StageKind::Offer && args.offer.is_some() {
             return Err(CompleteStageError::InvalidArguments(
                 "offer is only allowed at the offer stage".to_owned(),
@@ -529,6 +550,50 @@ impl AgentLoop {
             evaluation: transition.evaluation,
         };
         Ok((record, transition.outcome))
+    }
+
+    /// 修复预算耗尽后的兜底：仅当唯一失败是总评超长时，截断总评并重走完整校验；
+    /// 维度、轮数或条款仍有问题则返回 None，回合按评估失败收尾。
+    fn rescue_with_truncated_summary(
+        session: &Session,
+        ctx: &TurnContext,
+        turn_id: TurnId,
+        call: &ToolCall,
+    ) -> Option<(StageEvaluationRecord, StageOutcome)> {
+        let mut args: CompleteStageArgs = serde_json::from_str(&call.arguments).ok()?;
+        if args.summary.chars().count() <= SUMMARY_MAX_CHARS {
+            return None;
+        }
+        args.summary = args.summary.chars().take(SUMMARY_MAX_CHARS).collect();
+        Self::validate_submission(session, ctx, turn_id, args).ok()
+    }
+
+    /// 写入评估回合事件批次并返回阶段完成结果；Ok 路径与截断兜底共用。
+    async fn seal_stage(
+        &self,
+        session: &mut Session,
+        id: SessionId,
+        steps: u32,
+        output: String,
+        batch: CompleteStageBatch,
+    ) -> Result<TurnResult, LoopError> {
+        let completion = self.sessions.complete_stage(session, batch).await?;
+
+        info!(
+            session_id = %id,
+            turn_id = completion.turn_id.0,
+            stage = %completion.record.stage_key,
+            "stage completed"
+        );
+
+        Ok(TurnResult {
+            turn_id: completion.turn_id,
+            reason: TurnEndReason::Done,
+            steps,
+            output,
+            error: None,
+            stage_completion: Some(completion),
+        })
     }
 
     fn session_lock(&self, id: SessionId) -> Arc<Mutex<()>> {

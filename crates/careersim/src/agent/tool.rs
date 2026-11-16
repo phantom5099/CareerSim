@@ -9,19 +9,12 @@ use tokio_util::sync::CancellationToken;
 
 use super::session::{SessionId, ToolStatus, TurnId};
 use crate::pipeline::{
-    model::{OfferTermsInput, StageDefinition, StageKind},
-    rubric::DimensionScore,
+    model::{BONUS_MAX_CHARS, OfferTermsInput, StageDefinition, StageKind},
+    rubric::{DimensionScore, NOTE_MAX_CHARS, SUMMARY_MAX_CHARS},
 };
 
 /// 控制动作保留名；业务工具不得占用。
 pub(crate) const CONTROL_ACTION_NAME: &str = "complete_stage";
-
-/// 评估维度 note 长度上限（与 pipeline 校验一致，写入 Schema）。
-pub(crate) const NOTE_MAX_CHARS: usize = 500;
-/// 阶段总评长度上限。
-pub(crate) const SUMMARY_MAX_CHARS: usize = 2000;
-/// Offer 奖金描述长度上限。
-pub(crate) const BONUS_MAX_CHARS: usize = 120;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
