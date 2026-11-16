@@ -4,6 +4,7 @@ import AppLayout from '@/layouts/AppLayout.vue'
 import ApplicationsPage from '@/pages/ApplicationsPage.vue'
 import CompaniesPage from '@/pages/CompaniesPage.vue'
 import CompanyDetailPage from '@/pages/CompanyDetailPage.vue'
+import CompanyEditPage from '@/pages/CompanyEditPage.vue'
 import ImportCompanyPage from '@/pages/ImportCompanyPage.vue'
 import InterviewRoomPage from '@/pages/InterviewRoomPage.vue'
 import LoginPage from '@/pages/LoginPage.vue'
@@ -53,6 +54,12 @@ const router = createRouter({
           name: 'companyImport',
           component: ImportCompanyPage,
           meta: { title: '录入公司模板' },
+        },
+        {
+          path: 'companies/:id/edit',
+          name: 'companyEdit',
+          component: CompanyEditPage,
+          meta: { title: '编辑公司' },
         },
         {
           path: 'companies/:id',

@@ -3,17 +3,21 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import type { ResumeDocument } from '@/api/types'
+import { companiesApi } from '@/api/endpoints/companies'
 import CompanyMark from '@/components/CompanyMark.vue'
+import JobEditDialog from '@/components/JobEditDialog.vue'
 import MultiSelect from '@/components/MultiSelect.vue'
+import ProjectEditDialog from '@/components/ProjectEditDialog.vue'
 import StageRail from '@/components/StageRail.vue'
 import {
   APPLICATION_STATUS_LABELS,
+  JOB_STATUS_LABELS,
   PROJECT_STATUS_LABELS,
   actionableStage,
   effectiveProjectStatus,
   formatDate,
 } from '@/domain/types'
-import type { ApplicationStatus, Job, ProjectStatus } from '@/domain/types'
+import type { ApplicationStatus, Job, ProjectStatus, RecruitmentProject } from '@/domain/types'
 import { useApplicationsStore } from '@/stores/applications'
 import { useCompanyCatalogStore } from '@/stores/companyCatalog'
 import { useResumesStore } from '@/stores/resumes'
@@ -29,6 +33,59 @@ const companyApplications = computed(() => applications.forCompany(companyId.val
 
 const flash = ref('')
 let flashTimer: number | undefined
+
+function showFlash(message: string) {
+  flash.value = message
+  if (flashTimer !== undefined) {
+    window.clearTimeout(flashTimer)
+  }
+  flashTimer = window.setTimeout(() => {
+    flash.value = ''
+  }, 3200)
+}
+
+// 拥有者管理入口：项目与岗位各自经弹窗编辑，公司字段走独立编辑页。
+const projectDialog = ref<
+  { mode: 'create' } | { mode: 'edit'; project: RecruitmentProject } | null
+>(null)
+const jobDialog = ref<{ mode: 'create' } | { mode: 'edit'; job: Job } | null>(null)
+
+async function handleSaved() {
+  projectDialog.value = null
+  jobDialog.value = null
+  try {
+    await catalog.refresh()
+    showFlash('修改已保存。')
+  } catch (error) {
+    showFlash(error instanceof Error ? error.message : '已保存，但刷新列表失败。')
+  }
+}
+
+async function deleteProject(project: RecruitmentProject) {
+  if (!window.confirm(`删除项目「${project.name}」会同时删除其流水线与岗位，确定？`)) {
+    return
+  }
+  try {
+    await companiesApi.deleteProject(companyId.value, project.id)
+    await catalog.refresh()
+    showFlash('项目已删除。')
+  } catch (error) {
+    showFlash(error instanceof Error ? error.message : '删除失败，请稍后重试。')
+  }
+}
+
+async function deleteJob(job: Job) {
+  if (!window.confirm(`确定删除岗位「${job.title}」？`)) {
+    return
+  }
+  try {
+    await companiesApi.deleteJob(companyId.value, job.id)
+    await catalog.refresh()
+    showFlash('岗位已删除。')
+  } catch (error) {
+    showFlash(error instanceof Error ? error.message : '删除失败，请稍后重试。')
+  }
+}
 
 const projectTone: Record<ProjectStatus, string> = {
   open: 'border-moss/60 text-moss',
@@ -196,14 +253,10 @@ async function confirmApply() {
   applyError.value = ''
   try {
     await applications.applyToJob(company.value, applyTarget.value, resume.id, resume.title)
-    flash.value = `已投递「${applyTarget.value.title}」· 使用简历「${resume.title}」· 流程从 HR 初筛开始`
+    showFlash(
+      `已投递「${applyTarget.value.title}」· 使用简历「${resume.title}」· 流程从 HR 初筛开始`,
+    )
     applyTarget.value = null
-    if (flashTimer !== undefined) {
-      window.clearTimeout(flashTimer)
-    }
-    flashTimer = window.setTimeout(() => {
-      flash.value = ''
-    }, 3200)
   } catch (error) {
     applyError.value = error instanceof Error ? error.message : '投递失败，请稍后重试。'
   } finally {
@@ -268,7 +321,15 @@ onBeforeUnmount(() => {
             </p>
             <p class="mt-2 font-display text-lg text-ink-soft">「{{ company.tagline }}」</p>
           </div>
-          <span class="stamp hidden text-vermilion/70 sm:inline-flex" aria-hidden="true">档案</span>
+          <div v-if="company.isOwner" class="sm:justify-self-end">
+            <RouterLink
+              :to="{ name: 'companyEdit', params: { id: companyId } }"
+              class="btn-line inline-block py-1.5 text-[0.7rem]"
+            >
+              编辑公司
+            </RouterLink>
+          </div>
+          <span v-else class="stamp hidden text-vermilion/70 sm:inline-flex" aria-hidden="true">档案</span>
         </div>
 
         <dl class="mt-6 grid grid-cols-2 gap-y-3 border-t border-line pt-4 sm:grid-cols-4">
@@ -314,58 +375,108 @@ onBeforeUnmount(() => {
           <section class="mt-9">
             <div class="flex items-baseline justify-between border-b border-ink pb-2">
               <h2 class="font-display text-2xl">招聘项目</h2>
-              <span class="text-[0.66rem] text-ink-faint">
-                {{ company.projects.length }} 个项目
-              </span>
+              <div class="flex items-center gap-3">
+                <span class="text-[0.66rem] text-ink-faint">
+                  {{ company.projects.length }} 个项目
+                </span>
+                <button
+                  v-if="company.isOwner"
+                  type="button"
+                  class="btn-line py-1 text-[0.64rem]"
+                  @click="projectDialog = { mode: 'create' }"
+                >
+                  ＋ 添加项目
+                </button>
+              </div>
             </div>
-            <button
+            <div
               v-for="project in company.projects"
               :key="project.id"
-              type="button"
-              class="-mx-3 block w-[calc(100%+1.5rem)] border-b border-line px-3 py-4 text-left transition"
-              :class="
-                activeProjectId === project.id ? 'bg-paper-light' : 'hover:bg-paper-light/50'
-              "
-              :aria-pressed="activeProjectId === project.id"
-              @click="selectProject(project.id)"
+              class="-mx-3 flex w-[calc(100%+1.5rem)] items-stretch border-b border-line px-3 py-4"
             >
-              <div class="flex flex-wrap items-baseline justify-between gap-2">
-                <h3
-                  class="font-display text-lg leading-tight"
-                  :class="activeProjectId === project.id ? 'text-vermilion' : ''"
+              <div class="min-w-0 flex-1">
+                <button
+                  type="button"
+                  class="block w-full text-left transition"
+                  :class="
+                    activeProjectId === project.id ? 'bg-paper-light' : 'hover:bg-paper-light/50'
+                  "
+                  :aria-pressed="activeProjectId === project.id"
+                  @click="selectProject(project.id)"
                 >
-                  {{ project.name }}
-                </h3>
-                <span
-                  class="border px-2 py-0.5 text-[0.62rem]"
-                  :class="projectTone[effectiveProjectStatus(project)]"
+                  <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                    <h3
+                      class="font-display text-lg leading-tight"
+                      :class="activeProjectId === project.id ? 'text-vermilion' : ''"
+                    >
+                      {{ project.name }}
+                    </h3>
+                    <span
+                      class="border px-2 py-0.5 text-[0.62rem]"
+                      :class="projectTone[effectiveProjectStatus(project)]"
+                    >
+                      {{ PROJECT_STATUS_LABELS[effectiveProjectStatus(project)] }}
+                    </span>
+                  </div>
+                  <p class="mt-1.5 text-[0.76rem] leading-6 text-ink-soft">
+                    {{ project.description }}
+                  </p>
+                </button>
+                <div
+                  class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[0.68rem] text-ink-faint"
                 >
-                  {{ PROJECT_STATUS_LABELS[effectiveProjectStatus(project)] }}
-                </span>
+                  <span>{{ project.season }} · 截止 {{ formatDate(project.deadline) }}</span>
+                  <span v-if="company.isOwner" class="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      class="btn-line px-2 py-0.5 text-[0.62rem]"
+                      @click="projectDialog = { mode: 'edit', project }"
+                    >
+                      编辑
+                    </button>
+                    <button
+                      type="button"
+                      class="btn-line px-2 py-0.5 text-[0.62rem]"
+                      @click="deleteProject(project)"
+                    >
+                      删除
+                    </button>
+                  </span>
+                </div>
               </div>
-              <p class="mt-1.5 text-[0.76rem] leading-6 text-ink-soft">{{ project.description }}</p>
-              <div
-                class="mt-2 flex flex-wrap items-center justify-between gap-2 text-[0.68rem] text-ink-faint"
+              <button
+                type="button"
+                class="ml-4 flex shrink-0 items-center text-[0.8rem] transition"
+                :class="
+                  activeProjectId === project.id
+                    ? 'text-vermilion'
+                    : 'text-ink-soft hover:text-vermilion'
+                "
+                @click="selectProject(project.id)"
               >
-                <span>{{ project.season }} · 截止 {{ formatDate(project.deadline) }}</span>
-                <span
-                  class="text-[0.62rem]"
-                  :class="activeProjectId === project.id ? 'text-vermilion' : ''"
-                >
-                  {{
-                    activeProjectId === project.id
-                      ? '已筛选 · 再点取消'
-                      : `查看 ${jobsInProject(project.id).length} 个岗位 →`
-                  }}
-                </span>
-              </div>
-            </button>
+                {{
+                  activeProjectId === project.id
+                    ? '已筛选 · 再点取消'
+                    : `查看 ${jobsInProject(project.id).length} 个岗位 →`
+                }}
+              </button>
+            </div>
           </section>
 
           <section id="open-jobs" class="mt-9 scroll-mt-20">
             <div class="flex items-baseline justify-between border-b border-ink pb-2">
               <h2 class="font-display text-2xl">开放岗位</h2>
-              <span class="text-[0.66rem] text-ink-faint">{{ jobsCountLabel }}</span>
+              <div class="flex items-center gap-3">
+                <span class="text-[0.66rem] text-ink-faint">{{ jobsCountLabel }}</span>
+                <button
+                  v-if="company.isOwner"
+                  type="button"
+                  class="btn-line py-1 text-[0.64rem]"
+                  @click="jobDialog = { mode: 'create' }"
+                >
+                  ＋ 添加岗位
+                </button>
+              </div>
             </div>
 
             <div class="mt-4 grid gap-6 md:grid-cols-[minmax(0,1fr)_12rem] md:items-start">
@@ -464,6 +575,12 @@ onBeforeUnmount(() => {
                     <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                       <h3 class="font-display text-xl leading-tight">{{ job.title }}</h3>
                       <span class="chip">{{ job.type }}</span>
+                      <span
+                        v-if="company.isOwner && job.status && job.status !== 'open'"
+                        class="chip"
+                      >
+                        {{ JOB_STATUS_LABELS[job.status] }}
+                      </span>
                       <span class="font-mono text-[0.62rem] text-vermilion">{{ job.salary }}</span>
                     </div>
                     <p class="mt-2 text-[0.78rem] leading-6 text-ink-soft">{{ job.description }}</p>
@@ -480,21 +597,39 @@ onBeforeUnmount(() => {
                     </p>
                   </div>
                   <div class="flex items-center gap-2 sm:flex-col sm:items-end sm:justify-center">
-                    <RouterLink
-                      v-if="applicationFor(job.id)"
-                      :to="{ name: 'applications' }"
-                      class="btn-line py-1.5 text-[0.7rem]"
-                    >
-                      已投递 · 查看流程
-                    </RouterLink>
-                    <button
-                      v-else
-                      type="button"
-                      class="btn-solid py-1.5 text-[0.7rem]"
-                      @click="openApply(job)"
-                    >
-                      投递这份岗位
-                    </button>
+                    <template v-if="company.isOwner">
+                      <button
+                        type="button"
+                        class="btn-line py-1.5 text-[0.7rem]"
+                        @click="jobDialog = { mode: 'edit', job }"
+                      >
+                        编辑
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-line py-1.5 text-[0.7rem]"
+                        @click="deleteJob(job)"
+                      >
+                        删除
+                      </button>
+                    </template>
+                    <template v-else>
+                      <RouterLink
+                        v-if="applicationFor(job.id)"
+                        :to="{ name: 'applications' }"
+                        class="btn-line py-1.5 text-[0.7rem]"
+                      >
+                        已投递 · 查看流程
+                      </RouterLink>
+                      <button
+                        v-else
+                        type="button"
+                        class="btn-solid py-1.5 text-[0.7rem]"
+                        @click="openApply(job)"
+                      >
+                        投递这份岗位
+                      </button>
+                    </template>
                   </div>
                 </article>
 
@@ -675,6 +810,27 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+
+      <ProjectEditDialog
+        v-if="projectDialog"
+        :key="projectDialog.mode === 'edit' ? projectDialog.project.id : 'project-create'"
+        :company-id="companyId"
+        :project="projectDialog.mode === 'edit' ? projectDialog.project : null"
+        @close="projectDialog = null"
+        @saved="handleSaved"
+      />
+
+      <JobEditDialog
+        v-if="jobDialog"
+        :key="jobDialog.mode === 'edit' ? jobDialog.job.id : 'job-create'"
+        :company-id="companyId"
+        :projects="company.projects"
+        :pipelines="company.pipelines ?? []"
+        :job="jobDialog.mode === 'edit' ? jobDialog.job : null"
+        :default-project-id="activeProjectId ?? undefined"
+        @close="jobDialog = null"
+        @saved="handleSaved"
+      />
     </template>
   </div>
 </template>

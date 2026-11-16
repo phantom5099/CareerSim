@@ -20,6 +20,7 @@ import type {
   JobType,
   PipelineInfo,
   ProjectStatus,
+  RecruitmentProject,
 } from '@/domain/types'
 import {
   generateCompanyTemplate,
@@ -56,7 +57,7 @@ export interface CompaniesApi {
   generateTemplate(prompt: string): Promise<Record<string, unknown>>
   updateCompany(id: string, patch: CompanyPatchPayload): Promise<Company>
   deleteCompany(id: string): Promise<void>
-  createProject(companyId: string, input: ProjectPayload): Promise<void>
+  createProject(companyId: string, input: ProjectPayload): Promise<RecruitmentProject>
   updateProject(
     companyId: string,
     projectId: string,
@@ -67,14 +68,18 @@ export interface CompaniesApi {
     companyId: string,
     projectId: string,
     input: PipelinePayload,
-  ): Promise<void>
+  ): Promise<PipelineInfo>
   updatePipeline(
     companyId: string,
     pipelineId: string,
     patch: PipelinePatchPayload,
   ): Promise<void>
   deletePipeline(companyId: string, pipelineId: string): Promise<void>
-  createJob(companyId: string, projectId: string, input: JobPayload): Promise<void>
+  createJob(
+    companyId: string,
+    projectId: string,
+    input: JobPayload,
+  ): Promise<Job>
   updateJob(companyId: string, jobId: string, patch: JobPatchPayload): Promise<void>
   deleteJob(companyId: string, jobId: string): Promise<void>
 }
@@ -163,6 +168,37 @@ function toPipeline(dto: PipelineDto): PipelineInfo {
   }
 }
 
+function toProject(dto: ProjectDto): RecruitmentProject {
+  return {
+    id: dto.id,
+    name: dto.name,
+    season: dto.season,
+    status: projectStatusOf(dto.status),
+    deadline: dto.deadline ?? '',
+    description: dto.description,
+  }
+}
+
+function toJob(dto: JobDto): Job {
+  return {
+    id: dto.id,
+    projectId: dto.projectId,
+    pipelineId: dto.pipelineId,
+    title: dto.title,
+    city: dto.city,
+    type: (JOB_TYPE_LABELS[dto.jobType as JobType] ?? JOB_TYPE_LABELS.campus) as Job['type'],
+    salary: salaryLabel(dto.salaryMin, dto.salaryMax, dto.salaryMonths),
+    tags: dto.tags,
+    description: dto.description,
+    status: (dto.status === 'draft' || dto.status === 'closed'
+      ? dto.status
+      : 'open') as JobStatus,
+    salaryMin: dto.salaryMin,
+    salaryMax: dto.salaryMax,
+    salaryMonths: dto.salaryMonths,
+  }
+}
+
 function toCompany(dto: CompanyDetailResponse): Company {
   return {
     id: dto.id,
@@ -180,32 +216,9 @@ function toCompany(dto: CompanyDetailResponse): Company {
     ownerId: dto.ownerId,
     isPrivate: dto.isPrivate,
     isOwner: dto.isOwner,
-    projects: dto.projects.map((project) => ({
-      id: project.id,
-      name: project.name,
-      season: project.season,
-      status: projectStatusOf(project.status),
-      deadline: project.deadline ?? '',
-      description: project.description,
-    })),
+    projects: dto.projects.map(toProject),
     pipelines: dto.pipelines.map(toPipeline),
-    jobs: dto.jobs.map((job) => ({
-      id: job.id,
-      projectId: job.projectId,
-      pipelineId: job.pipelineId,
-      title: job.title,
-      city: job.city,
-      type: (JOB_TYPE_LABELS[job.jobType as JobType] ?? JOB_TYPE_LABELS.campus) as Job['type'],
-      salary: salaryLabel(job.salaryMin, job.salaryMax, job.salaryMonths),
-      tags: job.tags,
-      description: job.description,
-      status: (job.status === 'draft' || job.status === 'closed'
-        ? job.status
-        : 'open') as JobStatus,
-      salaryMin: job.salaryMin,
-      salaryMax: job.salaryMax,
-      salaryMonths: job.salaryMonths,
-    })),
+    jobs: dto.jobs.map(toJob),
   }
 }
 
@@ -311,11 +324,12 @@ export const companiesApi: CompaniesApi = {
     await apiFetch<void>(`/api/v1/companies/${id}`, { method: 'DELETE' })
   },
 
-  async createProject(companyId: string, input: ProjectPayload): Promise<void> {
-    await apiFetch(`/api/v1/companies/${companyId}/projects`, {
+  async createProject(companyId: string, input: ProjectPayload): Promise<RecruitmentProject> {
+    const dto = await apiFetch<ProjectDto>(`/api/v1/companies/${companyId}/projects`, {
       method: 'POST',
       body: JSON.stringify(input),
     })
+    return toProject(dto)
   },
 
   async updateProject(
@@ -337,11 +351,12 @@ export const companiesApi: CompaniesApi = {
     _companyId: string,
     projectId: string,
     input: PipelinePayload,
-  ): Promise<void> {
-    await apiFetch(`/api/v1/projects/${projectId}/pipelines`, {
+  ): Promise<PipelineInfo> {
+    const dto = await apiFetch<PipelineDto>(`/api/v1/projects/${projectId}/pipelines`, {
       method: 'POST',
       body: JSON.stringify(input),
     })
+    return toPipeline(dto)
   },
 
   async updatePipeline(
@@ -359,11 +374,16 @@ export const companiesApi: CompaniesApi = {
     await apiFetch<void>(`/api/v1/pipelines/${pipelineId}`, { method: 'DELETE' })
   },
 
-  async createJob(_companyId: string, projectId: string, input: JobPayload): Promise<void> {
-    await apiFetch(`/api/v1/projects/${projectId}/jobs`, {
+  async createJob(
+    _companyId: string,
+    projectId: string,
+    input: JobPayload,
+  ): Promise<Job> {
+    const dto = await apiFetch<JobDto>(`/api/v1/projects/${projectId}/jobs`, {
       method: 'POST',
       body: JSON.stringify(input),
     })
+    return toJob(dto)
   },
 
   async updateJob(_companyId: string, jobId: string, patch: JobPatchPayload): Promise<void> {
