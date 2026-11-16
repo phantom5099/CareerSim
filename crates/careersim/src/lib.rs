@@ -7,6 +7,7 @@ use sqlx::PgPool;
 pub mod account;
 pub mod agent;
 pub mod app;
+pub mod catalog;
 pub mod config;
 pub mod error;
 pub mod http;
