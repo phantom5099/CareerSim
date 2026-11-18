@@ -2,19 +2,20 @@
 
 use std::sync::Arc;
 
-use axum::Json;
-use axum::extract::{FromRequestParts, Request, State};
-use axum::http::request::Parts;
-use axum::http::{HeaderMap, Method, StatusCode};
-use axum::middleware::Next;
-use axum::response::{IntoResponse, Response};
+use axum::{
+    Json,
+    extract::{FromRequestParts, Request, State},
+    http::{HeaderMap, Method, StatusCode, request::Parts},
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
 use axum_extra::extract::CookieJar;
 
-use crate::account::model::{User, UserId};
-use crate::account::session::{COOKIE_MAX_AGE_SECS, SESSION_COOKIE, SessionId};
-
-use super::error::ApiError;
-use super::router::AppState;
+use super::{error::ApiError, router::AppState};
+use crate::account::{
+    model::{User, UserId},
+    session::{COOKIE_MAX_AGE_SECS, SESSION_COOKIE, SessionId},
+};
 
 /// 当前登录态；处理器唯一合法的归属来源（plan/01 §7.3）。
 #[derive(Debug, Clone)]

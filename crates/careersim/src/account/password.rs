@@ -1,7 +1,9 @@
 //! 密码哈希端口与 Argon2id 实现（OWASP 推荐参数）。
 
-use argon2::password_hash::{self, PasswordHasher as _, PasswordVerifier as _};
-use argon2::{Algorithm, Argon2, Params, Version};
+use argon2::{
+    Algorithm, Argon2, Params, Version,
+    password_hash::{self, PasswordHasher as _, PasswordVerifier as _},
+};
 
 use super::model::{Password, PasswordHash};
 

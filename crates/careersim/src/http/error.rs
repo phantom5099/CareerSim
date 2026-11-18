@@ -1,8 +1,10 @@
 //! 统一错误体与内部错误到 HTTP 响应的映射（plan/00 §6.2）。
 
-use axum::Json;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::{
+    Json,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use serde::Serialize;
 
 /// 对外错误码集合；serde 序列化结果即 wire 契约（plan/00 §6.2 的 code）。

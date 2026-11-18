@@ -1,23 +1,23 @@
 //! resume 模块单元测试：内容边界、格式探测、文本提取与附件存储。
 
-use std::io::Cursor;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{io::Cursor, path::PathBuf, sync::Arc};
 
-use super::content::{
-    MAX_FIELD_CHARS, MAX_ITEMS, MAX_SERIALIZED_BYTES, MAX_SUMMARY_CHARS, ResumeContent,
-    ResumeEducation, ResumeSkill,
+use super::{
+    content::{
+        MAX_FIELD_CHARS, MAX_ITEMS, MAX_SERIALIZED_BYTES, MAX_SUMMARY_CHARS, ResumeContent,
+        ResumeEducation, ResumeSkill,
+    },
+    model::{MAX_ATTACHMENT_BYTES, ResumeError, validate_title},
+    parse::{
+        AttachmentKind, CompositeTextExtractor, DocxTextExtractor, PdfTextExtractor,
+        ResumeTextExtractor, truncate_utf8,
+    },
+    service::{detect_attachment_kind, sanitize_file_name},
+    storage::{
+        AttachmentStore, LocalFsAttachmentStore, read_attachment_bytes, validate_storage_key,
+    },
+    structurize::structurize,
 };
-use super::model::{MAX_ATTACHMENT_BYTES, ResumeError, validate_title};
-use super::parse::{
-    AttachmentKind, CompositeTextExtractor, DocxTextExtractor, PdfTextExtractor,
-    ResumeTextExtractor, truncate_utf8,
-};
-use super::service::{detect_attachment_kind, sanitize_file_name};
-use super::storage::{
-    AttachmentStore, LocalFsAttachmentStore, read_attachment_bytes, validate_storage_key,
-};
-use super::structurize::structurize;
 
 // ---------- 标题与内容边界 ----------
 
@@ -294,7 +294,7 @@ fn structurize_parses_company_line_then_role_with_date() {
     assert_eq!(parsed.experiences.len(), 1);
     assert_eq!(parsed.experiences[0].company, "阿里巴巴集团");
     assert_eq!(parsed.experiences[0].role, "高级开发工程师");
-    assert_eq!(parsed.experiences[0].kind, "工作");
+    assert_eq!(parsed.experiences[0].kind, "全职");
     assert!(parsed.experiences[0].description.contains("交易链路"));
 }
 

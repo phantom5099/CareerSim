@@ -1,26 +1,40 @@
-//! 会话回合循环：per-session 互斥、工具循环、取消与阶段推进。
+//! 会话回合循环：per-session 互斥、对话/评估两种回合模式、控制动作
+//! `complete_stage` 的识别与一次修复、取消与阶段推进（plan/02 §8）。
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
+use chrono::Utc;
+use serde_json::json;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
-use super::BuildOptions;
-use super::ContextBuilder;
-use super::Session;
-use super::SessionError;
-use super::SessionId;
-use super::SessionService;
-use super::StageCompletion;
-use super::ToolRegistry;
-use super::ToolStatus;
-use super::TurnEndReason;
-use super::TurnId;
-use crate::error::error_chain;
-use crate::llm::LlmClient;
-use crate::llm::LlmError;
+use super::{
+    context::{BuildOptions, ContextBuilder, TurnContext},
+    session::{
+        CompleteStageBatch, Session, SessionError, SessionId, SessionService, StageCompletion,
+        StageEvaluationRecord, ToolStatus, TurnEndReason, TurnId, assistant_count_in_stage,
+        user_round_in_stage,
+    },
+    tool::{
+        CONTROL_ACTION_NAME, CompleteStageArgs, CompleteStageError, ToolCall, ToolRegistry,
+        complete_stage_spec,
+    },
+};
+use crate::{
+    error::error_chain,
+    llm::client::{LlmClient, LlmError, ToolChoice},
+    pipeline::{
+        model::{StageKind, StageOutcome, build_offer_terms, plan_transition},
+        rubric::{SUMMARY_MAX_CHARS, evaluate},
+    },
+};
+
+/// 评估轮采样温度（plan/02 §7.5）；低于对话轮，减少评分抖动。
+const EVALUATION_TEMPERATURE: f32 = 0.2;
+
+/// 非法评估输出的修复次数上限（plan/02 §6.4）；`stage_not_ready` 不消耗。
+const MAX_REPAIRS: usize = 1;
 
 /// 循环参数；模型连接与采样参数由 `LlmClient` 在构造时固定。
 #[derive(Debug, Clone, Copy)]
@@ -28,13 +42,15 @@ pub struct LoopConfig {
     pub max_steps: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TurnResult {
     pub turn_id: TurnId,
     pub reason: TurnEndReason,
     pub steps: u32,
     pub output: String,
     pub error: Option<String>,
+    /// 评估结论与阶段转移；仅评估成功时存在。
+    pub stage_completion: Option<StageCompletion>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -43,6 +59,13 @@ pub enum LoopError {
     SessionBusy,
     #[error(transparent)]
     Session(#[from] SessionError),
+    #[error("turn context stage `{context}` does not match session stage `{session}`")]
+    StageMismatch { context: String, session: String },
+}
+
+/// 非法输出的机器码载荷；不含内部细节。
+fn error_payload(code: &str, message: &str) -> String {
+    json!({ "code": code, "message": message }).to_string()
 }
 
 pub struct AgentLoop {
@@ -77,6 +100,7 @@ impl AgentLoop {
         &self,
         id: SessionId,
         input: impl Into<String>,
+        ctx: &TurnContext,
         cancel: CancellationToken,
     ) -> Result<TurnResult, LoopError> {
         let lock = self.session_lock(id);
@@ -86,11 +110,27 @@ impl AgentLoop {
         };
 
         let mut session = self.sessions.load(id).await?;
+        // §8.1：会话当前阶段必须与 TurnContext 一致（key 与 kind 都要一致）；
+        // 同 key 改 kind 时事件 kind 必须反映实际所用 rubric 的阶段，不猜测。
+        if session.current_stage.key != ctx.stage.key
+            || session.current_stage.kind != ctx.stage.kind
+            || ctx.pipeline.get(&ctx.stage.key) != Some(&ctx.stage)
+        {
+            return Err(LoopError::StageMismatch {
+                context: format!("{}:{}", ctx.stage.key, ctx.stage.kind.as_str()),
+                session: format!(
+                    "{}:{}",
+                    session.current_stage.key,
+                    session.current_stage.kind.as_str()
+                ),
+            });
+        }
+
         let turn_id = self.sessions.start_turn(&mut session).await?;
         info!(
             session_id = %id,
             turn_id = turn_id.0,
-            stage = %session.stage,
+            stage = %session.current_stage.key,
             role = %session.role(),
             "turn started"
         );
@@ -112,9 +152,10 @@ impl AgentLoop {
             .record_user_message(&mut session, turn_id, input.into())
             .await?;
 
+        let control_spec = complete_stage_spec(&ctx.stage);
         let mut steps: u32 = 0;
         let mut output = String::new();
-        let has_tools = !self.tools.is_empty();
+        let mut repairs_left = MAX_REPAIRS;
 
         for _ in 0..self.config.max_steps {
             if cancel.is_cancelled() {
@@ -130,23 +171,30 @@ impl AgentLoop {
                     .await;
             }
 
+            // §8.2：本次响应后助手消息数将超过 max_rounds 时进入评估轮。
+            let evaluation_mode =
+                assistant_count_in_stage(&session) + 1 > usize::from(ctx.stage.max_rounds);
+            let tools = if evaluation_mode {
+                vec![control_spec.clone()]
+            } else {
+                let mut specs = self.tools.specs();
+                specs.push(control_spec.clone());
+                specs.sort_by(|a, b| a.name.cmp(&b.name));
+                specs
+            };
+
             debug!(
                 session_id = %id,
                 turn_id = turn_id.0,
                 step = steps + 1,
                 role = %session.role(),
+                evaluation_mode,
                 "requesting model"
             );
 
-            let tools = if has_tools {
-                self.tools.specs()
-            } else {
-                Vec::new()
-            };
-
-            let request = match self
+            let mut request = match self
                 .context
-                .build(&session, &tools, BuildOptions::default())
+                .build(&session, ctx, &tools, BuildOptions::default())
                 .await
             {
                 Ok(request) => request,
@@ -163,6 +211,12 @@ impl AgentLoop {
                         .await;
                 }
             };
+            if evaluation_mode {
+                request.tool_choice = ToolChoice::Function {
+                    name: CONTROL_ACTION_NAME.to_owned(),
+                };
+                request.temperature = Some(EVALUATION_TEMPERATURE);
+            }
 
             let response = match self.llm.complete(request, &cancel).await {
                 Ok(response) => response,
@@ -207,17 +261,16 @@ impl AgentLoop {
             steps += 1;
             output = response.content.clone();
 
-            self.sessions
-                .record_assistant_message(
-                    &mut session,
-                    turn_id,
-                    response.content.clone(),
-                    response.tool_calls.clone(),
-                    response.usage,
-                )
-                .await?;
-
             if response.tool_calls.is_empty() {
+                self.sessions
+                    .record_assistant_message(
+                        &mut session,
+                        turn_id,
+                        response.content.clone(),
+                        Vec::new(),
+                        response.usage,
+                    )
+                    .await?;
                 if response.content.trim().is_empty() {
                     return self
                         .finish_turn(
@@ -242,42 +295,185 @@ impl AgentLoop {
                     .await;
             }
 
-            let calls = response.tool_calls;
-            let mut results = Vec::with_capacity(calls.len());
-            let mut aborted = false;
+            // 控制动作识别（§6.3 第 1 条）。
+            let control_index = response
+                .tool_calls
+                .iter()
+                .position(|call| call.name == CONTROL_ACTION_NAME);
+            // 控制动作与其他调用混在同一条响应才是“混合”；单独出现即合法。
+            let mixed = control_index.is_some() && response.tool_calls.len() > 1;
 
-            for (index, call) in calls.iter().enumerate() {
-                if cancel.is_cancelled() {
-                    for call in &calls[index..] {
-                        results.push((
-                            call.call_id.clone(),
-                            ToolStatus::Error,
-                            "aborted".to_owned(),
-                        ));
-                    }
-                    aborted = true;
-                    break;
-                }
-
-                let (status, result) = self.tools.execute(call, id, turn_id, &cancel).await;
-                results.push((call.call_id.clone(), status, result));
-            }
-
-            self.sessions
-                .record_tool_results(&mut session, turn_id, &results)
-                .await?;
-
-            if aborted || cancel.is_cancelled() {
-                return self
-                    .finish_turn(
+            let Some(index) = control_index else {
+                // 纯业务工具回合。
+                self.sessions
+                    .record_assistant_message(
                         &mut session,
                         turn_id,
-                        TurnEndReason::Interrupted,
-                        steps,
-                        output,
-                        None,
+                        response.content.clone(),
+                        response.tool_calls.clone(),
+                        response.usage,
                     )
-                    .await;
+                    .await?;
+
+                let calls = response.tool_calls;
+                let mut results = Vec::with_capacity(calls.len());
+                let mut aborted = false;
+                for (offset, call) in calls.iter().enumerate() {
+                    if cancel.is_cancelled() {
+                        for call in &calls[offset..] {
+                            results.push((
+                                call.call_id.clone(),
+                                ToolStatus::Error,
+                                "aborted".to_owned(),
+                            ));
+                        }
+                        aborted = true;
+                        break;
+                    }
+                    let (status, result) = self.tools.execute(call, id, turn_id, &cancel).await;
+                    results.push((call.call_id.clone(), status, result));
+                }
+
+                self.sessions
+                    .record_tool_results(&mut session, turn_id, &results)
+                    .await?;
+
+                if aborted || cancel.is_cancelled() {
+                    return self
+                        .finish_turn(
+                            &mut session,
+                            turn_id,
+                            TurnEndReason::Interrupted,
+                            steps,
+                            output,
+                            None,
+                        )
+                        .await;
+                }
+                continue;
+            };
+
+            if mixed {
+                // 控制动作必须单独出现：整条响应拒绝，业务工具不执行。
+                let payload = error_payload(
+                    "control_action_must_be_alone",
+                    "the complete_stage control action must be the only tool call in a response",
+                );
+                let results = response
+                    .tool_calls
+                    .iter()
+                    .map(|call| (call.call_id.clone(), ToolStatus::Error, payload.clone()))
+                    .collect::<Vec<_>>();
+                self.sessions
+                    .record_assistant_message(
+                        &mut session,
+                        turn_id,
+                        response.content.clone(),
+                        response.tool_calls.clone(),
+                        response.usage,
+                    )
+                    .await?;
+                self.sessions
+                    .record_tool_results(&mut session, turn_id, &results)
+                    .await?;
+                if repairs_left == 0 {
+                    return self
+                        .finish_turn(
+                            &mut session,
+                            turn_id,
+                            TurnEndReason::Error,
+                            steps,
+                            output,
+                            Some("evaluation_failed".to_owned()),
+                        )
+                        .await;
+                }
+                repairs_left -= 1;
+                continue;
+            }
+
+            let call = &response.tool_calls[index];
+            match Self::validate_control(&session, ctx, turn_id, call) {
+                Ok((record, outcome)) => {
+                    return self
+                        .seal_stage(
+                            &mut session,
+                            id,
+                            steps,
+                            output,
+                            CompleteStageBatch {
+                                turn_id,
+                                steps,
+                                assistant_content: response.content.clone(),
+                                assistant_tool_calls: response.tool_calls.clone(),
+                                usage: response.usage,
+                                control_call_id: call.call_id.clone(),
+                                record,
+                                outcome,
+                            },
+                        )
+                        .await;
+                }
+                Err(err) => {
+                    // stage_not_ready 引导继续对话，不消耗修复预算（§6.4）。
+                    let not_ready = matches!(err, CompleteStageError::StageNotReady(_));
+                    if !not_ready && repairs_left == 0 {
+                        // 修复预算耗尽且唯一失败是总评超长：截断后完成阶段收尾；
+                        // 维度、轮数或条款仍有问题时兜底不生效，仍按评估失败结束。
+                        if let Some((record, outcome)) =
+                            Self::rescue_with_truncated_summary(&session, ctx, turn_id, call)
+                        {
+                            return self
+                                .seal_stage(
+                                    &mut session,
+                                    id,
+                                    steps,
+                                    output,
+                                    CompleteStageBatch {
+                                        turn_id,
+                                        steps,
+                                        assistant_content: response.content.clone(),
+                                        assistant_tool_calls: response.tool_calls.clone(),
+                                        usage: response.usage,
+                                        control_call_id: call.call_id.clone(),
+                                        record,
+                                        outcome,
+                                    },
+                                )
+                                .await;
+                        }
+                    }
+                    let payload = error_payload(err.code(), &err.to_string());
+                    let results = vec![(call.call_id.clone(), ToolStatus::Error, payload)];
+                    self.sessions
+                        .record_assistant_message(
+                            &mut session,
+                            turn_id,
+                            response.content.clone(),
+                            response.tool_calls.clone(),
+                            response.usage,
+                        )
+                        .await?;
+                    self.sessions
+                        .record_tool_results(&mut session, turn_id, &results)
+                        .await?;
+                    if !not_ready {
+                        if repairs_left == 0 {
+                            return self
+                                .finish_turn(
+                                    &mut session,
+                                    turn_id,
+                                    TurnEndReason::Error,
+                                    steps,
+                                    output,
+                                    Some("evaluation_failed".to_owned()),
+                                )
+                                .await;
+                        }
+                        repairs_left -= 1;
+                    }
+                    continue;
+                }
             }
         }
 
@@ -292,28 +488,112 @@ impl AgentLoop {
         .await
     }
 
-    /// 结束当前阶段并推进到下一阶段；`Stage::Review` 没有下一阶段，返回
-    /// `SessionError::NoNextStage`。
-    pub async fn finish_stage(&self, id: SessionId) -> Result<StageCompletion, LoopError> {
-        let lock = self.session_lock(id);
-        let _guard = match lock.try_lock() {
-            Ok(guard) => guard,
-            Err(_) => return Err(LoopError::SessionBusy),
+    /// 控制动作校验（§6.3）：解析 → 评估 → min_rounds → Offer → 转移。
+    /// 纯函数路径，无 IO；结果由调用方落库。
+    fn validate_control(
+        session: &Session,
+        ctx: &TurnContext,
+        turn_id: TurnId,
+        call: &ToolCall,
+    ) -> Result<(StageEvaluationRecord, StageOutcome), CompleteStageError> {
+        if call.arguments.trim().is_empty() {
+            return Err(CompleteStageError::InvalidArguments(
+                "arguments are empty".to_owned(),
+            ));
+        }
+        let args: CompleteStageArgs = serde_json::from_str(&call.arguments)
+            .map_err(|err| CompleteStageError::InvalidArguments(err.to_string()))?;
+        Self::validate_submission(session, ctx, turn_id, args)
+    }
+
+    /// 解析后的提交校验；正常评估与截断兜底共用。
+    fn validate_submission(
+        session: &Session,
+        ctx: &TurnContext,
+        turn_id: TurnId,
+        args: CompleteStageArgs,
+    ) -> Result<(StageEvaluationRecord, StageOutcome), CompleteStageError> {
+        if ctx.stage.kind != StageKind::Offer && args.offer.is_some() {
+            return Err(CompleteStageError::InvalidArguments(
+                "offer is only allowed at the offer stage".to_owned(),
+            ));
+        }
+
+        let evaluation = evaluate(&ctx.stage.rubric, args.dimensions, args.summary)?;
+
+        let user_rounds = user_round_in_stage(session);
+        if user_rounds < usize::from(ctx.stage.min_rounds) {
+            return Err(CompleteStageError::StageNotReady(ctx.stage.min_rounds));
+        }
+
+        let offer = match (&ctx.stage.kind, args.offer) {
+            (StageKind::Offer, Some(input)) => Some(
+                build_offer_terms(input, &ctx.offer_policy, Utc::now())
+                    .map_err(CompleteStageError::from)?,
+            ),
+            (StageKind::Offer, None) => {
+                return Err(CompleteStageError::InvalidArguments(
+                    "offer terms are required at the offer stage".to_owned(),
+                ));
+            }
+            _ => None,
         };
 
-        let mut session = self.sessions.load(id).await?;
-        let from = session.stage;
-        let completion = self.sessions.finish_stage(&mut session).await?;
+        let transition =
+            plan_transition(&ctx.pipeline, &session.current_stage.key, evaluation, offer)
+                .map_err(|err| CompleteStageError::InvalidArguments(err.to_string()))?;
+
+        let record = StageEvaluationRecord {
+            turn_id,
+            stage_key: session.current_stage.key.clone(),
+            stage_kind: session.current_stage.kind,
+            evaluation: transition.evaluation,
+        };
+        Ok((record, transition.outcome))
+    }
+
+    /// 修复预算耗尽后的兜底：仅当唯一失败是总评超长时，截断总评并重走完整校验；
+    /// 维度、轮数或条款仍有问题则返回 None，回合按评估失败收尾。
+    fn rescue_with_truncated_summary(
+        session: &Session,
+        ctx: &TurnContext,
+        turn_id: TurnId,
+        call: &ToolCall,
+    ) -> Option<(StageEvaluationRecord, StageOutcome)> {
+        let mut args: CompleteStageArgs = serde_json::from_str(&call.arguments).ok()?;
+        if args.summary.chars().count() <= SUMMARY_MAX_CHARS {
+            return None;
+        }
+        args.summary = args.summary.chars().take(SUMMARY_MAX_CHARS).collect();
+        Self::validate_submission(session, ctx, turn_id, args).ok()
+    }
+
+    /// 写入评估回合事件批次并返回阶段完成结果；Ok 路径与截断兜底共用。
+    async fn seal_stage(
+        &self,
+        session: &mut Session,
+        id: SessionId,
+        steps: u32,
+        output: String,
+        batch: CompleteStageBatch,
+    ) -> Result<TurnResult, LoopError> {
+        let completion = self.sessions.complete_stage(session, batch).await?;
 
         info!(
             session_id = %id,
             turn_id = completion.turn_id.0,
-            from = %from,
-            to = %completion.stage,
+            stage = %completion.record.stage_key,
             "stage completed"
         );
 
-        Ok(completion)
+        Ok(TurnResult {
+            turn_id: completion.turn_id,
+            reason: TurnEndReason::Done,
+            steps,
+            output,
+            error: None,
+            stage_completion: Some(completion),
+        })
     }
 
     fn session_lock(&self, id: SessionId) -> Arc<Mutex<()>> {
@@ -357,6 +637,7 @@ impl AgentLoop {
             steps,
             output,
             error,
+            stage_completion: None,
         })
     }
 }

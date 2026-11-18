@@ -16,8 +16,8 @@ pub(crate) mod postgres;
 pub(crate) use memory::MemorySessionStore;
 pub(crate) use postgres::PostgresSessionStore;
 
-/// 当前事件格式版本。
-pub(crate) const EVENT_VERSION: u32 = 1;
+/// 当前事件格式版本；v2 引入 `SessionBinding` 与结构化 `StageCompleted` 载荷。
+pub(crate) const EVENT_VERSION: u32 = 2;
 
 /// 会话行及其缓存字段；`stage` 对 store 是不透明字符串。
 #[derive(Debug, Clone, PartialEq)]

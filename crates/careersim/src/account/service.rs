@@ -1,17 +1,19 @@
 //! 账户用例服务：注册、登录、注销、资料、改密与会话认证。
 
-use std::fmt;
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 
 use chrono::{DateTime, Utc};
 use tokio::task;
 
-use super::model::{
-    AccountError, NewUser, Password, PasswordHash, ProfilePatch, User, UserId, Username,
+use super::{
+    model::{
+        AccountError, DISPLAY_NAME_MAX_CHARS, NewUser, Password, PasswordHash, ProfilePatch, User,
+        UserId, Username,
+    },
+    password::PasswordHasher,
+    session::{SessionId, SessionToken, new_login_session},
+    store::{SessionStore, SessionStoreError, UserStore, UserStoreError},
 };
-use super::password::PasswordHasher;
-use super::session::{SessionId, SessionToken, new_login_session};
-use super::store::{SessionStore, SessionStoreError, UserStore, UserStoreError};
 
 /// 时钟端口；测试用 `FakeClock`，生产用 [`SystemClock`]。
 pub trait Clock: Send + Sync {
@@ -89,10 +91,10 @@ impl AccountService {
         let password = Password::parse(password)?;
         let display_name = display_name.trim();
         let display_chars = display_name.chars().count();
-        if !(1..=40).contains(&display_chars) {
+        if !(1..=DISPLAY_NAME_MAX_CHARS).contains(&display_chars) {
             return Err(AccountError::InvalidProfile {
                 field: "displayName",
-                reason: "must be 1..=40 characters",
+                reason: format!("must be 1..={DISPLAY_NAME_MAX_CHARS} characters"),
             });
         }
 

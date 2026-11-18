@@ -1,12 +1,16 @@
 //! 认证相关测试：Cookie 属性拼装与 Origin 校验矩阵（plan/01 §7.2）。
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use serde_json::json;
 
-use crate::account::session::SESSION_COOKIE;
-use crate::http::auth::{clear_session_cookie_header, session_cookie_header};
-use crate::testing::{body_json, empty_request, json_request, send};
+use crate::{
+    account::session::SESSION_COOKIE,
+    http::auth::{clear_session_cookie_header, session_cookie_header},
+    testing::{body_json, empty_request, json_request, send},
+};
 
 // ---------- Cookie 属性 ----------
 

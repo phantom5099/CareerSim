@@ -4,9 +4,13 @@ use std::sync::Arc;
 
 use chrono::Duration;
 
-use crate::account::model::{AccountError, ProfilePatch, UserId, Username};
-use crate::account::service::AccountService;
-use crate::testing::{FakeClock, FakeHasher, InMemorySessionStore, InMemoryUserStore};
+use crate::{
+    account::{
+        model::{AccountError, ProfilePatch, UserId, Username},
+        service::AccountService,
+    },
+    testing::{FakeClock, FakeHasher, InMemorySessionStore, InMemoryUserStore},
+};
 
 // ---------- 装配 ----------
 

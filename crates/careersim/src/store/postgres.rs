@@ -6,14 +6,10 @@ use serde_json::Value;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use super::AppendBatch;
-use super::EVENT_VERSION;
-use super::SessionStore;
-use super::StoreError;
-use super::StoredEvent;
-use super::StoredSession;
-use super::backend;
-use super::to_u64;
+use super::{
+    AppendBatch, EVENT_VERSION, SessionStore, StoreError, StoredEvent, StoredSession, backend,
+    to_u64,
+};
 
 pub(crate) struct PostgresSessionStore {
     pool: PgPool,

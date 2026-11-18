@@ -1,10 +1,8 @@
 //! 配置读取。
 
-use std::str::FromStr;
-use std::time::Duration;
+use std::{str::FromStr, time::Duration};
 
-use crate::error::ConfigError;
-use crate::llm::provider::ModelProvider;
+use crate::{error::ConfigError, llm::provider::ModelProvider};
 
 /// 模型连接与采样参数；由 `OpenAiCompatibleClient` 在构造时固定。
 ///

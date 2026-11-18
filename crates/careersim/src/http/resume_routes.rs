@@ -1,25 +1,30 @@
 //! 简历路由处理器：在线简历 CRUD、附件上传/下载（plan/01 §6.3、§8）。
 
-use axum::Json;
-use axum::Router;
-use axum::body::Body;
-use axum::extract::{Path, Request, State};
-use axum::http::StatusCode;
-use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE};
-use axum::http::{HeaderMap, HeaderName, HeaderValue};
-use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::{
+    Json, Router,
+    body::Body,
+    extract::{Path, Request, State},
+    http::{
+        HeaderMap, HeaderName, HeaderValue, StatusCode,
+        header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE},
+    },
+    response::{IntoResponse, Response},
+    routing::{get, post, put},
+};
 use chrono::SecondsFormat;
 use serde::{Deserialize, Serialize};
 use tower_http::limit::RequestBodyLimitLayer;
 
-use crate::resume::content::ResumeContent;
-use crate::resume::model::{ParseStatus, Resume, ResumeError, ResumeId};
-use crate::resume::service::OpenedAttachment;
-
-use super::auth::AuthContext;
-use super::error::{ApiError, render_backend_chain};
-use super::router::AppState;
+use super::{
+    auth::AuthContext,
+    error::{ApiError, render_backend_chain},
+    router::AppState,
+};
+use crate::resume::{
+    content::ResumeContent,
+    model::{ParseStatus, Resume, ResumeError, ResumeId},
+    service::OpenedAttachment,
+};
 
 /// JSON 请求体上限：与全局一致（1 MiB）。
 const JSON_BODY_LIMIT_BYTES: usize = 1024 * 1024;

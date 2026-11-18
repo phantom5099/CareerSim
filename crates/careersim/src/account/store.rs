@@ -3,8 +3,10 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use super::model::{CredentialUser, NewUser, PasswordHash, ProfilePatch, User, UserId};
-use super::session::{LoginSession, NewLoginSession, SessionId, SessionTokenHash};
+use super::{
+    model::{CredentialUser, NewUser, PasswordHash, ProfilePatch, User, UserId},
+    session::{LoginSession, NewLoginSession, SessionId, SessionTokenHash},
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum UserStoreError {

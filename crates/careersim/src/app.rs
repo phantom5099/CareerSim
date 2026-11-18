@@ -5,15 +5,21 @@ use std::sync::Arc;
 use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
 
-use crate::account::password::Argon2idHasher;
-use crate::account::postgres_account_service;
-use crate::agent::{AgentLoop, DefaultContextBuilder, LoopConfig, ToolRegistry};
-use crate::config::AppConfig;
-use crate::http::router::{AppState, router};
-use crate::llm::OpenAiCompatibleClient;
-use crate::postgres_session_service;
-use crate::resume::{
-    AttachmentStore, LocalFsAttachmentStore, S3AttachmentStore, postgres_resume_service,
+use crate::{
+    account::{password::Argon2idHasher, postgres_account_service},
+    agent::{
+        agent_loop::{AgentLoop, LoopConfig},
+        context::DefaultContextBuilder,
+        tool::ToolRegistry,
+    },
+    config::AppConfig,
+    http::router::{AppState, router},
+    llm::openai_compat::OpenAiCompatibleClient,
+    postgres_session_service,
+    resume::{
+        postgres_resume_service,
+        storage::{AttachmentStore, LocalFsAttachmentStore, S3AttachmentStore},
+    },
 };
 
 const MODEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
@@ -71,11 +77,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             ))
         }
     };
-    let resume = postgres_resume_service(pool, attachment_store);
+    let resume = postgres_resume_service(pool.clone(), attachment_store);
+
+    // 公司模板目录（plan/01 §4.3）；PostgreSQL 适配。
+    let catalog = crate::catalog::postgres_catalog_service(pool);
 
     let state = AppState {
         account: Arc::new(account),
         resume: Arc::new(resume),
+        catalog: Arc::new(catalog),
         allowed_origins: config.http.allowed_origins.clone().into(),
         cookie_secure: config.http.cookie_secure,
     };
