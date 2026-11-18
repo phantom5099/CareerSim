@@ -2,13 +2,16 @@
 //!
 //! 运行前需可用的 PostgreSQL（compose.yaml）并执行全部迁移。
 
-use careersim::account::model::{AccountError, ProfilePatch};
-use careersim::account::password::Argon2idHasher;
-use careersim::account::postgres_account_service;
-use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 
-async fn service() -> Option<careersim::account::AccountService> {
+use careersim::account::{
+    model::{AccountError, ProfilePatch},
+    password::Argon2idHasher,
+    postgres_account_service,
+};
+use sqlx::postgres::PgPoolOptions;
+
+async fn service() -> Option<careersim::account::service::AccountService> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
         return None;
     };

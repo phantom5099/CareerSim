@@ -15,8 +15,6 @@ mod tests;
 
 use std::sync::Arc;
 
-use sqlx::PgPool;
-
 pub use model::{
     AccountError, CredentialUser, NewUser, Password, PasswordHash, ProfilePatch, User, UserId,
     Username,
@@ -27,6 +25,7 @@ pub use session::{
     IDLE_TIMEOUT, LoginSession, NewLoginSession, SESSION_COOKIE, SessionId, SessionToken,
     SessionTokenHash, TOUCH_THROTTLE,
 };
+use sqlx::PgPool;
 pub use store::{SessionStore, SessionStoreError, UserStore, UserStoreError};
 
 /// 构造基于 PostgreSQL 的账户服务；存储实现只通过这里对外暴露。

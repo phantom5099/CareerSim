@@ -11,16 +11,20 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use sqlx::{Executor, PgPool, Postgres, Row, postgres::PgRow};
 
-use super::model::{
-    CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySource, CompanySummary,
-    Job, JobId, JobPatch, JobStatus, JobType, ListCursor, NewCompany, NewJob, NewPipeline,
-    NewProject, Pipeline, PipelineId, ProjectId, ProjectPatch, ProjectStatus, RecruitmentProject,
-    normalize_key,
+use super::{
+    model::{
+        CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySource,
+        CompanySummary, Job, JobId, JobPatch, JobStatus, JobType, ListCursor, NewCompany, NewJob,
+        NewPipeline, NewProject, Pipeline, PipelineId, ProjectId, ProjectPatch, ProjectStatus,
+        RecruitmentProject, normalize_key,
+    },
+    store::{CatalogScope, CatalogStore},
+    template::ValidatedTemplate,
 };
-use super::store::{CatalogScope, CatalogStore};
-use super::template::ValidatedTemplate;
-use crate::account::UserId;
-use crate::pipeline::{PipelineDefinition, StageDefinition};
+use crate::{
+    account::model::UserId,
+    pipeline::model::{PipelineDefinition, StageDefinition},
+};
 
 pub(crate) struct PgCatalogStore {
     pool: PgPool,

@@ -3,42 +3,54 @@
 //! 仅在 `cfg(test)` 下编译；account 与 http 的就近单测共用，
 //! 不实现任何生产语义（如真实哈希耗时）。
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use async_trait::async_trait;
-use axum::Router;
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
-use axum::response::Response;
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, StatusCode},
+    response::Response,
+};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use crate::account::model::{
-    CredentialUser, NewUser, Password, PasswordHash, ProfilePatch, User, UserId,
+use crate::{
+    account::{
+        model::{CredentialUser, NewUser, Password, PasswordHash, ProfilePatch, User, UserId},
+        password::{PasswordError, PasswordHasher},
+        service::{AccountService, Clock},
+        session::{LoginSession, NewLoginSession, SessionId, SessionTokenHash},
+        store::{SessionStore, SessionStoreError, UserStore, UserStoreError},
+    },
+    catalog::{
+        model::{
+            CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySource,
+            CompanySummary, Job, JobId, JobPatch, JobStatus, ListCursor, NewCompany, NewJob,
+            NewPipeline, NewProject, Pipeline, PipelineId, ProjectId, ProjectPatch,
+            RecruitmentProject, normalize_key,
+        },
+        service::CatalogService,
+        store::{CatalogScope, CatalogStore},
+        template::ValidatedTemplate,
+    },
+    http::router::{AppState, router},
+    resume::{
+        content::ResumeContent,
+        model::{
+            NewResume, NewResumeAttachment, ParseStatus, RESUME_LIMIT, Resume, ResumeAttachment,
+            ResumeId, ResumePatch,
+        },
+        parse::{AttachmentKind, ParseError, ResumeTextExtractor},
+        service::ResumeService,
+        storage::{AttachmentStore, AttachmentStoreError},
+        store::{ResumeStore, ResumeStoreError},
+    },
 };
-use crate::account::password::{PasswordError, PasswordHasher};
-use crate::account::service::{AccountService, Clock};
-use crate::account::session::{LoginSession, NewLoginSession, SessionId, SessionTokenHash};
-use crate::account::store::{SessionStore, SessionStoreError, UserStore, UserStoreError};
-use crate::catalog::model::{
-    CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySource, CompanySummary,
-    Job, JobId, JobPatch, JobStatus, ListCursor, NewCompany, NewJob, NewPipeline, NewProject,
-    Pipeline, PipelineId, ProjectId, ProjectPatch, RecruitmentProject, normalize_key,
-};
-use crate::catalog::service::CatalogService;
-use crate::catalog::store::{CatalogScope, CatalogStore};
-use crate::catalog::template::ValidatedTemplate;
-use crate::http::router::{AppState, router};
-use crate::resume::model::{
-    NewResume, NewResumeAttachment, ParseStatus, RESUME_LIMIT, Resume, ResumeAttachment, ResumeId,
-    ResumePatch,
-};
-use crate::resume::parse::{AttachmentKind, ParseError, ResumeTextExtractor};
-use crate::resume::storage::{AttachmentStore, AttachmentStoreError};
-use crate::resume::store::{ResumeStore, ResumeStoreError};
-use crate::resume::{ResumeContent, ResumeService};
 
 // ---------- 账户端口替身 ----------
 

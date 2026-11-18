@@ -4,9 +4,11 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row, postgres::PgRow};
 
-use super::model::{CredentialUser, NewUser, PasswordHash, ProfilePatch, User, UserId};
-use super::session::{LoginSession, NewLoginSession, SessionId, SessionTokenHash};
-use super::store::{SessionStore, SessionStoreError, UserStore, UserStoreError};
+use super::{
+    model::{CredentialUser, NewUser, PasswordHash, ProfilePatch, User, UserId},
+    session::{LoginSession, NewLoginSession, SessionId, SessionTokenHash},
+    store::{SessionStore, SessionStoreError, UserStore, UserStoreError},
+};
 
 pub(crate) struct PgUserStore {
     pool: PgPool,

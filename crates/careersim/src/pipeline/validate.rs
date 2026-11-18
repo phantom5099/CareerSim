@@ -2,8 +2,10 @@
 
 use std::collections::HashSet;
 
-use super::PipelineError;
-use super::model::{StageDefinition, StageKind};
+use super::{
+    PipelineError,
+    model::{StageDefinition, StageKind},
+};
 
 /// 阶段标题长度上限（plan/01 §3.2）。
 const TITLE_MAX_CHARS: usize = 40;
@@ -103,8 +105,20 @@ fn validate_rubric(stage: &StageDefinition) -> Result<(), PipelineError> {
         .iter()
         .map(|dimension| u32::from(dimension.weight))
         .sum();
-    // 规则 6：全 0 表示等权；否则总和必须 100。
-    if total_weight != 0 && total_weight != 100 {
+    let has_zero = rubric
+        .dimensions
+        .iter()
+        .any(|dimension| dimension.weight == 0);
+    // 规则 6：全 0 表示等权；否则不允许出现单个 0 权重（评估器把 0 权重当作 1
+    // 参与计算，部分零权重会使总分失真并翻转判定）且总和必须 100。
+    if total_weight == 0 {
+        // 全 0：等权，合法；空维度列表由前置校验拒绝。
+    } else if has_zero {
+        return Err(PipelineError::InvalidRubric {
+            key: stage.key.as_str().to_owned(),
+            reason: "individual dimension weights must not be 0 unless all weights are 0 (equal weighting)".to_owned(),
+        });
+    } else if total_weight != 100 {
         return Err(PipelineError::InvalidRubric {
             key: stage.key.as_str().to_owned(),
             reason: format!("weights must sum to 100 when set, got {total_weight}"),

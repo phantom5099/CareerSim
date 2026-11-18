@@ -4,8 +4,10 @@
 
 use serde_json::{Value, json};
 
-use super::service::CatalogService;
-use super::template::{self, TemplateError};
+use super::{
+    service::CatalogService,
+    template::{self, TemplateError},
+};
 
 fn rubric(pass_score: u8) -> Value {
     json!({

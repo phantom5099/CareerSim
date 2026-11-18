@@ -1,13 +1,16 @@
 //! multipart 解析、下载头构造与路由级 HTTP 测试。
 
-use axum::Router;
-use axum::body::Body;
-use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
-use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
+use axum::{
+    Router,
+    body::Body,
+    http::{
+        HeaderMap, HeaderValue, Request, StatusCode,
+        header::{CONTENT_DISPOSITION, CONTENT_TYPE},
+    },
+};
 use serde_json::{Value, json};
 
-use super::parse_multipart_upload;
-use super::percent_encode_file_name;
+use super::{parse_multipart_upload, percent_encode_file_name};
 use crate::testing::{ALLOWED_ORIGIN, body_json, empty_request, registered_cookie, send};
 
 const BOUNDARY: &str = "careersim-boundary-1234";

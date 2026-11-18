@@ -3,8 +3,10 @@
 //! 通过完整路由 + oneshot 发请求，验证 AuthContext 提取、
 //! `From<AccountError>` 分类与 `ApiError::status()` 映射。
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use serde_json::json;
 
 use crate::testing::{

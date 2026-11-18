@@ -17,8 +17,6 @@ mod tests;
 
 use std::sync::Arc;
 
-use sqlx::PgPool;
-
 pub use content::ResumeContent;
 pub use model::{
     NewResume, NewResumeAttachment, ParseErrorCode, ParseStatus, Resume, ResumeAttachment,
@@ -29,6 +27,7 @@ pub use parse::{
     ResumeTextExtractor,
 };
 pub use service::{OpenedAttachment, ResumeService};
+use sqlx::PgPool;
 pub use storage::{
     AttachmentStore, AttachmentStoreError, LocalFsAttachmentStore, S3AttachmentStore,
 };

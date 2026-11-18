@@ -4,18 +4,20 @@ use std::sync::Arc;
 
 use tokio::io::AsyncRead;
 
-use super::content::ResumeContent;
-use super::model::{
-    DOCX_MIME, MAX_ATTACHMENT_BYTES, NewResume, PDF_MIME, ParseStatus, Resume, ResumeAttachment,
-    ResumeError, ResumeId, ResumePatch,
+use super::{
+    content::ResumeContent,
+    model::{
+        DOCX_MIME, MAX_ATTACHMENT_BYTES, NewResume, PDF_MIME, ParseStatus, Resume,
+        ResumeAttachment, ResumeError, ResumeId, ResumePatch,
+    },
+    parse::{
+        AttachmentKind, DocxTextExtractor, EXTRACT_TIMEOUT, ParseError, ResumeTextExtractor,
+        truncate_utf8,
+    },
+    storage::{AttachmentStore, AttachmentStoreError},
+    store::{ResumeStore, ResumeStoreError},
+    structurize::{merge_parsed, structurize},
 };
-use super::parse::{
-    AttachmentKind, DocxTextExtractor, EXTRACT_TIMEOUT, ParseError, ResumeTextExtractor,
-    truncate_utf8,
-};
-use super::storage::{AttachmentStore, AttachmentStoreError};
-use super::store::{ResumeStore, ResumeStoreError};
-use super::structurize::{merge_parsed, structurize};
 use crate::account::model::UserId;
 
 /// 打开附件下载的结果；流由调用方读完（≤10 MiB）。

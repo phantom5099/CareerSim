@@ -1,7 +1,9 @@
 //! Attachment binary storage: a port plus a local-filesystem adapter.
 
-use std::fmt;
-use std::path::{Path, PathBuf};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+};
 
 use async_trait::async_trait;
 use thiserror::Error;

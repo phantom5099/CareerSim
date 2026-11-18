@@ -1,20 +1,24 @@
 //! 账户路由处理器：注册、登录、注销、资料与改密（plan/01 §6.1）。
 
-use axum::Json;
-use axum::Router;
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::{get, patch, post},
+};
 use serde::{Deserialize, Serialize};
 use tower_http::limit::RequestBodyLimitLayer;
 
-use crate::account::model::{AccountError, ProfilePatch, User};
-use crate::account::service::SessionGrant;
-
-use super::auth::{AuthContext, clear_session_cookie_header, session_cookie_header};
-use super::error::{ApiError, render_backend_chain};
-use super::router::AppState;
+use super::{
+    auth::{AuthContext, clear_session_cookie_header, session_cookie_header},
+    error::{ApiError, render_backend_chain},
+    router::AppState,
+};
+use crate::account::{
+    model::{AccountError, ProfilePatch, User},
+    service::SessionGrant,
+};
 
 /// JSON 请求体上限：与全局一致（1 MiB）。
 const BODY_LIMIT_BYTES: usize = 1024 * 1024;

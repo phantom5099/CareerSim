@@ -3,16 +3,21 @@
 //! 覆盖：份数上限（行锁路径）、默认简历唯一与删除后提升、附件上传解析失败
 //! 保留附件、下载流一致性、超限/空文件/格式不符拒绝。
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
-use careersim::account::model::UserId;
-use careersim::account::password::Argon2idHasher;
-use careersim::account::postgres_account_service;
-use careersim::resume::model::MAX_ATTACHMENT_BYTES;
-use careersim::resume::storage::{LocalFsAttachmentStore, read_attachment_bytes};
-use careersim::resume::{ParseStatus, ResumeContent, ResumeError, postgres_resume_service};
+use careersim::{
+    account::{model::UserId, password::Argon2idHasher, postgres_account_service},
+    resume::{
+        content::ResumeContent,
+        model::{MAX_ATTACHMENT_BYTES, ParseStatus, ResumeError},
+        postgres_resume_service,
+        storage::{LocalFsAttachmentStore, read_attachment_bytes},
+    },
+};
 use sqlx::postgres::PgPoolOptions;
 
 async fn setup(tag: &str) -> Option<(UserId, careersim::resume::ResumeService, PathBuf)> {
