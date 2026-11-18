@@ -1,5 +1,7 @@
 //! 基于 `async-openai` 的 Chat Completions 适配层。
 
+use std::time::Instant;
+
 use async_openai::{
     Client,
     config::OpenAIConfig,
@@ -17,7 +19,7 @@ use async_openai::{
 };
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{Span, debug, error, field, instrument};
 
 use super::client::{ChatRequest, ChatResponse, LlmClient, LlmError, TokenUsage, ToolChoice};
 use crate::{
@@ -26,6 +28,7 @@ use crate::{
         tool::{ToolCall, ToolSpec},
     },
     config::LlmConfig,
+    llm::provider::ModelProvider,
 };
 
 pub struct OpenAiCompatibleClient {
@@ -98,27 +101,61 @@ impl OpenAiCompatibleClient {
 
 #[async_trait]
 impl LlmClient for OpenAiCompatibleClient {
+    #[instrument(
+        name = "llm.complete",
+        level = "debug",
+        skip(self, request, cancel),
+        fields(
+            provider = ?self.config.provider,
+            model = %self.config.model,
+            tool_count = request.tools.len(),
+            result = field::Empty,
+            duration_ms = field::Empty
+        )
+    )]
     async fn complete(
         &self,
         request: ChatRequest,
         cancel: &CancellationToken,
     ) -> Result<ChatResponse, LlmError> {
-        let request = self.build_request(request)?;
+        let started = Instant::now();
+        let request = match self.build_request(request) {
+            Ok(request) => request,
+            Err(error) => {
+                record_llm_metrics(self.config.provider, "error", started, None);
+                return Err(error);
+            }
+        };
 
         let chat = self.client.chat();
         let response = tokio::select! {
             biased;
-            () = cancel.cancelled() => return Err(LlmError::Cancelled),
+            () = cancel.cancelled() => {
+                record_llm_metrics(self.config.provider, "cancelled", started, None);
+                return Err(LlmError::Cancelled);
+            },
             result = chat.create(request) => {
-                result.map_err(|err| LlmError::api_with_source("send request", err))?
+                result.map_err(|err| {
+                    error!(error_kind = "api", "model provider request failed");
+                    LlmError::api_with_source("send request", err)
+                })
+            }
+        };
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                record_llm_metrics(self.config.provider, "error", started, None);
+                return Err(error);
             }
         };
 
-        let choice = response
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| LlmError::api("response contains no choices"))?;
+        let choice = match response.choices.into_iter().next() {
+            Some(choice) => choice,
+            None => {
+                record_llm_metrics(self.config.provider, "error", started, None);
+                return Err(LlmError::api("response contains no choices"));
+            }
+        };
 
         let mut tool_calls = Vec::new();
         for call in choice.message.tool_calls.unwrap_or_default() {
@@ -129,19 +166,69 @@ impl LlmClient for OpenAiCompatibleClient {
                     arguments: call.function.arguments,
                 }),
                 ChatCompletionMessageToolCalls::Custom(_) => {
+                    record_llm_metrics(self.config.provider, "error", started, None);
                     return Err(LlmError::api("custom tool calls are not supported"));
                 }
             }
         }
 
-        Ok(ChatResponse {
+        let result = ChatResponse {
             content: choice.message.content.unwrap_or_default(),
             tool_calls,
             usage: response.usage.map(|usage| TokenUsage {
                 input_tokens: usage.prompt_tokens,
                 output_tokens: usage.completion_tokens,
             }),
-        })
+        };
+        let duration_ms = started.elapsed().as_secs_f64() * 1_000.0;
+        tracing::Span::current().record("result", "success");
+        tracing::Span::current().record("duration_ms", duration_ms);
+        debug!(
+            duration_ms,
+            tool_calls = result.tool_calls.len(),
+            input_tokens = result.usage.map(|usage| usage.input_tokens),
+            output_tokens = result.usage.map(|usage| usage.output_tokens),
+            "model request completed"
+        );
+        record_llm_metrics(self.config.provider, "ok", started, result.usage);
+        Ok(result)
+    }
+}
+
+fn record_llm_metrics(
+    provider: ModelProvider,
+    result: &'static str,
+    started: Instant,
+    usage: Option<TokenUsage>,
+) {
+    let provider = format!("{provider:?}");
+    let duration_ms = started.elapsed().as_secs_f64() * 1_000.0;
+    Span::current().record("result", result);
+    Span::current().record("duration_ms", duration_ms);
+    metrics::counter!(
+        "careersim_llm_requests_total",
+        "provider" => provider.clone(),
+        "result" => result
+    )
+    .increment(1);
+    metrics::histogram!(
+        "careersim_llm_request_duration_seconds",
+        "provider" => provider.clone()
+    )
+    .record(started.elapsed().as_secs_f64());
+    if let Some(usage) = usage {
+        metrics::counter!(
+            "careersim_llm_tokens_total",
+            "provider" => provider.clone(),
+            "direction" => "input"
+        )
+        .increment(u64::from(usage.input_tokens));
+        metrics::counter!(
+            "careersim_llm_tokens_total",
+            "provider" => provider,
+            "direction" => "output"
+        )
+        .increment(u64::from(usage.output_tokens));
     }
 }
 

@@ -7,7 +7,7 @@ use chrono::Utc;
 use serde_json::json;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{Span, debug, error, field, info, instrument, warn};
 
 use super::{
     context::{BuildOptions, ContextBuilder, TurnContext},
@@ -68,6 +68,31 @@ fn error_payload(code: &str, message: &str) -> String {
     json!({ "code": code, "message": message }).to_string()
 }
 
+fn session_error_kind(error: &SessionError) -> &'static str {
+    match error {
+        SessionError::NotFound => "not_found",
+        SessionError::Conflict => "conflict",
+        SessionError::Corrupt(_) => "corrupt",
+        SessionError::InvalidEvent(_) => "invalid_event",
+        SessionError::Backend { .. } => "backend",
+    }
+}
+
+fn log_session_error(
+    operation: &'static str,
+    session_id: SessionId,
+    turn_id: Option<TurnId>,
+    error: &SessionError,
+) {
+    error!(
+        operation,
+        session_id = %session_id,
+        turn_id = turn_id.map(|id| id.0),
+        error_kind = session_error_kind(error),
+        "session operation failed"
+    );
+}
+
 pub struct AgentLoop {
     llm: Arc<dyn LlmClient>,
     context: Arc<dyn ContextBuilder>,
@@ -96,6 +121,17 @@ impl AgentLoop {
         }
     }
 
+    #[instrument(
+        name = "agent.run_turn",
+        level = "debug",
+        skip(self, input, ctx, cancel),
+        fields(
+            session_id = %id,
+            stage = %ctx.stage.key,
+            stage_kind = %ctx.stage.kind.as_str(),
+            turn_id = field::Empty
+        )
+    )]
     pub async fn run_turn(
         &self,
         id: SessionId,
@@ -106,16 +142,23 @@ impl AgentLoop {
         let lock = self.session_lock(id);
         let _guard = match lock.try_lock() {
             Ok(guard) => guard,
-            Err(_) => return Err(LoopError::SessionBusy),
+            Err(_) => {
+                warn!(session_id = %id, error_kind = "session_busy", "session turn rejected");
+                return Err(LoopError::SessionBusy);
+            }
         };
 
-        let mut session = self.sessions.load(id).await?;
+        let mut session = self.sessions.load(id).await.map_err(|error| {
+            log_session_error("load", id, None, &error);
+            LoopError::from(error)
+        })?;
         // §8.1：会话当前阶段必须与 TurnContext 一致（key 与 kind 都要一致）；
         // 同 key 改 kind 时事件 kind 必须反映实际所用 rubric 的阶段，不猜测。
         if session.current_stage.key != ctx.stage.key
             || session.current_stage.kind != ctx.stage.kind
             || ctx.pipeline.get(&ctx.stage.key) != Some(&ctx.stage)
         {
+            warn!(error_kind = "stage_mismatch", "turn context rejected");
             return Err(LoopError::StageMismatch {
                 context: format!("{}:{}", ctx.stage.key, ctx.stage.kind.as_str()),
                 session: format!(
@@ -126,7 +169,15 @@ impl AgentLoop {
             });
         }
 
-        let turn_id = self.sessions.start_turn(&mut session).await?;
+        let turn_id = self
+            .sessions
+            .start_turn(&mut session)
+            .await
+            .map_err(|error| {
+                log_session_error("start_turn", id, None, &error);
+                LoopError::from(error)
+            })?;
+        Span::current().record("turn_id", turn_id.0);
         info!(
             session_id = %id,
             turn_id = turn_id.0,
@@ -150,7 +201,11 @@ impl AgentLoop {
 
         self.sessions
             .record_user_message(&mut session, turn_id, input.into())
-            .await?;
+            .await
+            .map_err(|error| {
+                log_session_error("record_user_message", id, Some(turn_id), &error);
+                LoopError::from(error)
+            })?;
 
         let control_spec = complete_stage_spec(&ctx.stage);
         let mut steps: u32 = 0;
@@ -199,6 +254,13 @@ impl AgentLoop {
             {
                 Ok(request) => request,
                 Err(err) => {
+                    error!(
+                        session_id = %id,
+                        turn_id = turn_id.0,
+                        step = steps + 1,
+                        error_kind = "context_build",
+                        "failed to build model context"
+                    );
                     return self
                         .finish_turn(
                             &mut session,
@@ -233,6 +295,13 @@ impl AgentLoop {
                         .await;
                 }
                 Err(err) => {
+                    error!(
+                        session_id = %id,
+                        turn_id = turn_id.0,
+                        step = steps + 1,
+                        error_kind = "llm",
+                        "model request failed"
+                    );
                     if cancel.is_cancelled() {
                         return self
                             .finish_turn(
@@ -585,6 +654,17 @@ impl AgentLoop {
             stage = %completion.record.stage_key,
             "stage completed"
         );
+        metrics::counter!(
+            "careersim_turns_total",
+            "stage_kind" => completion.record.stage_kind.as_str().to_owned(),
+            "reason" => "Done"
+        )
+        .increment(1);
+        metrics::histogram!(
+            "careersim_turn_steps",
+            "stage_kind" => completion.record.stage_kind.as_str().to_owned()
+        )
+        .record(f64::from(steps));
 
         Ok(TurnResult {
             turn_id: completion.turn_id,
@@ -630,6 +710,17 @@ impl AgentLoop {
             reason = ?reason,
             "turn ended"
         );
+        metrics::counter!(
+            "careersim_turns_total",
+            "stage_kind" => session.current_stage.kind.as_str().to_owned(),
+            "reason" => format!("{reason:?}")
+        )
+        .increment(1);
+        metrics::histogram!(
+            "careersim_turn_steps",
+            "stage_kind" => session.current_stage.kind.as_str().to_owned()
+        )
+        .record(f64::from(steps));
 
         Ok(TurnResult {
             turn_id,
