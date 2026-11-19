@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use tokio::io::AsyncRead;
+use tracing::instrument;
 
 use super::{
     content::ResumeContent,
@@ -46,15 +47,18 @@ impl ResumeService {
         }
     }
 
+    #[instrument(name = "resume.list", level = "debug", skip(self), fields(owner_id = ?owner))]
     pub async fn list(&self, owner: UserId) -> Result<Vec<Resume>, ResumeError> {
         self.store.list(owner).await.map_err(map_store_error)
     }
 
+    #[instrument(name = "resume.get", level = "debug", skip(self), fields(owner_id = ?owner, resume_id = ?id))]
     pub async fn get(&self, owner: UserId, id: ResumeId) -> Result<Resume, ResumeError> {
         self.store.get(owner, id).await.map_err(map_store_error)
     }
 
     /// 创建在线手填简历。
+    #[instrument(name = "resume.create_online", level = "debug", skip(self, title, content), fields(owner_id = ?owner))]
     pub async fn create_online(
         &self,
         owner: UserId,
@@ -82,6 +86,7 @@ impl ResumeService {
     ///
     /// 解析失败时仍保留附件并落库 `failed` 状态与固定错误码；数据库写入失败时
     /// 尽力删除已落盘文件，避免孤儿文件。
+    #[instrument(name = "resume.upload_attachment", level = "debug", skip(self, title, raw_file_name, bytes), fields(owner_id = ?owner, bytes = bytes.len()))]
     pub async fn upload_attachment(
         &self,
         owner: UserId,
@@ -125,6 +130,7 @@ impl ResumeService {
     ///
     /// 只填空字段、列表追加去重，用户已填内容不被覆盖；替换旧附件时旧文件
     /// 在数据库更新成功后清理。解析失败仍保留附件并落库 `failed` 状态。
+    #[instrument(name = "resume.attach_to_resume", level = "debug", skip(self, raw_file_name, bytes), fields(owner_id = ?owner, resume_id = ?id, bytes = bytes.len()))]
     pub async fn attach_to_resume(
         &self,
         owner: UserId,
@@ -149,6 +155,7 @@ impl ResumeService {
     }
 
     /// 移除简历附件：清空附件列并重置解析状态；内容保持不变。
+    #[instrument(name = "resume.remove_attachment", level = "debug", skip(self), fields(owner_id = ?owner, resume_id = ?id))]
     pub async fn remove_attachment(
         &self,
         owner: UserId,

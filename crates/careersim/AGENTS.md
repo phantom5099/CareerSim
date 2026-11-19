@@ -130,6 +130,8 @@ config          → error / llm::provider
   `ToolRegistry`、`StoreSessionService`，再注入 `AgentLoop`。
 - **类型归属**：只在本模块使用的类型留在本模块；跨模块共享的类型由拥有者导出，消费方
   直接使用，不复制定义。
+- **认证归属**：HTTP 处理器只使用 `AuthContext` 提取的登录身份；客户端提交的
+  `userId` / `ownerId` 不作为归属依据，也不定义在 DTO 中。
 
 ---
 
@@ -206,7 +208,15 @@ config          → error / llm::provider
 - 注释写法（只写为什么、一个块最多 3 行）见根 `AGENTS.md` §6.2。
 - 设计细节优先写进源码注释；跨文件的结构性规则才写进 `AGENTS.md`。
 
-### 4.8 禁止事项
+### 4.8 可观测性
+
+- 观测初始化集中在 `telemetry.rs`；入口必须安装结构化 subscriber 和 Prometheus recorder。
+- HTTP 层保留 `SetRequestIdLayer → TraceLayer → PropagateRequestIdLayer` 顺序；请求 span 使用匹配路由或固定的 `unmatched`，不得回退为原始动态 URI。
+- `AgentLoop`、LLM、工具、SessionService 和 PostgreSQL 存储边界使用结构化 span；大对象、正文、提示词、密码、令牌和工具参数必须跳过。
+- 修改回合、模型、工具、HTTP 和存储的失败、取消、冲突出口时，必须提供可检索结果；适用路径按现有实现记录耗时，新增路径时同步补齐 span 与 metrics 收尾；阶段键、工具名和错误文本不得直接作为 metrics 标签。
+- metrics 标签只使用固定分类、阶段类型、状态类别、操作名和供应商等低基数字段；请求 ID、会话 ID、回合 ID、用户 ID 和用户输入不得作为标签。
+
+### 4.9 禁止事项
 
 - 生产路径使用 `unwrap()` / `expect()` / `panic!()` / `todo!()` / `unimplemented!()`；
   必须处理 `Option` / `Result`（`unwrap_or` / `unwrap_or_else` 等返回值写法不受限）。

@@ -1,11 +1,12 @@
 //! 工具定义与注册表、控制动作 `complete_stage` 的参数与 Schema。
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, instrument};
 
 use super::session::{SessionId, ToolStatus, TurnId};
 use crate::pipeline::{
@@ -193,6 +194,18 @@ impl ToolRegistry {
         specs
     }
 
+    #[instrument(
+        name = "tool.execute",
+        level = "debug",
+        skip(self, call, cancel),
+        fields(
+            session_id = %session_id,
+            turn_id = turn_id.0,
+            tool_class = tracing::field::Empty,
+            result = tracing::field::Empty,
+            duration_ms = tracing::field::Empty
+        )
+    )]
     pub(crate) async fn execute(
         &self,
         call: &ToolCall,
@@ -200,9 +213,20 @@ impl ToolRegistry {
         turn_id: TurnId,
         cancel: &CancellationToken,
     ) -> (ToolStatus, String) {
+        let started = Instant::now();
+        let tool_class = if call.name == CONTROL_ACTION_NAME {
+            "control"
+        } else if self.tools.contains_key(&call.name) {
+            "registered"
+        } else {
+            "unknown"
+        };
+        tracing::Span::current().record("tool_class", tool_class);
         let Some(tool) = self.tools.get(&call.name).cloned() else {
             let err = ToolError::UnknownTool(call.name.clone());
-            return (ToolStatus::Error, err.to_string());
+            let outcome = (ToolStatus::Error, err.to_string());
+            record_tool_outcome(tool_class, outcome.0, started);
+            return outcome;
         };
 
         let arguments = if call.arguments.trim().is_empty() {
@@ -212,7 +236,9 @@ impl ToolRegistry {
                 Ok(value) => value,
                 Err(err) => {
                     let err = ToolError::InvalidArguments(err.to_string());
-                    return (ToolStatus::Error, err.to_string());
+                    let outcome = (ToolStatus::Error, err.to_string());
+                    record_tool_outcome(tool_class, outcome.0, started);
+                    return outcome;
                 }
             }
         };
@@ -222,13 +248,38 @@ impl ToolRegistry {
             turn_id,
             cancel,
         };
-
-        match tool.call(arguments, &ctx).await {
+        let outcome = match tool.call(arguments, &ctx).await {
             Ok(output) => (ToolStatus::Ok, output.content),
             Err(ToolError::Cancelled) => (ToolStatus::Error, "aborted".to_owned()),
             Err(err) => (ToolStatus::Error, err.to_string()),
-        }
+        };
+        record_tool_outcome(tool_class, outcome.0, started);
+        outcome
     }
+}
+
+fn record_tool_outcome(tool_class: &'static str, status: ToolStatus, started: Instant) {
+    let duration_ms = started.elapsed().as_secs_f64() * 1_000.0;
+    tracing::Span::current().record("result", tracing::field::debug(status));
+    tracing::Span::current().record("duration_ms", duration_ms);
+    debug!(
+        tool_class,
+        result = ?status,
+        duration_ms,
+        "tool call completed"
+    );
+    let result = match status {
+        ToolStatus::Ok => "ok",
+        ToolStatus::Error => "error",
+    };
+    metrics::counter!(
+        "careersim_tool_calls_total",
+        "tool_class" => tool_class,
+        "result" => result
+    )
+    .increment(1);
+    metrics::histogram!("careersim_tool_duration_seconds", "tool_class" => tool_class)
+        .record(started.elapsed().as_secs_f64());
 }
 
 #[cfg(test)]

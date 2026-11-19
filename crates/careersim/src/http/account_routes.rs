@@ -112,7 +112,11 @@ impl From<AccountError> for ApiError {
             AccountError::Unauthenticated => ApiError::unauthenticated(),
             // 后端错误细节只进日志；对外统一 internal_error，避免泄露内部信息。
             AccountError::Backend { message, source } => {
-                tracing::error!(error = %render_backend_chain(&message, source.as_deref()), "account backend error");
+                tracing::error!(
+                    error_kind = "backend",
+                    error = %render_backend_chain(&message, source.as_deref()),
+                    "account backend error"
+                );
                 ApiError::internal_error()
             }
         }

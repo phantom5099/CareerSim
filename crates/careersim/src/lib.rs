@@ -15,6 +15,7 @@ pub mod llm;
 pub mod pipeline;
 pub mod resume;
 pub(crate) mod store;
+pub mod telemetry;
 
 #[cfg(test)]
 pub(crate) mod testing;

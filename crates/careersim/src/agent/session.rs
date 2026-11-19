@@ -5,7 +5,7 @@ use std::{fmt, str::FromStr, sync::Arc};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, instrument};
 use uuid::Uuid;
 
 use super::{role::Role, tool::ToolCall};
@@ -720,6 +720,12 @@ impl StoreSessionService {
 
 #[async_trait]
 impl SessionService for StoreSessionService {
+    #[instrument(
+        name = "session.create",
+        level = "debug",
+        skip(self, binding, initial_stage),
+        fields(stage = %initial_stage.key)
+    )]
     async fn create(
         &self,
         binding: SessionBinding,
@@ -752,11 +758,13 @@ impl SessionService for StoreSessionService {
         ))
     }
 
+    #[instrument(name = "session.load", level = "debug", skip(self), fields(session_id = %id))]
     async fn load(&self, id: SessionId) -> Result<Session, SessionError> {
         let (row, events) = self.store.load(id.into_uuid()).await?;
         fold_session(row, events)
     }
 
+    #[instrument(name = "session.list", level = "debug", skip(self), fields(limit))]
     async fn list(&self, limit: usize) -> Result<Vec<SessionSummary>, SessionError> {
         self.store
             .list(limit)
@@ -766,10 +774,22 @@ impl SessionService for StoreSessionService {
             .collect()
     }
 
+    #[instrument(name = "session.delete", level = "debug", skip(self), fields(session_id = %id))]
     async fn delete(&self, id: SessionId) -> Result<(), SessionError> {
         Ok(self.store.delete(id.into_uuid()).await?)
     }
 
+    #[instrument(
+        name = "session.append",
+        level = "debug",
+        skip(self, session, events),
+        fields(
+            session_id = %session.id,
+            event_count = events.len(),
+            stage = %session.current_stage.key,
+            last_seq = session.last_seq
+        )
+    )]
     async fn append(
         &self,
         session: &mut Session,
@@ -820,6 +840,12 @@ impl SessionService for StoreSessionService {
         Ok(())
     }
 
+    #[instrument(
+        name = "session.start_turn",
+        level = "debug",
+        skip(self, session),
+        fields(session_id = %session.id, last_turn_id = session.last_turn_id.0)
+    )]
     async fn start_turn(&self, session: &mut Session) -> Result<TurnId, SessionError> {
         self.repair_dangling(session).await?;
 
@@ -829,6 +855,12 @@ impl SessionService for StoreSessionService {
         Ok(turn_id)
     }
 
+    #[instrument(
+        name = "session.record_user_message",
+        level = "debug",
+        skip(self, session, content),
+        fields(session_id = %session.id, turn_id = turn_id.0)
+    )]
     async fn record_user_message(
         &self,
         session: &mut Session,
@@ -846,6 +878,12 @@ impl SessionService for StoreSessionService {
         .await
     }
 
+    #[instrument(
+        name = "session.record_assistant_message",
+        level = "debug",
+        skip(self, session, content, tool_calls, usage),
+        fields(session_id = %session.id, turn_id = turn_id.0)
+    )]
     async fn record_assistant_message(
         &self,
         session: &mut Session,
@@ -866,6 +904,12 @@ impl SessionService for StoreSessionService {
         .await
     }
 
+    #[instrument(
+        name = "session.record_tool_results",
+        level = "debug",
+        skip(self, session, results),
+        fields(session_id = %session.id, turn_id = turn_id.0, result_count = results.len())
+    )]
     async fn record_tool_results(
         &self,
         session: &mut Session,
@@ -886,6 +930,12 @@ impl SessionService for StoreSessionService {
         self.append(session, &events).await
     }
 
+    #[instrument(
+        name = "session.end_turn",
+        level = "debug",
+        skip(self, session, error),
+        fields(session_id = %session.id, turn_id = turn_id.0, reason = ?reason, steps)
+    )]
     async fn end_turn(
         &self,
         session: &mut Session,
@@ -906,6 +956,12 @@ impl SessionService for StoreSessionService {
         .await
     }
 
+    #[instrument(
+        name = "session.complete_stage",
+        level = "debug",
+        skip(self, session, batch),
+        fields(session_id = %session.id, turn_id = batch.turn_id.0, steps = batch.steps)
+    )]
     async fn complete_stage(
         &self,
         session: &mut Session,

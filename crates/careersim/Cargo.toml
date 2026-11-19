@@ -39,5 +39,7 @@ tokio-util = { version = "0.7.20", features = ["io", "rt"] }
 tower = { version = "0.5.3", features = ["util"] }
 tower-http = { version = "0.7.1", features = ["trace", "limit", "request-id"] }
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 uuid = { version = "1.29.0", features = ["v4", "serde"] }
+metrics = "0.24.6"
+metrics-exporter-prometheus = "0.18.3"

@@ -127,7 +127,11 @@ impl From<ResumeError> for ApiError {
                 ApiError::unsupported_media_type("attachment must be a PDF or DOCX file")
             }
             ResumeError::Backend { message, source } => {
-                tracing::error!(error = %render_backend_chain(&message, source.as_deref()), "resume backend error");
+                tracing::error!(
+                    error_kind = "backend",
+                    error = %render_backend_chain(&message, source.as_deref()),
+                    "resume backend error"
+                );
                 ApiError::internal_error()
             }
         }
@@ -283,7 +287,10 @@ pub async fn download_attachment(
     let encoded = percent_encode_file_name(&opened.file_name);
     let disposition = format!("attachment; filename*=UTF-8''{encoded}");
     let disposition = HeaderValue::from_str(&disposition).map_err(|_| {
-        tracing::error!("content-disposition header construction failed");
+        tracing::error!(
+            error_kind = "header_encoding",
+            "content-disposition header construction failed"
+        );
         ApiError::internal_error()
     })?;
 

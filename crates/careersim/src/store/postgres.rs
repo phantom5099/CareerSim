@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use sqlx::{PgPool, Row};
+use tracing::instrument;
 use uuid::Uuid;
 
 use super::{
@@ -20,6 +21,12 @@ impl PostgresSessionStore {
         Self { pool }
     }
 
+    #[instrument(
+        name = "store.postgres.insert_session",
+        level = "debug",
+        skip(self, meta),
+        fields(session_id = %id, stage = %stage)
+    )]
     async fn insert_session(
         &self,
         id: Uuid,
@@ -68,6 +75,12 @@ impl PostgresSessionStore {
 
 #[async_trait]
 impl SessionStore for PostgresSessionStore {
+    #[instrument(
+        name = "store.postgres.create",
+        level = "debug",
+        skip(self, meta),
+        fields(session_id = %id, stage = %stage)
+    )]
     async fn create(
         &self,
         id: Uuid,
@@ -94,6 +107,7 @@ impl SessionStore for PostgresSessionStore {
         Ok((session, event))
     }
 
+    #[instrument(name = "store.postgres.load", level = "debug", skip(self), fields(session_id = %id))]
     async fn load(&self, id: Uuid) -> Result<(StoredSession, Vec<StoredEvent>), StoreError> {
         let mut tx = self
             .pool
@@ -169,9 +183,21 @@ impl SessionStore for PostgresSessionStore {
 
         tx.commit().await.map_err(|err| backend("load", err))?;
 
+        metrics::counter!(
+            "careersim_session_store_operations_total",
+            "operation" => "load",
+            "result" => "ok"
+        )
+        .increment(1);
         Ok((session, events))
     }
 
+    #[instrument(
+        name = "store.postgres.list",
+        level = "debug",
+        skip(self),
+        fields(limit)
+    )]
     async fn list(&self, limit: usize) -> Result<Vec<StoredSession>, StoreError> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let rows = sqlx::query(
@@ -211,6 +237,7 @@ impl SessionStore for PostgresSessionStore {
         Ok(sessions)
     }
 
+    #[instrument(name = "store.postgres.delete", level = "debug", skip(self), fields(session_id = %id))]
     async fn delete(&self, id: Uuid) -> Result<(), StoreError> {
         let result = sqlx::query("DELETE FROM sessions WHERE id = $1")
             .bind(id)
@@ -225,6 +252,17 @@ impl SessionStore for PostgresSessionStore {
         }
     }
 
+    #[instrument(
+        name = "store.postgres.append",
+        level = "debug",
+        skip(self, batch),
+        fields(
+            session_id = %id,
+            event_count = batch.events.len(),
+            expected_stage = %batch.expected.stage,
+            expected_last_seq = batch.expected.last_seq
+        )
+    )]
     async fn append(
         &self,
         id: Uuid,
@@ -262,6 +300,11 @@ impl SessionStore for PostgresSessionStore {
 
         let current_last_seq = to_u64(last_seq, "last_seq")?;
         if stage != batch.expected.stage || current_last_seq != batch.expected.last_seq {
+            metrics::counter!(
+                "careersim_session_store_conflicts_total",
+                "operation" => "append"
+            )
+            .increment(1);
             return Err(StoreError::Conflict);
         }
 
@@ -335,6 +378,12 @@ impl SessionStore for PostgresSessionStore {
             .map_err(|err| backend("append", err))?;
 
         tx.commit().await.map_err(|err| backend("append", err))?;
+        metrics::counter!(
+            "careersim_session_store_operations_total",
+            "operation" => "append",
+            "result" => "ok"
+        )
+        .increment(1);
         Ok(stored)
     }
 }

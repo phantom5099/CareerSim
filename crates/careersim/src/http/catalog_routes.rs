@@ -99,7 +99,11 @@ impl From<CatalogError> for ApiError {
             }
             // 后端错误细节只进日志；不透出 SQL 与连接信息。
             CatalogError::Backend { message, source } => {
-                tracing::error!(error = %render_backend_chain(&message, source.as_deref()), "catalog backend error");
+                tracing::error!(
+                    error_kind = "backend",
+                    error = %render_backend_chain(&message, source.as_deref()),
+                    "catalog backend error"
+                );
                 ApiError::internal_error()
             }
         }

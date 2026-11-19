@@ -1,13 +1,13 @@
 //! 服务启动入口：初始化日志后交给组合根 `app::run`。
 
 use careersim::error::error_chain;
-use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    if let Err(error) = careersim::telemetry::init() {
+        eprintln!("telemetry initialization failed: {error}");
+        return std::process::ExitCode::FAILURE;
+    }
 
     match careersim::app::run().await {
         Ok(()) => std::process::ExitCode::SUCCESS,

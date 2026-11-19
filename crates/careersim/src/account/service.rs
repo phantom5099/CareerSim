@@ -4,6 +4,7 @@ use std::{fmt, sync::Arc};
 
 use chrono::{DateTime, Utc};
 use tokio::task;
+use tracing::instrument;
 
 use super::{
     model::{
@@ -81,6 +82,11 @@ impl AccountService {
     }
 
     /// 注册即登录：创建用户并签发会话。
+    #[instrument(
+        name = "account.register",
+        level = "debug",
+        skip(self, username, password, display_name)
+    )]
     pub async fn register(
         &self,
         username: &str,
@@ -127,6 +133,11 @@ impl AccountService {
     }
 
     /// 登录失败统一返回 `InvalidCredentials`；未知用户执行假验证拉平耗时。
+    #[instrument(
+        name = "account.login",
+        level = "debug",
+        skip(self, username, password)
+    )]
     pub async fn login(
         &self,
         username: &str,
@@ -167,6 +178,7 @@ impl AccountService {
     }
 
     /// 撤销当前会话；幂等。
+    #[instrument(name = "account.logout", level = "debug", skip(self), fields(session_id = %session_id))]
     pub async fn logout(&self, session_id: SessionId) -> Result<(), AccountError> {
         self.sessions
             .revoke(session_id, self.clock.now())
@@ -176,6 +188,7 @@ impl AccountService {
     }
 
     /// 只更新当前用户资料；字段边界见 `ProfilePatch::validate`。
+    #[instrument(name = "account.update_profile", level = "debug", skip(self, patch), fields(user_id = ?user_id))]
     pub async fn update_profile(
         &self,
         user_id: UserId,
@@ -193,6 +206,12 @@ impl AccountService {
 
     /// 改密：校验旧密码 → 更新哈希 → 撤销其他会话 → 轮换当前令牌（S-A05）。
     /// 返回新令牌原文，旧令牌立即失效。
+    #[instrument(
+        name = "account.change_password",
+        level = "debug",
+        skip(self, current_password, new_password),
+        fields(user_id = ?user_id, session_id = %session_id)
+    )]
     pub async fn change_password(
         &self,
         user_id: UserId,
@@ -258,6 +277,7 @@ impl AccountService {
 
     /// 会话认证：令牌 → 哈希 → 查会话 → 校验过期 → 查用户。
     /// 超过节流窗口时顺延活跃时间；顺延失败不影响本次认证。
+    #[instrument(name = "account.authenticate", level = "debug", skip(self, token))]
     pub async fn authenticate(&self, token: &str) -> Result<Authenticated, AccountError> {
         let token = SessionToken::decode(token).ok_or(AccountError::Unauthenticated)?;
         let session = self

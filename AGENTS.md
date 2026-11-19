@@ -13,7 +13,7 @@
 | 形态 | Rust workspace，单 crate `careersim`，lib + bin，`publish = false` |
 | 后端 | Rust 2024 / Tokio / `sqlx` / PostgreSQL；模型访问走 OpenAI 兼容协议 |
 | 核心 | `AgentLoop`：会话、回合、阶段、角色、上下文投影、工具循环 |
-| 存储 | PostgreSQL 事件日志（唯一事实源，不变量见 §5） |
+| 存储 | PostgreSQL 事件日志（存储不变量见 `crates/careersim/AGENTS.md` §5） |
 | 前端 | Vue 3 + Vite + TypeScript + Pinia + Tailwind；认证已接入 HTTP Cookie 会话，其余模块仍以 mock 运行 |
 | 部署假设 | 单活部署（约束见 §5） |
 | 当前边界 | HTTP 层与账户模块已落地；`main` 经组合根 `app::run` 装配并等待退出信号 |
@@ -47,7 +47,7 @@
 | --- | --- |
 | 改 Rust 服务端：账户、HTTP 路由、回合循环、事件存储、模型适配、迁移 | `crates/careersim/AGENTS.md`；落点表见其 §9 |
 | 改前端：页面、组件、契约、状态、样式 | `frontend/AGENTS.md`；目录职责见其 §2 |
-| 做代码复核 | `docs/review.md` |
+| 做代码复核 | 每次任务完成实现与验证后，按 `docs/review.md` 完成独立复核，再汇报结果 |
 | 改 CI、依赖与许可证策略 | `.github/workflows/`、`deny.toml` |
 
 具体文件由对应目录规范给出；本文件不维护第二份文件清单。
@@ -80,25 +80,28 @@
 - 回答问题逐点回应，不遗漏。
 - 有不同意见时明确说出同意或不同意，不做客套式附和。
 
+### 4.4 每次任务的代码复核
+
+- 每次实现任务都必须在完成实现并通过相关验证后、向用户汇报前，按 `docs/review.md` 完成代码复核。
+- 复核必须交给独立的复核子智能体；主智能体不得自行出具复核结论。
+- 复核发现按 `docs/review.md` 的范围、行为和证据要求处理；修复后重新验证，并对修复 diff 增量复核。
+
+### 4.5 可观测性
+
+- 新增或修改 HTTP、回合、模型、工具、账户、简历、目录和存储边界时，必须保留结构化 tracing 上下文，并为成功、失败、取消和冲突路径提供可检索事件。
+- 业务日志按现有字段约定记录请求、会话、回合、阶段、操作、结果、错误分类和耗时；metrics 标签只能使用受控的低基数字段。
+- 密钥、连接串、密码、提示词、模型正文、简历内容、请求体和工具原始参数不得进入日志或指标标签。
+- 复核打点改动时，必须检查上下文是否连续、失败出口是否漏记、标签是否无界增长，以及敏感输入是否被 `skip` 或等价方式排除。
+
 ---
 
-## 5. 架构不变量（跨模块；实现细节见目录级规范）
+## 5. 跨模块约束
 
-1. **事件日志是唯一事实源**：`Session`、`Message` 是投影，`sessions` 表的
-   `stage`、`last_seq`、`last_turn_id` 只是缓存，不能当作可独立修改的状态。
-2. **依赖方向固定**：`agent` → `llm` / `store` 的 trait；`store` 不认识 agent 领域
-   类型；`llm` 不认识编排。细化方向与 `config` 的读取时机见
-   `crates/careersim/AGENTS.md` §2。
-3. **LLM 层供应商无关**：`async_openai` 类型只允许出现在 `llm/openai_compat.rs`；
-   业务代码只使用 `LlmClient` 与 `ChatRequest` / `ChatResponse`。
-4. **错误在边界映射**：驱动与 SDK 错误不得进入公开签名；必须保留 `source` 错误链。
-5. **归属只来自登录态**：处理器只信任 `AuthContext` 提取器得到的用户身份；
-   客户端提交的 `userId`/`ownerId` 字段一律忽略，DTO 不定义此类字段。
-6. **单活部署假设**：回合互斥是进程内的；改为多实例同时服务前，必须重新设计互斥与
-   数据库 fencing，不能沿用现有锁。
+- **单活部署假设**：回合互斥是进程内的；改为多实例同时服务前，必须重新设计互斥与
+  数据库 fencing，不能沿用现有锁。
 
-事件信封、`seq` 分配、CAS 追加、半截回合修复等存储语义，以
-`crates/careersim/AGENTS.md` §4.5、§5 为准。
+服务端的依赖方向、LLM 供应商隔离、错误边界、事件存储和认证归属规则见
+`crates/careersim/AGENTS.md`；前端契约规则见 `frontend/AGENTS.md`。
 
 ---
 
