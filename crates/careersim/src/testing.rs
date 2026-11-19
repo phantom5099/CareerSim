@@ -881,13 +881,6 @@ impl CatalogStore for InMemoryCatalogStore {
         if company_of_project(&data, owner, row.value.project_id).is_none() {
             return Err(CatalogError::NotFound);
         }
-        if data
-            .jobs
-            .iter()
-            .any(|job| job.deleted_at.is_none() && job.value.pipeline_id == id)
-        {
-            return Err(CatalogError::Referenced("pipeline"));
-        }
         let Some(row) = data
             .pipelines
             .iter_mut()

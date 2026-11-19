@@ -1084,23 +1084,6 @@ impl CatalogStore for PgCatalogStore {
         id: PipelineId,
         now: DateTime<Utc>,
     ) -> Result<(), CatalogError> {
-        let referenced = sqlx::query(
-            "SELECT 1 FROM jobs j \
-             JOIN pipelines pl ON pl.id = j.pipeline_id \
-             JOIN recruitment_projects p ON p.id = pl.project_id \
-             JOIN companies c ON c.id = p.company_id \
-             WHERE pl.id = $1 AND j.deleted_at IS NULL \
-               AND c.owner_user_id = $2 AND c.deleted_at IS NULL \
-             LIMIT 1",
-        )
-        .bind(id.into_uuid())
-        .bind(owner.into_uuid())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|err| backend_error("check pipeline references", err))?;
-        if referenced.is_some() {
-            return Err(CatalogError::Referenced("pipeline"));
-        }
         let result = sqlx::query(
             "UPDATE pipelines pl SET deleted_at = $3, updated_at = $3 \
              FROM recruitment_projects p \
