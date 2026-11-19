@@ -67,7 +67,9 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/pipelines/{pipelineId}",
-            patch(update_pipeline).delete(delete_pipeline),
+            patch(update_pipeline)
+                .put(replace_pipeline)
+                .delete(delete_pipeline),
         )
         .route("/api/v1/projects/{projectId}/jobs", post(create_job))
         .route("/api/v1/jobs/{jobId}", patch(update_job).delete(delete_job))
@@ -96,6 +98,9 @@ impl From<CatalogError> for ApiError {
             CatalogError::NotFound => ApiError::not_found("resource not found"),
             CatalogError::Conflict(field) => {
                 ApiError::conflict(format!("`{field}` already exists"))
+            }
+            CatalogError::Referenced(field) => {
+                ApiError::conflict(format!("`{field}` is still referenced"))
             }
             // 后端错误细节只进日志；不透出 SQL 与连接信息。
             CatalogError::Backend { message, source } => {
@@ -792,6 +797,30 @@ async fn update_pipeline(
             auth.user_id,
             PipelineId::from_uuid(pipeline_id),
             &request.name,
+            Utc::now(),
+        )
+        .await?;
+    Ok(Json(PipelineDto::from(pipeline)))
+}
+
+async fn replace_pipeline(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Path(pipeline_id): Path<Uuid>,
+    Json(request): Json<PipelineRequest>,
+) -> Result<Json<PipelineDto>, ApiError> {
+    let stages = request.stages.ok_or_else(|| {
+        ApiError::validation_fields("pipeline stages are required", vec!["stages".to_owned()])
+    })?;
+    let pipeline = state
+        .catalog
+        .replace_pipeline(
+            auth.user_id,
+            PipelineId::from_uuid(pipeline_id),
+            PipelineInput {
+                name: request.name,
+                stages: Some(stages),
+            },
             Utc::now(),
         )
         .await?;

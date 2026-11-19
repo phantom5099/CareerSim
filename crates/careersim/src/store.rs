@@ -19,11 +19,10 @@ pub(crate) use postgres::PostgresSessionStore;
 /// 当前事件格式版本；v2 引入 `SessionBinding` 与结构化 `StageCompleted` 载荷。
 pub(crate) const EVENT_VERSION: u32 = 2;
 
-/// 会话行及其缓存字段；`stage` 对 store 是不透明字符串。
+/// 会话行及其事件日志缓存字段；流程位置归 Application 持久化。
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StoredSession {
     pub id: Uuid,
-    pub stage: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_seq: u64,
@@ -41,18 +40,16 @@ pub(crate) struct StoredEvent {
 
 /// 追加前期望达到的会话状态，用于比较并交换。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ExpectedState<'a> {
-    pub stage: &'a str,
+pub(crate) struct ExpectedState {
     pub last_seq: u64,
 }
 
 /// 一次追加请求；`v`、`seq`、`at` 由 store 分配。
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct AppendBatch<'a> {
-    pub expected: ExpectedState<'a>,
+    pub expected: ExpectedState,
     pub events: &'a [Value],
     pub last_turn_id: u64,
-    pub next_stage: Option<&'a str>,
 }
 
 #[async_trait]
@@ -61,7 +58,6 @@ pub(crate) trait SessionStore: Send + Sync {
     async fn create(
         &self,
         id: Uuid,
-        stage: &str,
         meta: Value,
     ) -> Result<(StoredSession, StoredEvent), StoreError>;
 

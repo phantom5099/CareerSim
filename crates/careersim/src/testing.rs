@@ -824,6 +824,46 @@ impl CatalogStore for InMemoryCatalogStore {
         Ok(row.value.clone())
     }
 
+    async fn replace_pipeline(
+        &self,
+        owner: UserId,
+        id: PipelineId,
+        new: NewPipeline,
+        now: DateTime<Utc>,
+    ) -> Result<Pipeline, CatalogError> {
+        let mut data = self.data.lock().unwrap();
+        let Some(project_id) = data
+            .pipelines
+            .iter_mut()
+            .find(|row| row.deleted_at.is_none() && row.value.id == id)
+            .map(|row| row.value.project_id)
+        else {
+            return Err(CatalogError::NotFound);
+        };
+        if company_of_project(&data, owner, project_id).is_none() {
+            return Err(CatalogError::NotFound);
+        }
+        if data.pipelines.iter().any(|other| {
+            other.value.id != id
+                && other.deleted_at.is_none()
+                && other.value.project_id == project_id
+                && normalize_key(&other.value.name) == normalize_key(&new.name)
+        }) {
+            return Err(CatalogError::Conflict("name"));
+        }
+        let Some(row) = data
+            .pipelines
+            .iter_mut()
+            .find(|row| row.deleted_at.is_none() && row.value.id == id)
+        else {
+            return Err(CatalogError::NotFound);
+        };
+        row.value.name = new.name;
+        row.value.definition = new.definition;
+        row.value.updated_at = now;
+        Ok(row.value.clone())
+    }
+
     async fn soft_delete_pipeline(
         &self,
         owner: UserId,
@@ -840,6 +880,13 @@ impl CatalogStore for InMemoryCatalogStore {
         };
         if company_of_project(&data, owner, row.value.project_id).is_none() {
             return Err(CatalogError::NotFound);
+        }
+        if data
+            .jobs
+            .iter()
+            .any(|job| job.deleted_at.is_none() && job.value.pipeline_id == id)
+        {
+            return Err(CatalogError::Referenced("pipeline"));
         }
         let Some(row) = data
             .pipelines

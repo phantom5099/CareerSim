@@ -302,6 +302,8 @@ pub enum CatalogError {
     NotFound,
     #[error("`{0}` already exists")]
     Conflict(&'static str),
+    #[error("catalog resource is still referenced by `{0}`")]
+    Referenced(&'static str),
     #[error("catalog store backend error: {message}")]
     Backend {
         message: String,

@@ -230,6 +230,23 @@ function pipelineInfo(index: number, source: Raw, projects: Raw[]): PipelineInfo
           ? (textOr(stage.kind) as StageKind)
           : 'hr_screen',
         title: textOr(stage.title, '面试阶段'),
+        minRounds: typeof stage.minRounds === 'number' ? stage.minRounds : 1,
+        maxRounds: typeof stage.maxRounds === 'number' ? stage.maxRounds : 3,
+        rubric: {
+          passScore:
+            isRecord(stage.rubric) && typeof stage.rubric.passScore === 'number'
+              ? stage.rubric.passScore
+              : 60,
+          dimensions:
+            isRecord(stage.rubric) && Array.isArray(stage.rubric.dimensions)
+              ? stage.rubric.dimensions.filter(isRecord).map((dimension) => ({
+                  key: textOr(dimension.key, 'dimension'),
+                  label: textOr(dimension.label, '综合表现'),
+                  weight: typeof dimension.weight === 'number' ? dimension.weight : 100,
+                  criteria: textOr(dimension.criteria, ''),
+                }))
+              : [{ key: 'overall', label: '综合表现', weight: 100, criteria: '' }],
+        },
       })),
   }
 }

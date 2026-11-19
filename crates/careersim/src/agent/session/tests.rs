@@ -403,7 +403,6 @@ fn corrupt_log_is_rejected_on_fold() {
     let at = Utc::now();
     let row = StoredSession {
         id: id.into_uuid(),
-        stage: "hr_screen".to_owned(),
         created_at: at,
         updated_at: at,
         last_seq: 0,
@@ -448,7 +447,6 @@ fn event_version_one_is_rejected() {
     let at = Utc::now();
     let row = StoredSession {
         id: id.into_uuid(),
-        stage: "hr_screen".to_owned(),
         created_at: at,
         updated_at: at,
         last_seq: 0,

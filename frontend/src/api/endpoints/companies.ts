@@ -4,7 +4,6 @@ import type {
   CompanyPatchPayload,
   JobPatchPayload,
   JobPayload,
-  PipelinePatchPayload,
   PipelinePayload,
   ProjectPatchPayload,
   ProjectPayload,
@@ -72,7 +71,7 @@ export interface CompaniesApi {
   updatePipeline(
     companyId: string,
     pipelineId: string,
-    patch: PipelinePatchPayload,
+    input: PipelinePayload,
   ): Promise<void>
   deletePipeline(companyId: string, pipelineId: string): Promise<void>
   createJob(
@@ -120,7 +119,17 @@ interface PipelineDto {
   id: string
   projectId: string
   name: string
-  stages: { key: string; kind: string; title: string }[]
+  stages: {
+    key: string
+    kind: string
+    title: string
+    minRounds: number
+    maxRounds: number
+    rubric: {
+      passScore: number
+      dimensions: { key: string; label: string; weight: number; criteria: string }[]
+    }
+  }[]
 }
 
 interface JobDto {
@@ -164,6 +173,12 @@ function toPipeline(dto: PipelineDto): PipelineInfo {
       key: stage.key,
       kind: stage.kind as PipelineInfo['stages'][number]['kind'],
       title: stage.title,
+      minRounds: stage.minRounds,
+      maxRounds: stage.maxRounds,
+      rubric: {
+        passScore: stage.rubric.passScore,
+        dimensions: stage.rubric.dimensions.map((dimension) => ({ ...dimension })),
+      },
     })),
   }
 }
@@ -362,10 +377,10 @@ export const companiesApi: CompaniesApi = {
   async updatePipeline(
     _companyId: string,
     pipelineId: string,
-    patch: PipelinePatchPayload,
+    patch: PipelinePayload,
   ): Promise<void> {
     await apiFetch(`/api/v1/pipelines/${pipelineId}`, {
-      method: 'PATCH',
+      method: 'PUT',
       body: JSON.stringify(patch),
     })
   },

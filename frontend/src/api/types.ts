@@ -80,11 +80,11 @@ export interface StageDefinitionPayload {
   key: string
   kind: string
   title: string
-  minRounds?: number
-  maxRounds?: number
-  rubric?: {
-    passScore?: number
-    dimensions: { key: string; label: string; weight?: number; criteria?: string }[]
+  minRounds: number
+  maxRounds: number
+  rubric: {
+    passScore: number
+    dimensions: { key: string; label: string; weight: number; criteria: string }[]
   }
 }
 

@@ -27,6 +27,10 @@ use crate::{
 pub struct ApplicationId(Uuid);
 
 impl ApplicationId {
+    pub fn generate() -> Self {
+        Self(Uuid::new_v4())
+    }
+
     pub fn from_uuid(uuid: Uuid) -> Self {
         Self(uuid)
     }
@@ -209,7 +213,7 @@ pub(crate) fn event_turn_id(kind: &SessionEventKind) -> Option<TurnId> {
 pub struct Session {
     pub id: SessionId,
     pub binding: SessionBinding,
-    /// 当前阶段；由 `initial_stage` 初始化，仅由 `StageCompleted` 更新。
+    /// 事件折叠出的最近阶段历史；当前流程位置由 Application 读取流程模板决定。
     pub current_stage: StageRef,
     pub events: Vec<SessionEvent>,
     pub created_at: DateTime<Utc>,
@@ -271,8 +275,6 @@ impl Session {
 #[derive(Debug, Clone)]
 pub struct SessionSummary {
     pub id: SessionId,
-    /// 缓存的当前阶段键；类型在行缓存中不可得，按需加载会话。
-    pub stage_key: StageKey,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_seq: u64,
@@ -449,11 +451,8 @@ fn decode_event(stored: StoredEvent) -> Result<SessionEvent, SessionError> {
 }
 
 fn summary_from_row(row: StoredSession) -> Result<SessionSummary, SessionError> {
-    let stage_key =
-        StageKey::parse(&row.stage).map_err(|err| SessionError::Corrupt(err.to_string()))?;
     Ok(SessionSummary {
         id: SessionId::from_uuid(row.id),
-        stage_key,
         created_at: row.created_at,
         updated_at: row.updated_at,
         last_seq: row.last_seq,
@@ -467,9 +466,6 @@ fn fold_session(
     stored_events: Vec<StoredEvent>,
 ) -> Result<Session, SessionError> {
     let id = SessionId::from_uuid(row.id);
-    let row_stage_key =
-        StageKey::parse(&row.stage).map_err(|err| SessionError::Corrupt(err.to_string()))?;
-
     let events = stored_events
         .into_iter()
         .map(decode_event)
@@ -562,13 +558,6 @@ fn fold_session(
             last_turn_id.0, max_turn.0
         )));
     }
-    if current_stage.key != row_stage_key {
-        return Err(SessionError::Corrupt(format!(
-            "row stage is {row_stage_key} but the event log folds to {}",
-            current_stage.key
-        )));
-    }
-
     Ok(Session {
         id,
         binding,
@@ -733,7 +722,6 @@ impl SessionService for StoreSessionService {
     ) -> Result<Session, SessionError> {
         for _ in 0..SESSION_ID_RETRIES {
             let id = SessionId::generate();
-            let stage = initial_stage.key.clone();
             let meta = SessionEventKind::SessionMeta {
                 session_id: id,
                 binding,
@@ -742,11 +730,7 @@ impl SessionService for StoreSessionService {
             let payload = serde_json::to_value(&meta)
                 .map_err(|err| SessionError::backend_with_source("encode session_meta", err))?;
 
-            match self
-                .store
-                .create(id.into_uuid(), stage.as_str(), payload)
-                .await
-            {
+            match self.store.create(id.into_uuid(), payload).await {
                 Ok((row, event)) => return fold_session(row, vec![event]),
                 Err(StoreError::Conflict) => continue,
                 Err(err) => return Err(err.into()),
@@ -799,7 +783,7 @@ impl SessionService for StoreSessionService {
             return Ok(());
         }
 
-        let next_stage = validate_batch(&session.current_stage, events)?;
+        validate_batch(&session.current_stage, events)?;
         let last_turn_id = max_turn_id(events).map_or(0, |turn_id| turn_id.0);
         let mut payloads = Vec::with_capacity(events.len());
         for event in events {
@@ -822,12 +806,10 @@ impl SessionService for StoreSessionService {
                 session.id.into_uuid(),
                 AppendBatch {
                     expected: ExpectedState {
-                        stage: session.current_stage.key.as_str(),
                         last_seq: session.last_seq,
                     },
                     events: &payloads,
                     last_turn_id,
-                    next_stage: next_stage.as_ref().map(|stage| stage.key.as_str()),
                 },
             )
             .await?;

@@ -1035,12 +1035,72 @@ impl CatalogStore for PgCatalogStore {
         })
     }
 
+    async fn replace_pipeline(
+        &self,
+        owner: UserId,
+        id: PipelineId,
+        new: NewPipeline,
+        now: DateTime<Utc>,
+    ) -> Result<Pipeline, CatalogError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|err| backend_error("begin replace pipeline", err))?;
+        let row = sqlx::query(UPDATE_PIPELINE_SQL)
+            .bind(id.into_uuid())
+            .bind(now)
+            .bind(&new.name)
+            .bind(normalize_key(&new.name))
+            .bind(owner.into_uuid())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|err| write_error(err, Some("name"), "update pipeline"))?;
+        let Some(row) = row else {
+            return Err(CatalogError::NotFound);
+        };
+        sqlx::query("DELETE FROM pipeline_stages WHERE pipeline_id = $1")
+            .bind(id.into_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| backend_error("replace pipeline stages", err))?;
+        insert_stages(&mut *tx, id, &new.definition).await?;
+        tx.commit()
+            .await
+            .map_err(|err| backend_error("commit replace pipeline", err))?;
+        Ok(Pipeline {
+            id,
+            project_id: ProjectId::from_uuid(column(&row, "project_id")?),
+            name: column(&row, "name")?,
+            definition: new.definition,
+            created_at: column(&row, "created_at")?,
+            updated_at: column(&row, "updated_at")?,
+        })
+    }
+
     async fn soft_delete_pipeline(
         &self,
         owner: UserId,
         id: PipelineId,
         now: DateTime<Utc>,
     ) -> Result<(), CatalogError> {
+        let referenced = sqlx::query(
+            "SELECT 1 FROM jobs j \
+             JOIN pipelines pl ON pl.id = j.pipeline_id \
+             JOIN recruitment_projects p ON p.id = pl.project_id \
+             JOIN companies c ON c.id = p.company_id \
+             WHERE pl.id = $1 AND j.deleted_at IS NULL \
+               AND c.owner_user_id = $2 AND c.deleted_at IS NULL \
+             LIMIT 1",
+        )
+        .bind(id.into_uuid())
+        .bind(owner.into_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|err| backend_error("check pipeline references", err))?;
+        if referenced.is_some() {
+            return Err(CatalogError::Referenced("pipeline"));
+        }
         let result = sqlx::query(
             "UPDATE pipelines pl SET deleted_at = $3, updated_at = $3 \
              FROM recruitment_projects p \

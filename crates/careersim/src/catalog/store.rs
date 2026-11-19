@@ -106,6 +106,15 @@ pub trait CatalogStore: Send + Sync {
         now: DateTime<Utc>,
     ) -> Result<Pipeline, CatalogError>;
 
+    /// Replace a pipeline name and its complete stage definition atomically.
+    async fn replace_pipeline(
+        &self,
+        owner: UserId,
+        id: PipelineId,
+        new: NewPipeline,
+        now: DateTime<Utc>,
+    ) -> Result<Pipeline, CatalogError>;
+
     async fn soft_delete_pipeline(
         &self,
         owner: UserId,
