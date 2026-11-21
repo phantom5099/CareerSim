@@ -8,6 +8,7 @@ import CompanyMark from '@/components/CompanyMark.vue'
 import JobEditDialog from '@/components/JobEditDialog.vue'
 import MultiSelect from '@/components/MultiSelect.vue'
 import PipelineEditDialog from '@/components/PipelineEditDialog.vue'
+import PipelineManagerDialog from '@/components/PipelineManagerDialog.vue'
 import ProjectEditDialog from '@/components/ProjectEditDialog.vue'
 import StageRail from '@/components/StageRail.vue'
 import {
@@ -58,11 +59,13 @@ const projectDialog = ref<
 const pipelineDialog = ref<
   { mode: 'create'; projectId: string } | { mode: 'edit'; pipeline: PipelineInfo } | null
 >(null)
+const pipelineManagerProjectId = ref<string | null>(null)
 const jobDialog = ref<{ mode: 'create' } | { mode: 'edit'; job: Job } | null>(null)
 
 async function handleSaved() {
   projectDialog.value = null
   pipelineDialog.value = null
+  pipelineManagerProjectId.value = null
   jobDialog.value = null
   try {
     await catalog.refresh()
@@ -74,6 +77,17 @@ async function handleSaved() {
 
 function pipelinesForProject(projectId: string): PipelineInfo[] {
   return company.value?.pipelines?.filter((pipeline) => pipeline.projectId === projectId) ?? []
+}
+
+function openPipelineCreate() {
+  if (!pipelineManagerProjectId.value) return
+  pipelineDialog.value = { mode: 'create', projectId: pipelineManagerProjectId.value }
+  pipelineManagerProjectId.value = null
+}
+
+function openPipelineEdit(pipeline: PipelineInfo) {
+  pipelineDialog.value = { mode: 'edit', pipeline }
+  pipelineManagerProjectId.value = null
 }
 
 async function deletePipeline(pipeline: PipelineInfo) {
@@ -471,36 +485,17 @@ onBeforeUnmount(() => {
                     </button>
                   </span>
                 </div>
-                <div class="mt-3 border-t border-line/70 pt-2">
-                  <div class="flex items-center justify-between gap-2">
-                    <span class="text-[0.62rem] text-ink-faint">流程模板</span>
-                    <button
-                      v-if="company.isOwner"
-                      type="button"
-                      class="text-[0.62rem] text-vermilion"
-                      @click="pipelineDialog = { mode: 'create', projectId: project.id }"
-                    >
-                      ＋ 添加流程
-                    </button>
-                  </div>
-                  <div v-if="pipelinesForProject(project.id).length" class="mt-1.5 space-y-1.5">
-                    <div
-                      v-for="pipeline in pipelinesForProject(project.id)"
-                      :key="pipeline.id"
-                      class="flex items-center justify-between gap-2 text-[0.68rem]"
-                    >
-                      <span class="min-w-0 truncate">{{ pipeline.name }} · {{ pipeline.stages.length }} 阶段</span>
-                      <span v-if="company.isOwner" class="flex shrink-0 gap-1.5">
-                        <button type="button" class="text-ink-soft hover:text-vermilion" @click="pipelineDialog = { mode: 'edit', pipeline }">
-                          编辑
-                        </button>
-                        <button type="button" class="text-ink-soft hover:text-vermilion" @click="deletePipeline(pipeline)">
-                          删除
-                        </button>
-                      </span>
-                    </div>
-                  </div>
-                  <p v-else class="mt-1 text-[0.62rem] text-ink-faint">暂无流程模板。</p>
+                <div class="mt-3 flex items-center justify-between border-t border-line/70 pt-2">
+                  <span class="text-[0.62rem] text-ink-faint">流程模板</span>
+                  <button
+                    v-if="company.isOwner"
+                    type="button"
+                    class="btn-line px-2 py-0.5 text-[0.62rem]"
+                    @click="pipelineManagerProjectId = project.id"
+                  >
+                    流程管理
+                  </button>
+                  <span v-else class="text-[0.62rem] text-ink-faint">{{ pipelinesForProject(project.id).length }} 个模板</span>
                 </div>
               </div>
               <button
@@ -877,6 +872,16 @@ onBeforeUnmount(() => {
         :project="projectDialog.mode === 'edit' ? projectDialog.project : null"
         @close="projectDialog = null"
         @saved="handleSaved"
+      />
+
+      <PipelineManagerDialog
+        v-if="pipelineManagerProjectId"
+        :project-name="company.projects.find((project) => project.id === pipelineManagerProjectId)?.name ?? '项目流程'"
+        :pipelines="pipelinesForProject(pipelineManagerProjectId)"
+        @close="pipelineManagerProjectId = null"
+        @create="openPipelineCreate"
+        @edit="openPipelineEdit"
+        @delete="deletePipeline"
       />
 
       <PipelineEditDialog

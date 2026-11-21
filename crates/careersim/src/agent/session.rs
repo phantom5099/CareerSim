@@ -1,4 +1,4 @@
-//! 会话、事件信封与事件类型（事件 v2）。
+//! 会话、事件信封与事件类型（事件 v3）。
 
 use std::{fmt, str::FromStr, sync::Arc};
 
@@ -12,7 +12,7 @@ use super::{role::Role, tool::ToolCall};
 use crate::{
     llm::client::TokenUsage,
     pipeline::{
-        model::{StageKey, StageKind, StageOutcome},
+        model::{StageKind, StageOutcome, StagePosition},
         rubric::StageEvaluation,
     },
     store::{
@@ -107,11 +107,11 @@ impl SessionBinding {
     }
 }
 
-/// 阶段引用：稳定键 + 类型；类型决定角色与执行策略。
+/// 阶段引用：流程位置 + 类型；类型决定角色与执行策略。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StageRef {
-    pub key: StageKey,
+    pub position: StagePosition,
     pub kind: StageKind,
 }
 
@@ -163,8 +163,8 @@ pub enum SessionEventKind {
     },
     StageCompleted {
         turn_id: TurnId,
-        /// 完成的阶段键；必须等于会话当前阶段。
-        stage_key: StageKey,
+        /// 完成的阶段位置；必须等于会话当前阶段。
+        stage_position: StagePosition,
         /// 完成阶段的类型。
         stage_kind: StageKind,
         /// 服务端评估结论。
@@ -254,12 +254,12 @@ impl Session {
         for event in events {
             if let SessionEventKind::StageCompleted { outcome, .. } = &event.kind
                 && let StageOutcome::Advance {
-                    next_stage_key,
+                    next_stage_position,
                     next_stage_kind,
                 } = outcome
             {
                 self.current_stage = StageRef {
-                    key: next_stage_key.clone(),
+                    position: *next_stage_position,
                     kind: *next_stage_kind,
                 };
             }
@@ -285,7 +285,7 @@ pub struct SessionSummary {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StageEvaluationRecord {
     pub turn_id: TurnId,
-    pub stage_key: StageKey,
+    pub stage_position: StagePosition,
     pub stage_kind: StageKind,
     pub evaluation: StageEvaluation,
 }
@@ -376,7 +376,7 @@ fn validate_batch(
                 ));
             }
             SessionEventKind::StageCompleted {
-                stage_key,
+                stage_position,
                 stage_kind,
                 outcome,
                 ..
@@ -386,10 +386,10 @@ fn validate_batch(
                         "stage_completed must be the last event".to_owned(),
                     ));
                 }
-                if stage_key != &current.key {
+                if stage_position != &current.position {
                     return Err(SessionError::InvalidEvent(format!(
-                        "stage_completed for {stage_key} but current stage is {}",
-                        current.key
+                        "stage_completed for {stage_position} but current stage is {}",
+                        current.position
                     )));
                 }
                 if stage_kind != &current.kind {
@@ -400,17 +400,17 @@ fn validate_batch(
                 }
                 match outcome {
                     StageOutcome::Advance {
-                        next_stage_key,
+                        next_stage_position,
                         next_stage_kind,
                     } => {
-                        if next_stage_key == &current.key {
+                        if next_stage_position == &current.position {
                             return Err(SessionError::InvalidEvent(
-                                "advance next_stage_key must differ from the current stage"
+                                "advance next_stage_position must differ from the current stage"
                                     .to_owned(),
                             ));
                         }
                         next = Some(StageRef {
-                            key: next_stage_key.clone(),
+                            position: *next_stage_position,
                             kind: *next_stage_kind,
                         });
                     }
@@ -516,25 +516,25 @@ fn fold_session(
         previous_seq = Some(event.seq);
 
         if let SessionEventKind::StageCompleted {
-            stage_key,
+            stage_position,
             stage_kind,
             outcome,
             ..
         } = &event.kind
         {
-            if *stage_key != current_stage.key || *stage_kind != current_stage.kind {
+            if *stage_position != current_stage.position || *stage_kind != current_stage.kind {
                 return Err(SessionError::Corrupt(format!(
-                    "stage_completed for {stage_key} while the log is at {}",
-                    current_stage.key
+                    "stage_completed for {stage_position} while the log is at {}",
+                    current_stage.position
                 )));
             }
             if let StageOutcome::Advance {
-                next_stage_key,
+                next_stage_position,
                 next_stage_kind,
             } = outcome
             {
                 current_stage = StageRef {
-                    key: next_stage_key.clone(),
+                    position: *next_stage_position,
                     kind: *next_stage_kind,
                 };
             }
@@ -713,7 +713,7 @@ impl SessionService for StoreSessionService {
         name = "session.create",
         level = "debug",
         skip(self, binding, initial_stage),
-        fields(stage = %initial_stage.key)
+        fields(stage = %initial_stage.position)
     )]
     async fn create(
         &self,
@@ -770,7 +770,7 @@ impl SessionService for StoreSessionService {
         fields(
             session_id = %session.id,
             event_count = events.len(),
-            stage = %session.current_stage.key,
+            stage = %session.current_stage.position,
             last_seq = session.last_seq
         )
     )]
@@ -975,7 +975,7 @@ impl SessionService for StoreSessionService {
                 },
                 SessionEventKind::StageCompleted {
                     turn_id: record.turn_id,
-                    stage_key: record.stage_key.clone(),
+                    stage_position: record.stage_position,
                     stage_kind: record.stage_kind,
                     evaluation: record.evaluation.clone(),
                     outcome: outcome.clone(),

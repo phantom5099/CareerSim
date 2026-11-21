@@ -59,7 +59,7 @@ export interface PipelineRubric {
 }
 
 export interface PipelineStage {
-  key: string
+  position: number
   kind: StageKind
   title: string
   minRounds: number

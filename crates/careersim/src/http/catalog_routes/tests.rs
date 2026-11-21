@@ -56,9 +56,9 @@ fn pipeline_payload(name: &str) -> Value {
     json!({
         "name": name,
         "stages": [
-            {"key": "hr_screen", "kind": "hr_screen", "title": "HR 初筛",
+            {"position": 0, "kind": "hr_screen", "title": "HR 初筛",
              "minRounds": 1, "maxRounds": 3, "rubric": rubric},
-            {"key": "offer", "kind": "offer", "title": "Offer 沟通",
+            {"position": 1, "kind": "offer", "title": "Offer 沟通",
              "minRounds": 1, "maxRounds": 3, "rubric": rubric},
         ],
     })
@@ -520,9 +520,9 @@ fn valid_template() -> Value {
             {"key": "communication", "label": "沟通表达", "weight": 100, "criteria": "表达清晰"},
         ],
     });
-    let stage = |key: &str, kind: &str, title: &str| {
+    let stage = |position: u16, kind: &str, title: &str| {
         json!({
-            "key": key, "kind": kind, "title": title,
+            "position": position, "kind": kind, "title": title,
             "minRounds": 1, "maxRounds": 3, "rubric": rubric,
         })
     };
@@ -542,7 +542,7 @@ fn valid_template() -> Value {
         "projects": [ { "key": "p1", "name": "2027 校招" } ],
         "pipelines": [ {
             "key": "pipe1", "projectKey": "p1", "name": "校招主流程",
-            "stages": [stage("hr_screen", "hr_screen", "HR 初筛"), stage("offer", "offer", "Offer 沟通")],
+            "stages": [stage(0, "hr_screen", "HR 初筛"), stage(1, "offer", "Offer 沟通")],
         } ],
         "jobs": [ {
             "key": "j1", "projectKey": "p1", "pipelineKey": "pipe1",

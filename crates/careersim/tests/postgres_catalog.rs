@@ -69,9 +69,9 @@ async fn new_user(service: &AccountService, tag: &str) -> UserId {
         .id
 }
 
-fn stage(key: &str, kind: &str, title: &str) -> StageDefinition {
+fn stage(position: u16, kind: &str, title: &str) -> StageDefinition {
     serde_json::from_value(json!({
-        "key": key,
+        "position": position,
         "kind": kind,
         "title": title,
         "minRounds": 1,
@@ -88,8 +88,8 @@ fn stage(key: &str, kind: &str, title: &str) -> StageDefinition {
 
 fn two_stage_input() -> Vec<StageDefinition> {
     vec![
-        stage("hr_screen", "hr_screen", "HR 初筛"),
-        stage("offer", "offer", "Offer 沟通"),
+        stage(0, "hr_screen", "HR 初筛"),
+        stage(1, "offer", "Offer 沟通"),
     ]
 }
 
@@ -627,10 +627,10 @@ async fn import_template_roundtrip() {
             "projectKey": "p1",
             "name": "校招主流程",
             "stages": [
-                {"key": "hr_screen", "kind": "hr_screen", "title": "HR 初筛", "minRounds": 1, "maxRounds": 3,
+                {"position": 0, "kind": "hr_screen", "title": "HR 初筛", "minRounds": 1, "maxRounds": 3,
                  "rubric": {"passScore": 60, "dimensions": [
                      {"key": "communication", "label": "沟通表达", "weight": 100, "criteria": "表达清晰"}]}},
-                {"key": "offer", "kind": "offer", "title": "Offer 沟通", "minRounds": 1, "maxRounds": 2,
+                {"position": 1, "kind": "offer", "title": "Offer 沟通", "minRounds": 1, "maxRounds": 2,
                  "rubric": {"passScore": 70, "dimensions": [
                      {"key": "motivation", "label": "求职动机", "weight": 100, "criteria": "动机明确"}]}}
             ],

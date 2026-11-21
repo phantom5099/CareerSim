@@ -224,8 +224,8 @@ function pipelineInfo(index: number, source: Raw, projects: Raw[]): PipelineInfo
     name: textOr(source.name, `流程 ${index + 1}`),
     stages: stagesRaw
       .filter(isRecord)
-      .map((stage) => ({
-        key: textOr(stage.key),
+      .map((stage, position) => ({
+        position: typeof stage.position === 'number' ? stage.position : position,
         kind: (STAGE_KINDS as readonly string[]).includes(textOr(stage.kind))
           ? (textOr(stage.kind) as StageKind)
           : 'hr_screen',

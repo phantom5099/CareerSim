@@ -346,14 +346,14 @@ fn job_from_row(row: &PgRow) -> Result<Job, CatalogError> {
 
 /// 从阶段行重建 [`StageDefinition`]：kind/rubric 的 serde 映射是唯一事实来源。
 fn stage_from_row(row: &PgRow) -> Result<StageDefinition, CatalogError> {
-    let stage_key: String = column(row, "stage_key")?;
+    let position: i16 = column(row, "position")?;
     let kind: String = column(row, "kind")?;
     let title: String = column(row, "title")?;
     let rubric: serde_json::Value = column(row, "rubric")?;
     let min_rounds: i16 = column(row, "min_rounds")?;
     let max_rounds: i16 = column(row, "max_rounds")?;
     let value = serde_json::json!({
-        "key": stage_key,
+        "position": position,
         "kind": kind,
         "title": title,
         "minRounds": min_rounds,
@@ -485,16 +485,14 @@ where
     E: Executor<'e, Database = Postgres>,
 {
     let stages = definition.stages();
-    let mut keys = Vec::with_capacity(stages.len());
     let mut positions = Vec::with_capacity(stages.len());
     let mut kinds = Vec::with_capacity(stages.len());
     let mut titles = Vec::with_capacity(stages.len());
     let mut rubrics = Vec::with_capacity(stages.len());
     let mut min_rounds = Vec::with_capacity(stages.len());
     let mut max_rounds = Vec::with_capacity(stages.len());
-    for (index, stage) in stages.iter().enumerate() {
-        keys.push(stage.key.as_str().to_owned());
-        positions.push(i16::try_from(index).map_err(|_| corrupted_row("stage position"))?);
+    for stage in stages {
+        positions.push(i16::try_from(stage.position).map_err(|_| corrupted_row("stage position"))?);
         kinds.push(stage.kind.as_str().to_owned());
         titles.push(stage.title.clone());
         rubrics.push(
@@ -508,14 +506,13 @@ where
     }
     sqlx::query(
         "INSERT INTO pipeline_stages \
-         (pipeline_id, stage_key, position, kind, title, rubric, min_rounds, max_rounds) \
-         SELECT $1, key, position, kind, title, rubric, min_rounds, max_rounds \
-         FROM UNNEST($2::text[], $3::int2[], $4::text[], $5::text[], $6::jsonb[], $7::int2[], \
-                      $8::int2[]) \
-              AS t(key, position, kind, title, rubric, min_rounds, max_rounds)",
+         (pipeline_id, position, kind, title, rubric, min_rounds, max_rounds) \
+         SELECT $1, position, kind, title, rubric, min_rounds, max_rounds \
+         FROM UNNEST($2::int2[], $3::text[], $4::text[], $5::jsonb[], $6::int2[], \
+                      $7::int2[]) \
+              AS t(position, kind, title, rubric, min_rounds, max_rounds)",
     )
     .bind(pipeline_id.into_uuid())
-    .bind(&keys)
     .bind(&positions)
     .bind(&kinds)
     .bind(&titles)
@@ -527,7 +524,6 @@ where
     .map_err(|err| backend_error("insert stages", err))?;
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn insert_job_row<'e, E>(
     executor: E,
@@ -581,7 +577,7 @@ impl PgCatalogStore {
         pipeline_id: PipelineId,
     ) -> Result<PipelineDefinition, CatalogError> {
         let rows = sqlx::query(
-            "SELECT stage_key, position, kind, title, rubric, min_rounds, max_rounds \
+            "SELECT position, kind, title, rubric, min_rounds, max_rounds \
              FROM pipeline_stages WHERE pipeline_id = $1 ORDER BY position",
         )
         .bind(pipeline_id.into_uuid())

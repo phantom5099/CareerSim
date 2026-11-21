@@ -25,7 +25,7 @@ const stageKinds: StageKind[] = [
 
 function defaultStage(kind: StageKind = 'hr_screen'): StageDefinitionPayload {
   return {
-    key: kind,
+    position: 0,
     kind,
     title: STAGE_LABELS[kind],
     minRounds: 1,
@@ -42,7 +42,7 @@ function cloneStages(pipeline: PipelineInfo | null): StageDefinitionPayload[] {
     return [defaultStage(), defaultStage('offer')]
   }
   return pipeline.stages.map((stage) => ({
-    key: stage.key,
+    position: stage.position,
     kind: stage.kind,
     title: stage.title,
     minRounds: stage.minRounds,
@@ -113,7 +113,7 @@ async function save() {
   try {
     const input: PipelinePayload = {
       name: form.name.trim(),
-      stages: form.stages,
+      stages: form.stages.map((stage, position) => ({ ...stage, position })),
     }
     if (props.pipeline) {
       await companiesApi.updatePipeline(props.companyId, props.pipeline.id, input)
@@ -169,7 +169,7 @@ async function save() {
         <div class="space-y-4">
           <section
             v-for="(stage, index) in form.stages"
-            :key="`${index}-${stage.key}`"
+            :key="`${index}-${stage.kind}`"
             class="border border-line p-4"
           >
             <div class="flex items-center justify-between gap-2">
@@ -188,10 +188,6 @@ async function save() {
             </div>
 
             <div class="mt-3 grid gap-3 sm:grid-cols-4">
-              <label class="block">
-                <span class="text-[0.6rem] text-ink-faint">阶段键</span>
-                <input v-model="stage.key" class="field mt-1 w-full text-[0.7rem]" />
-              </label>
               <label class="block">
                 <span class="text-[0.6rem] text-ink-faint">阶段类型</span>
                 <select v-model="stage.kind" class="field mt-1 w-full text-[0.7rem]">
@@ -228,7 +224,7 @@ async function save() {
               <div class="mt-2 space-y-2">
                 <div
                   v-for="(dimension, dimensionIndex) in stage.rubric.dimensions"
-                  :key="`${stage.key}-${dimensionIndex}`"
+                  :key="`${stage.position}-${dimensionIndex}`"
                   class="grid gap-2 sm:grid-cols-[1fr_1fr_5rem_2fr_auto]"
                 >
                   <input v-model="dimension.key" class="field text-[0.68rem]" placeholder="键" />

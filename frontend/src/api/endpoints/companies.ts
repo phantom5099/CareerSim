@@ -120,7 +120,7 @@ interface PipelineDto {
   projectId: string
   name: string
   stages: {
-    key: string
+    position: number
     kind: string
     title: string
     minRounds: number
@@ -170,7 +170,7 @@ function toPipeline(dto: PipelineDto): PipelineInfo {
     projectId: dto.projectId,
     name: dto.name,
     stages: dto.stages.map((stage) => ({
-      key: stage.key,
+      position: stage.position,
       kind: stage.kind as PipelineInfo['stages'][number]['kind'],
       title: stage.title,
       minRounds: stage.minRounds,

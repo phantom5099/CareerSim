@@ -12,7 +12,7 @@ use super::{
 use crate::{
     llm::client::{ChatRequest, ToolChoice},
     pipeline::{
-        model::{OfferPolicy, PipelineDefinition, StageDefinition, StageKey, StageKind},
+        model::{OfferPolicy, PipelineDefinition, StageDefinition, StageKind, StagePosition},
         rubric::Score,
     },
 };
@@ -71,7 +71,7 @@ pub struct StageBrief {
 /// 前序阶段评估摘要；注入下一阶段上下文。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PriorStageSummary {
-    pub stage_key: StageKey,
+    pub stage_position: StagePosition,
     pub stage_kind: StageKind,
     pub total: Score,
     pub passed: bool,
@@ -207,7 +207,7 @@ impl DefaultContextBuilder {
                 let _ = writeln!(
                     prompt,
                     "- {}：总分 {}，{}；摘要：{}",
-                    prior.stage_key,
+                    prior.stage_position,
                     prior.total,
                     if prior.passed { "通过" } else { "未通过" },
                     prior.summary

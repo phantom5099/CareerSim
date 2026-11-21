@@ -90,7 +90,7 @@ const LIST_APPLICATIONS_SQL: &str = "SELECT id, user_id, job_id, resume_id, sess
 const GET_APPLICATION_SQL: &str = "SELECT id, user_id, job_id, resume_id, session_id, status, stage_position, created_at, updated_at \
     FROM applications WHERE id = $1 AND user_id = $2";
 const GET_CURRENT_STAGE_SQL: &str = "SELECT a.id, a.user_id, a.job_id, a.resume_id, a.session_id, a.status, a.stage_position, a.created_at, a.updated_at, \
-    j.pipeline_id, ps.stage_key, ps.position, ps.kind, ps.title, ps.rubric, ps.min_rounds, ps.max_rounds \
+    j.pipeline_id, ps.position, ps.kind, ps.title, ps.rubric, ps.min_rounds, ps.max_rounds \
     FROM applications a \
     JOIN jobs j ON j.id = a.job_id \
     JOIN pipeline_stages ps ON ps.pipeline_id = j.pipeline_id AND ps.position = a.stage_position \
@@ -98,8 +98,8 @@ const GET_CURRENT_STAGE_SQL: &str = "SELECT a.id, a.user_id, a.job_id, a.resume_
 
 fn stage_from_row(row: &sqlx::postgres::PgRow) -> Result<StageDefinition, ApplicationError> {
     let value = json!({
-        "key": row
-            .try_get::<String, _>("stage_key")
+        "position": row
+            .try_get::<i16, _>("position")
             .map_err(|error| backend("read application stage", error))?,
         "kind": row
             .try_get::<String, _>("kind")

@@ -1,11 +1,23 @@
 use std::sync::Arc;
 
+fn position_for_test(name: &str) -> u16 {
+    match name {
+        "hr" | "hr_screen" => 0,
+        "exam" | "tech_1" => 1,
+        "tech_2" | "offer_1" => 2,
+        "offer" => 2,
+        "tech_round_1" => 1,
+        "ghost" | "missing" => 99,
+        _ => 0,
+    }
+}
+
 use chrono::Utc;
 
 use super::*;
 use crate::{
     pipeline::{
-        model::{StageKey, StageKind, StageOutcome},
+        model::{StageKind, StageOutcome},
         rubric::{DimensionScore, Score, StageEvaluation},
     },
     store::{EVENT_VERSION, MemorySessionStore},
@@ -17,7 +29,7 @@ fn service() -> StoreSessionService {
 
 fn stage_ref(key: &str, kind: StageKind) -> StageRef {
     StageRef {
-        key: StageKey::parse(key).unwrap(),
+        position: position_for_test(key),
         kind,
     }
 }
@@ -74,7 +86,7 @@ async fn create_records_binding_and_initial_stage() {
         .unwrap();
 
     assert_eq!(session.binding.application_id(), app_id);
-    assert_eq!(session.current_stage.key.as_str(), "hr_screen");
+    assert_eq!(session.current_stage.position, 0);
     assert_eq!(session.current_stage.kind, StageKind::HrScreen);
     assert_eq!(session.role(), Role::HrScreener);
 
@@ -112,11 +124,11 @@ async fn append_rejects_invalid_batches() {
             &[
                 SessionEventKind::StageCompleted {
                     turn_id: TurnId(1),
-                    stage_key: StageKey::parse("hr_screen").unwrap(),
+                    stage_position: position_for_test("hr_screen"),
                     stage_kind: StageKind::HrScreen,
                     evaluation: evaluation(80, true),
                     outcome: StageOutcome::Advance {
-                        next_stage_key: StageKey::parse("exam").unwrap(),
+                        next_stage_position: position_for_test("exam"),
                         next_stage_kind: StageKind::Exam,
                     },
                 },
@@ -127,17 +139,17 @@ async fn append_rejects_invalid_batches() {
         .unwrap_err();
     assert!(matches!(not_last, SessionError::InvalidEvent(_)));
 
-    // stage_key 必须等于当前阶段。
+    // stage_position 必须等于当前阶段。
     let wrong_stage = sessions
         .append(
             &mut session,
             &[SessionEventKind::StageCompleted {
                 turn_id: TurnId(1),
-                stage_key: StageKey::parse("exam").unwrap(),
+                stage_position: position_for_test("exam"),
                 stage_kind: StageKind::HrScreen,
                 evaluation: evaluation(80, true),
                 outcome: StageOutcome::Advance {
-                    next_stage_key: StageKey::parse("exam").unwrap(),
+                    next_stage_position: position_for_test("exam"),
                     next_stage_kind: StageKind::Exam,
                 },
             }],
@@ -152,11 +164,11 @@ async fn append_rejects_invalid_batches() {
             &mut session,
             &[SessionEventKind::StageCompleted {
                 turn_id: TurnId(1),
-                stage_key: StageKey::parse("hr_screen").unwrap(),
+                stage_position: position_for_test("hr_screen"),
                 stage_kind: StageKind::Exam,
                 evaluation: evaluation(80, true),
                 outcome: StageOutcome::Advance {
-                    next_stage_key: StageKey::parse("exam").unwrap(),
+                    next_stage_position: position_for_test("exam"),
                     next_stage_kind: StageKind::Exam,
                 },
             }],
@@ -171,11 +183,11 @@ async fn append_rejects_invalid_batches() {
             &mut session,
             &[SessionEventKind::StageCompleted {
                 turn_id: TurnId(1),
-                stage_key: StageKey::parse("hr_screen").unwrap(),
+                stage_position: position_for_test("hr_screen"),
                 stage_kind: StageKind::HrScreen,
                 evaluation: evaluation(80, true),
                 outcome: StageOutcome::Advance {
-                    next_stage_key: StageKey::parse("hr_screen").unwrap(),
+                    next_stage_position: position_for_test("hr_screen"),
                     next_stage_kind: StageKind::HrScreen,
                 },
             }],
@@ -209,12 +221,12 @@ async fn complete_stage_writes_batch_in_order_and_advances() {
                 control_call_id: "call-1".to_owned(),
                 record: StageEvaluationRecord {
                     turn_id: TurnId(1),
-                    stage_key: StageKey::parse("hr_screen").unwrap(),
+                    stage_position: position_for_test("hr_screen"),
                     stage_kind: StageKind::HrScreen,
                     evaluation: evaluation(80, true),
                 },
                 outcome: StageOutcome::Advance {
-                    next_stage_key: StageKey::parse("exam").unwrap(),
+                    next_stage_position: position_for_test("exam"),
                     next_stage_kind: StageKind::Exam,
                 },
             },
@@ -223,7 +235,7 @@ async fn complete_stage_writes_batch_in_order_and_advances() {
         .unwrap();
 
     assert_eq!(completion.turn_id, TurnId(1));
-    assert_eq!(completion.record.stage_key.as_str(), "hr_screen");
+    assert_eq!(completion.record.stage_position, 0);
 
     let kinds = session
         .events
@@ -247,10 +259,10 @@ async fn complete_stage_writes_batch_in_order_and_advances() {
         ]
     );
 
-    // Advance 后当前阶段推进，行缓存同步为下一阶段键。
-    assert_eq!(session.current_stage.key.as_str(), "exam");
+    // Advance 后当前阶段推进，行缓存同步为下一阶段位置。
+    assert_eq!(session.current_stage.position, 1);
     let loaded = sessions.load(session.id).await.unwrap();
-    assert_eq!(loaded.current_stage.key.as_str(), "exam");
+    assert_eq!(loaded.current_stage.position, 1);
     assert_eq!(loaded.current_stage.kind, StageKind::Exam);
 
     // 控制动作的工具结果为 ok。
@@ -292,7 +304,7 @@ async fn rejected_and_offer_pending_keep_current_stage() {
                 control_call_id: "call-1".to_owned(),
                 record: StageEvaluationRecord {
                     turn_id: TurnId(1),
-                    stage_key: StageKey::parse("hr_screen").unwrap(),
+                    stage_position: position_for_test("hr_screen"),
                     stage_kind: StageKind::HrScreen,
                     evaluation: evaluation(40, false),
                 },
@@ -302,9 +314,9 @@ async fn rejected_and_offer_pending_keep_current_stage() {
         .await
         .unwrap();
 
-    assert_eq!(session.current_stage.key.as_str(), "hr_screen");
+    assert_eq!(session.current_stage.position, 0);
     let loaded = sessions.load(session.id).await.unwrap();
-    assert_eq!(loaded.current_stage.key.as_str(), "hr_screen");
+    assert_eq!(loaded.current_stage.position, 0);
     assert_eq!(loaded.current_stage.kind, StageKind::HrScreen);
 }
 
@@ -380,12 +392,12 @@ async fn round_counters_span_stage_boundaries() {
                 control_call_id: "call-2".to_owned(),
                 record: StageEvaluationRecord {
                     turn_id: TurnId(2),
-                    stage_key: StageKey::parse("hr_screen").unwrap(),
+                    stage_position: position_for_test("hr_screen"),
                     stage_kind: StageKind::HrScreen,
                     evaluation: evaluation(80, true),
                 },
                 outcome: StageOutcome::Advance {
-                    next_stage_key: StageKey::parse("exam").unwrap(),
+                    next_stage_position: position_for_test("exam"),
                     next_stage_kind: StageKind::Exam,
                 },
             },
