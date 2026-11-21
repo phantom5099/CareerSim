@@ -21,13 +21,17 @@ pub(super) fn validate_stages(stages: &[StageDefinition]) -> Result<(), Pipeline
         return Err(PipelineError::Empty);
     }
 
-    // 规则 2：stage_key 流水线内唯一（格式由 StageKey::parse 保证）。
-    let mut seen = HashSet::with_capacity(stages.len());
-    for stage in stages {
-        if !seen.insert(stage.key.as_str()) {
-            return Err(PipelineError::DuplicateStageKey(
-                stage.key.as_str().to_owned(),
-            ));
+    // 规则 2：position 必须从 0 开始连续递增，位置是阶段唯一定位。
+    for (index, stage) in stages.iter().enumerate() {
+        let expected = u16::try_from(index).map_err(|_| PipelineError::InvalidStage {
+            position: stage.position,
+            reason: "position exceeds the supported range".to_owned(),
+        })?;
+        if stage.position != expected {
+            return Err(PipelineError::InvalidStage {
+                position: stage.position,
+                reason: format!("position must be {expected}"),
+            });
         }
     }
 
@@ -56,7 +60,7 @@ fn validate_stage_fields(stage: &StageDefinition) -> Result<(), PipelineError> {
     let title_chars = stage.title.chars().count();
     if !(1..=TITLE_MAX_CHARS).contains(&title_chars) {
         return Err(PipelineError::InvalidStage {
-            key: stage.key.as_str().to_owned(),
+            position: stage.position,
             reason: format!("title must be 1..={TITLE_MAX_CHARS} characters"),
         });
     }
@@ -65,7 +69,7 @@ fn validate_stage_fields(stage: &StageDefinition) -> Result<(), PipelineError> {
         || stage.max_rounds > MAX_ROUNDS_LIMIT
     {
         return Err(PipelineError::InvalidStage {
-            key: stage.key.as_str().to_owned(),
+            position: stage.position,
             reason: format!(
                 "rounds must satisfy 1 <= min_rounds <= max_rounds <= {MAX_ROUNDS_LIMIT}"
             ),
@@ -79,7 +83,7 @@ fn validate_rubric(stage: &StageDefinition) -> Result<(), PipelineError> {
     let rubric = &stage.rubric;
     if rubric.dimensions.is_empty() || rubric.dimensions.len() > DIMENSION_LIMIT {
         return Err(PipelineError::InvalidRubric {
-            key: stage.key.as_str().to_owned(),
+            position: stage.position,
             reason: format!("dimensions must contain 1..={DIMENSION_LIMIT} items"),
         });
     }
@@ -88,13 +92,13 @@ fn validate_rubric(stage: &StageDefinition) -> Result<(), PipelineError> {
     for dimension in &rubric.dimensions {
         if dimension.key.is_empty() {
             return Err(PipelineError::InvalidRubric {
-                key: stage.key.as_str().to_owned(),
+                position: stage.position,
                 reason: "dimension key must not be empty".to_owned(),
             });
         }
         if !keys.insert(dimension.key.as_str()) {
             return Err(PipelineError::InvalidRubric {
-                key: stage.key.as_str().to_owned(),
+                position: stage.position,
                 reason: format!("duplicate dimension key `{}`", dimension.key),
             });
         }
@@ -115,12 +119,12 @@ fn validate_rubric(stage: &StageDefinition) -> Result<(), PipelineError> {
         // 全 0：等权，合法；空维度列表由前置校验拒绝。
     } else if has_zero {
         return Err(PipelineError::InvalidRubric {
-            key: stage.key.as_str().to_owned(),
+            position: stage.position,
             reason: "individual dimension weights must not be 0 unless all weights are 0 (equal weighting)".to_owned(),
         });
     } else if total_weight != 100 {
         return Err(PipelineError::InvalidRubric {
-            key: stage.key.as_str().to_owned(),
+            position: stage.position,
             reason: format!("weights must sum to 100 when set, got {total_weight}"),
         });
     }

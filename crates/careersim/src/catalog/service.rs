@@ -137,6 +137,17 @@ impl CatalogService {
         self.store.update_pipeline(owner, id, &new_name, now).await
     }
 
+    pub async fn replace_pipeline(
+        &self,
+        owner: UserId,
+        id: PipelineId,
+        input: PipelineInput,
+        now: DateTime<Utc>,
+    ) -> Result<Pipeline, CatalogError> {
+        let new = input.validate()?;
+        self.store.replace_pipeline(owner, id, new, now).await
+    }
+
     pub async fn delete_pipeline(
         &self,
         owner: UserId,

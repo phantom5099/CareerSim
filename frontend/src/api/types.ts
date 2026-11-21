@@ -77,14 +77,14 @@ export interface ProjectPatchPayload {
 
 /** 阶段定义与后端 `StageDefinition` 同构；rubric 必填。 */
 export interface StageDefinitionPayload {
-  key: string
+  position: number
   kind: string
   title: string
-  minRounds?: number
-  maxRounds?: number
-  rubric?: {
-    passScore?: number
-    dimensions: { key: string; label: string; weight?: number; criteria?: string }[]
+  minRounds: number
+  maxRounds: number
+  rubric: {
+    passScore: number
+    dimensions: { key: string; label: string; weight: number; criteria: string }[]
   }
 }
 

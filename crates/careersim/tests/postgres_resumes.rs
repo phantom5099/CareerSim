@@ -3,6 +3,8 @@
 //! 覆盖：份数上限（行锁路径）、默认简历唯一与删除后提升、附件上传解析失败
 //! 保留附件、下载流一致性、超限/空文件/格式不符拒绝。
 
+mod support;
+
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -19,8 +21,16 @@ use careersim::{
     },
 };
 use sqlx::postgres::PgPoolOptions;
+use support::CleanupGuard;
 
-async fn setup(tag: &str) -> Option<(UserId, careersim::resume::ResumeService, PathBuf)> {
+async fn setup(
+    tag: &str,
+) -> Option<(
+    UserId,
+    careersim::resume::ResumeService,
+    PathBuf,
+    CleanupGuard,
+)> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
         return None;
     };
@@ -50,13 +60,16 @@ async fn setup(tag: &str) -> Option<(UserId, careersim::resume::ResumeService, P
         .await
         .expect("register user");
     let owner = grant.user.id;
+    let mut cleanup = CleanupGuard::new(&url);
+    cleanup.track_user(owner);
 
     let root = std::env::temp_dir().join(format!(
         "careersim-b2-resume-it-{tag}-{}",
         uuid::Uuid::new_v4()
     ));
+    cleanup.track_directory(root.clone());
     let service = postgres_resume_service(pool, Arc::new(LocalFsAttachmentStore::new(&root)));
-    Some((owner, service, root))
+    Some((owner, service, root, cleanup))
 }
 
 fn fake_pdf_bytes() -> Vec<u8> {
@@ -73,7 +86,7 @@ fn count_files(root: &Path) -> usize {
 
 #[tokio::test]
 async fn resume_limit_and_default_promotion() {
-    let Some((owner, service, root)) = setup("limit").await else {
+    let Some((owner, service, root, _cleanup)) = setup("limit").await else {
         return;
     };
 
@@ -135,7 +148,7 @@ async fn resume_limit_and_default_promotion() {
 
 #[tokio::test]
 async fn attachment_upload_parse_and_download() {
-    let Some((owner, service, root)) = setup("attachment").await else {
+    let Some((owner, service, root, _cleanup)) = setup("attachment").await else {
         return;
     };
 

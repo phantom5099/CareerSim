@@ -1,4 +1,4 @@
-//! 阶段类型到角色的映射；阶段键与流水线定义在 `pipeline` 域。
+//! 阶段类型到角色的映射；阶段位置与流水线定义在 `pipeline` 域。
 
 use super::role::Role;
 use crate::pipeline::model::StageKind;
