@@ -2,6 +2,8 @@
 //!
 //! 运行前需可用的 PostgreSQL（compose.yaml）并执行全部迁移。
 
+mod support;
+
 use std::sync::Arc;
 
 use careersim::account::{
@@ -10,8 +12,9 @@ use careersim::account::{
     postgres_account_service,
 };
 use sqlx::postgres::PgPoolOptions;
+use support::CleanupGuard;
 
-async fn service() -> Option<careersim::account::service::AccountService> {
+async fn service() -> Option<(careersim::account::service::AccountService, CleanupGuard)> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
         return None;
     };
@@ -25,7 +28,8 @@ async fn service() -> Option<careersim::account::service::AccountService> {
         .await
         .expect("run migrations");
     let hasher = Arc::new(Argon2idHasher::new().expect("argon2 hasher"));
-    Some(postgres_account_service(pool, hasher))
+    let cleanup = CleanupGuard::new(&url);
+    Some((postgres_account_service(pool, hasher), cleanup))
 }
 
 fn unique_username() -> String {
@@ -39,7 +43,7 @@ fn unique_username() -> String {
 
 #[tokio::test]
 async fn account_roundtrip_against_postgres() {
-    let Some(service) = service().await else {
+    let Some((service, mut cleanup)) = service().await else {
         return;
     };
     let username = unique_username();
@@ -49,6 +53,7 @@ async fn account_roundtrip_against_postgres() {
         .register(&username, "password123", "A0 测试")
         .await
         .expect("register");
+    cleanup.track_user(grant.user.id);
     assert_eq!(grant.user.username, username);
 
     // 认证当前会话。
@@ -106,14 +111,15 @@ async fn account_roundtrip_against_postgres() {
 
 #[tokio::test]
 async fn duplicate_username_conflicts() {
-    let Some(service) = service().await else {
+    let Some((service, mut cleanup)) = service().await else {
         return;
     };
     let username = unique_username();
-    service
+    let grant = service
         .register(&username, "password123", "第一次")
         .await
         .expect("first register");
+    cleanup.track_user(grant.user.id);
     assert!(matches!(
         service.register(&username, "password123", "第二次").await,
         Err(AccountError::UsernameTaken)
@@ -122,14 +128,15 @@ async fn duplicate_username_conflicts() {
 
 #[tokio::test]
 async fn wrong_password_rejected() {
-    let Some(service) = service().await else {
+    let Some((service, mut cleanup)) = service().await else {
         return;
     };
     let username = unique_username();
-    service
+    let grant = service
         .register(&username, "password123", "A0 测试")
         .await
         .expect("register");
+    cleanup.track_user(grant.user.id);
     assert!(matches!(
         service.login(&username, "wrong-pass-1").await,
         Err(AccountError::InvalidCredentials)

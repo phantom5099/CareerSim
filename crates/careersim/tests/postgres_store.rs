@@ -1,5 +1,7 @@
 //! PostgreSQL 集成测试；未设置 `DATABASE_URL` 时跳过。
 
+mod support;
+
 use std::sync::Arc;
 
 fn position_for_test(name: &str) -> u16 {
@@ -26,6 +28,7 @@ use careersim::{
     postgres_session_service,
 };
 use sqlx::postgres::PgPoolOptions;
+use support::CleanupGuard;
 
 fn binding() -> SessionBinding {
     SessionBinding::ApplicationStage {
@@ -49,7 +52,7 @@ fn evaluation() -> StageEvaluation {
     }
 }
 
-async fn service() -> Option<StoreSessionService> {
+async fn service() -> Option<(StoreSessionService, CleanupGuard)> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
         return None;
     };
@@ -62,12 +65,13 @@ async fn service() -> Option<StoreSessionService> {
         .run(&pool)
         .await
         .expect("run migrations");
-    Some(postgres_session_service(pool))
+    let cleanup = CleanupGuard::new(&url);
+    Some((postgres_session_service(pool), cleanup))
 }
 
 #[tokio::test]
 async fn create_load_list_delete_roundtrip() {
-    let Some(sessions) = service().await else {
+    let Some((sessions, mut cleanup)) = service().await else {
         return;
     };
     let expected_binding = binding();
@@ -75,6 +79,7 @@ async fn create_load_list_delete_roundtrip() {
         .create(expected_binding, stage_ref("exam", StageKind::Exam))
         .await
         .unwrap();
+    cleanup.track_session(session.id);
 
     let loaded = sessions.load(session.id).await.unwrap();
     assert_eq!(loaded.id, session.id);
@@ -103,13 +108,14 @@ async fn create_load_list_delete_roundtrip() {
 
 #[tokio::test]
 async fn append_allocates_seq_and_advances_stage() {
-    let Some(sessions) = service().await else {
+    let Some((sessions, mut cleanup)) = service().await else {
         return;
     };
     let mut session = sessions
         .create(binding(), stage_ref("hr_screen", StageKind::HrScreen))
         .await
         .unwrap();
+    cleanup.track_session(session.id);
 
     sessions
         .append(
@@ -214,13 +220,14 @@ async fn append_allocates_seq_and_advances_stage() {
 
 #[tokio::test]
 async fn append_rejects_invalid_batches() {
-    let Some(sessions) = service().await else {
+    let Some((sessions, mut cleanup)) = service().await else {
         return;
     };
     let mut session = sessions
         .create(binding(), stage_ref("hr_screen", StageKind::HrScreen))
         .await
         .unwrap();
+    cleanup.track_session(session.id);
     let id = session.id;
 
     let meta = sessions
@@ -262,6 +269,7 @@ async fn append_rejects_invalid_batches() {
         .create(binding(), stage_ref("offer", StageKind::Offer))
         .await
         .unwrap();
+    cleanup.track_session(offer.id);
     let self_advance = sessions
         .append(
             &mut offer,
@@ -286,7 +294,7 @@ async fn append_rejects_invalid_batches() {
 
 #[tokio::test]
 async fn concurrent_appends_receive_conflict_for_stale_writer() {
-    let Some(sessions) = service().await else {
+    let Some((sessions, mut cleanup)) = service().await else {
         return;
     };
     let sessions = Arc::new(sessions);
@@ -294,6 +302,7 @@ async fn concurrent_appends_receive_conflict_for_stale_writer() {
         .create(binding(), stage_ref("hr_screen", StageKind::HrScreen))
         .await
         .unwrap();
+    cleanup.track_session(session.id);
 
     let mut first_session = sessions.load(session.id).await.unwrap();
     let mut second_session = sessions.load(session.id).await.unwrap();
