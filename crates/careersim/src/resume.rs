@@ -19,14 +19,17 @@ use std::sync::Arc;
 
 pub use content::ResumeContent;
 pub use model::{
-    NewResume, NewResumeAttachment, ParseErrorCode, ParseStatus, Resume, ResumeAttachment,
-    ResumeError, ResumeId, ResumePatch,
+    ParseErrorCode, ParseStatus, Resume, ResumeAttachment, ResumeError, ResumeId,
+    ValidatedResumeAttachmentInput, ValidatedResumeInput, ValidatedResumeUpdateInput,
 };
 pub use parse::{
     AttachmentKind, CompositeTextExtractor, DocxTextExtractor, ParseError, PdfTextExtractor,
     ResumeTextExtractor,
 };
-pub use service::{OpenedAttachment, ResumeService};
+pub use service::{
+    AttachResumeInput, CreateResumeInput, OpenedAttachment, ResumeService, UpdateResumeInput,
+    UploadResumeInput,
+};
 use sqlx::PgPool;
 pub use storage::{
     AttachmentStore, AttachmentStoreError, LocalFsAttachmentStore, S3AttachmentStore,

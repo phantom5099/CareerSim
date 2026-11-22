@@ -5,22 +5,12 @@ use chrono::DateTime;
 
 use super::model::{
     Application, ApplicationError, ApplicationId, ApplicationStatus, ApplicationView,
-    CurrentApplicationStage, NewApplication,
+    CreateApplicationInput,
 };
-use crate::account::model::UserId;
+use crate::{account::model::UserId, agent::session::StageRef};
 
 #[async_trait]
 pub trait ApplicationStore: Send + Sync {
-    async fn list(&self, owner: UserId) -> Result<Vec<Application>, ApplicationError>;
-
-    async fn get(&self, owner: UserId, id: ApplicationId) -> Result<Application, ApplicationError>;
-
-    async fn current_stage(
-        &self,
-        owner: UserId,
-        id: ApplicationId,
-    ) -> Result<CurrentApplicationStage, ApplicationError>;
-
     async fn list_views(&self, owner: UserId) -> Result<Vec<ApplicationView>, ApplicationError>;
 
     async fn get_view(
@@ -38,7 +28,8 @@ pub trait ApplicationStore: Send + Sync {
     async fn create(
         &self,
         owner: UserId,
-        new: NewApplication,
+        new: CreateApplicationInput,
+        initial_stage: StageRef,
         now: DateTime<chrono::Utc>,
     ) -> Result<Application, ApplicationError>;
 

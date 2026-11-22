@@ -444,7 +444,7 @@ pub(crate) fn validate_salary(
 
 /// 手工创建或修改公司时的字段集合；`is_private` 只影响可见性，不影响归属。
 #[derive(Debug, Clone, Default)]
-pub struct NewCompany {
+pub struct ValidatedCompanyInput {
     pub name: String,
     pub english_name: String,
     pub industry: String,
@@ -460,7 +460,7 @@ pub struct NewCompany {
 
 /// 公司部分更新；`None` 表示不修改。
 #[derive(Debug, Clone, Default)]
-pub struct CompanyPatch {
+pub struct ValidatedCompanyUpdateInput {
     pub name: Option<String>,
     pub english_name: Option<String>,
     pub industry: Option<String>,
@@ -475,7 +475,7 @@ pub struct CompanyPatch {
 }
 
 #[derive(Debug, Clone)]
-pub struct NewProject {
+pub struct ValidatedProjectInput {
     pub name: String,
     pub season: String,
     pub status: ProjectStatus,
@@ -484,7 +484,7 @@ pub struct NewProject {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ProjectPatch {
+pub struct ValidatedProjectUpdateInput {
     pub name: Option<String>,
     pub season: Option<String>,
     pub status: Option<ProjectStatus>,
@@ -494,13 +494,13 @@ pub struct ProjectPatch {
 }
 
 #[derive(Debug, Clone)]
-pub struct NewPipeline {
+pub struct ValidatedPipelineInput {
     pub name: String,
     pub definition: PipelineDefinition,
 }
 
 #[derive(Debug, Clone)]
-pub struct NewJob {
+pub struct ValidatedJobInput {
     pub pipeline_id: PipelineId,
     pub title: String,
     pub city: String,
@@ -514,7 +514,7 @@ pub struct NewJob {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct JobPatch {
+pub struct ValidatedJobUpdateInput {
     pub pipeline_id: Option<PipelineId>,
     pub title: Option<String>,
     pub city: Option<String>,

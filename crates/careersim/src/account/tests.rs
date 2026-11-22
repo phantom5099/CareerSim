@@ -6,8 +6,8 @@ use chrono::Duration;
 
 use crate::{
     account::{
-        model::{AccountError, ProfilePatch, UserId, Username},
-        service::AccountService,
+        model::{AccountError, UpdateProfileInput, UserId, Username},
+        service::{AccountService, ChangePasswordInput, LoginInput, RegisterInput, SessionGrant},
     },
     testing::{FakeClock, FakeHasher, InMemorySessionStore, InMemoryUserStore},
 };
@@ -36,10 +36,36 @@ fn harness() -> Harness {
     }
 }
 
+async fn register(
+    service: &AccountService,
+    username: &str,
+    password: &str,
+    display_name: &str,
+) -> Result<SessionGrant, AccountError> {
+    service
+        .register(RegisterInput {
+            username: username.to_owned(),
+            password: password.to_owned(),
+            display_name: display_name.to_owned(),
+        })
+        .await
+}
+
+async fn login(
+    service: &AccountService,
+    username: &str,
+    password: &str,
+) -> Result<SessionGrant, AccountError> {
+    service
+        .login(LoginInput {
+            username: username.to_owned(),
+            password: password.to_owned(),
+        })
+        .await
+}
+
 async fn registered(harness: &Harness) -> (String, String) {
-    let grant = harness
-        .service
-        .register("alice", "password123", "Alice")
+    let grant = register(&harness.service, "alice", "password123", "Alice")
         .await
         .expect("register");
     (grant.user.id.into_uuid().to_string(), grant.token)
@@ -64,15 +90,15 @@ async fn register_issues_session_and_me_roundtrips() {
 async fn register_rejects_invalid_username_password_or_display_name() {
     let harness = harness();
     assert!(matches!(
-        harness.service.register("ab", "password123", "A").await,
+        register(&harness.service, "ab", "password123", "A").await,
         Err(AccountError::InvalidUsername { .. })
     ));
     assert!(matches!(
-        harness.service.register("alice", "short", "A").await,
+        register(&harness.service, "alice", "short", "A").await,
         Err(AccountError::InvalidPassword { .. })
     ));
     assert!(matches!(
-        harness.service.register("alice", "password123", "  ").await,
+        register(&harness.service, "alice", "password123", "  ").await,
         Err(AccountError::InvalidProfile { .. })
     ));
 }
@@ -80,16 +106,11 @@ async fn register_rejects_invalid_username_password_or_display_name() {
 #[tokio::test]
 async fn register_conflicts_case_insensitively() {
     let harness = harness();
-    harness
-        .service
-        .register("Alice", "password123", "Alice")
+    register(&harness.service, "Alice", "password123", "Alice")
         .await
         .expect("register Alice");
     assert!(matches!(
-        harness
-            .service
-            .register("ALICE", "password123", "Again")
-            .await,
+        register(&harness.service, "ALICE", "password123", "Again").await,
         Err(AccountError::UsernameTaken)
     ));
 }
@@ -99,9 +120,7 @@ async fn login_succeeds_and_keeps_original_session_valid() {
     let harness = harness();
     let (_, token) = registered(&harness).await;
 
-    let grant = harness
-        .service
-        .login("alice", "password123")
+    let grant = login(&harness.service, "alice", "password123")
         .await
         .expect("login");
     assert_ne!(grant.token, token);
@@ -124,10 +143,8 @@ async fn login_unifies_error_and_runs_dummy_verify_for_unknown_user() {
     registered(&harness).await;
     let before = *harness.hasher.dummy_calls.lock().unwrap();
 
-    let unknown = harness.service.login("nobody", "password123").await;
-    let wrong_password = harness
-        .service
-        .login("alice", "wrong-password")
+    let unknown = login(&harness.service, "nobody", "password123").await;
+    let wrong_password = login(&harness.service, "alice", "wrong-password")
         .await
         .expect_err("wrong password rejected");
 
@@ -143,7 +160,7 @@ async fn login_unifies_error_and_runs_dummy_verify_for_unknown_user() {
 #[tokio::test]
 async fn login_treats_malformed_input_as_invalid_credentials() {
     let harness = harness();
-    let result = harness.service.login("UPPER!", "password123").await;
+    let result = login(&harness.service, "UPPER!", "password123").await;
     assert!(matches!(
         result.expect_err("malformed input rejected"),
         AccountError::InvalidCredentials
@@ -214,9 +231,7 @@ async fn logout_revokes_session() {
 async fn change_password_rotates_token_and_revokes_other_sessions() {
     let harness = harness();
     let (_, token_a) = registered(&harness).await;
-    let grant_b = harness
-        .service
-        .login("alice", "password123")
+    let grant_b = login(&harness.service, "alice", "password123")
         .await
         .expect("second login");
 
@@ -230,8 +245,10 @@ async fn change_password_rotates_token_and_revokes_other_sessions() {
         .change_password(
             authenticated.user.id,
             authenticated.session_id,
-            "password123",
-            "newpassword1",
+            ChangePasswordInput {
+                current_password: "password123".to_owned(),
+                new_password: "newpassword1".to_owned(),
+            },
         )
         .await
         .expect("change password");
@@ -253,12 +270,10 @@ async fn change_password_rotates_token_and_revokes_other_sessions() {
 
     // 旧密码失效、新密码可登录。
     assert!(matches!(
-        harness.service.login("alice", "password123").await,
+        login(&harness.service, "alice", "password123").await,
         Err(AccountError::InvalidCredentials)
     ));
-    harness
-        .service
-        .login("alice", "newpassword1")
+    login(&harness.service, "alice", "newpassword1")
         .await
         .expect("login new");
 }
@@ -274,8 +289,10 @@ async fn change_password_rejects_wrong_current_password() {
         .change_password(
             authenticated.user.id,
             authenticated.session_id,
-            "wrong-password",
-            "newpassword1",
+            ChangePasswordInput {
+                current_password: "wrong-password".to_owned(),
+                new_password: "newpassword1".to_owned(),
+            },
         )
         .await;
     assert!(matches!(
@@ -296,10 +313,10 @@ async fn update_profile_applies_patch_semantics() {
         .service
         .update_profile(
             user_id,
-            ProfilePatch {
+            UpdateProfileInput {
                 school: Some(Some("示例大学".to_owned())),
                 target_roles: Some(vec!["后端".to_owned()]),
-                ..ProfilePatch::default()
+                ..UpdateProfileInput::default()
             },
         )
         .await
@@ -313,9 +330,9 @@ async fn update_profile_applies_patch_semantics() {
         .service
         .update_profile(
             user_id,
-            ProfilePatch {
+            UpdateProfileInput {
                 school: Some(None),
-                ..ProfilePatch::default()
+                ..UpdateProfileInput::default()
             },
         )
         .await
@@ -334,9 +351,9 @@ async fn update_profile_rejects_out_of_bounds_values() {
         .service
         .update_profile(
             authenticated.user.id,
-            ProfilePatch {
+            UpdateProfileInput {
                 display_name: Some("x".repeat(41)),
-                ..ProfilePatch::default()
+                ..UpdateProfileInput::default()
             },
         )
         .await;
@@ -354,7 +371,7 @@ async fn update_profile_for_missing_user_is_unauthenticated() {
     let harness = harness();
     let result = harness
         .service
-        .update_profile(UserId::generate(), ProfilePatch::default())
+        .update_profile(UserId::generate(), UpdateProfileInput::default())
         .await;
     assert!(matches!(
         result.expect_err("rejected"),

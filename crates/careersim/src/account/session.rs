@@ -129,7 +129,7 @@ impl LoginSession {
 }
 
 /// 新会话行输入；`last_seen_at` 落库等于 `created_at`。
-pub struct NewLoginSession {
+pub struct CreateLoginSessionInput {
     pub id: SessionId,
     pub user_id: UserId,
     pub token_hash: SessionTokenHash,
@@ -143,9 +143,9 @@ pub fn new_login_session(
     user_id: UserId,
     token: &SessionToken,
     now: DateTime<Utc>,
-) -> (SessionId, NewLoginSession) {
+) -> (SessionId, CreateLoginSessionInput) {
     let id = SessionId::generate();
-    let session = NewLoginSession {
+    let session = CreateLoginSessionInput {
         id,
         user_id,
         token_hash: token.hash(),

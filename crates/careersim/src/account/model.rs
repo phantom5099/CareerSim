@@ -105,7 +105,7 @@ impl fmt::Debug for PasswordHash {
 }
 
 /// 注册用的用户行输入；时间戳由服务层的 Clock 提供。
-pub struct NewUser {
+pub struct ValidatedUserInput {
     pub id: UserId,
     /// 登录名展示原文（trim 后，保留大小写）。
     pub username: String,
@@ -146,7 +146,7 @@ pub struct User {
 
 /// 资料修改输入；PATCH 语义：外层 None = 不修改，内层 None = 清空。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ProfilePatch {
+pub struct UpdateProfileInput {
     /// Some = 整体替换（1..=40 字符）。
     pub display_name: Option<String>,
     pub school: Option<Option<String>>,
@@ -156,7 +156,7 @@ pub struct ProfilePatch {
     pub target_cities: Option<Vec<String>>,
 }
 
-impl ProfilePatch {
+impl UpdateProfileInput {
     /// 字段边界校验（plan/01 §3.1）；数据库 CHECK 兜底。
     pub fn validate(&self) -> Result<(), AccountError> {
         if let Some(name) = &self.display_name {

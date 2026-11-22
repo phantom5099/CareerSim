@@ -3,7 +3,10 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
-use super::model::{NewResume, NewResumeAttachment, ParseStatus, Resume, ResumeId, ResumePatch};
+use super::model::{
+    ParseStatus, Resume, ResumeId, ValidatedResumeAttachmentInput, ValidatedResumeInput,
+    ValidatedResumeUpdateInput,
+};
 use crate::account::model::UserId;
 
 /// Errors raised by resume persistence backends.
@@ -44,14 +47,18 @@ pub trait ResumeStore: Send + Sync {
 
     /// Inserts a new resume. Enforces the per-owner limit and the "first
     /// resume becomes default" rule inside a transaction.
-    async fn insert(&self, owner: UserId, resume: NewResume) -> Result<Resume, ResumeStoreError>;
+    async fn insert(
+        &self,
+        owner: UserId,
+        resume: ValidatedResumeInput,
+    ) -> Result<Resume, ResumeStoreError>;
 
     /// Applies a partial update (title/content) and returns the fresh row.
     async fn update(
         &self,
         owner: UserId,
         id: ResumeId,
-        patch: ResumePatch,
+        patch: ValidatedResumeUpdateInput,
     ) -> Result<Resume, ResumeStoreError>;
 
     /// Makes `id` the owner's single default resume.
@@ -68,7 +75,7 @@ pub trait ResumeStore: Send + Sync {
         &self,
         owner: UserId,
         id: ResumeId,
-        attachment: NewResumeAttachment,
+        attachment: ValidatedResumeAttachmentInput,
         parse_status: ParseStatus,
         content: serde_json::Value,
     ) -> Result<Resume, ResumeStoreError>;

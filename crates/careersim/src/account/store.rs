@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use super::{
-    model::{CredentialUser, NewUser, PasswordHash, ProfilePatch, User, UserId},
-    session::{LoginSession, NewLoginSession, SessionId, SessionTokenHash},
+    model::{CredentialUser, PasswordHash, UpdateProfileInput, User, UserId, ValidatedUserInput},
+    session::{CreateLoginSessionInput, LoginSession, SessionId, SessionTokenHash},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -36,7 +36,7 @@ pub enum SessionStoreError {
 
 #[async_trait]
 pub trait UserStore: Send + Sync {
-    async fn insert(&self, new: NewUser) -> Result<User, UserStoreError>;
+    async fn insert(&self, new: ValidatedUserInput) -> Result<User, UserStoreError>;
     async fn find_credential(
         &self,
         username_key: &str,
@@ -46,7 +46,7 @@ pub trait UserStore: Send + Sync {
     async fn update_profile(
         &self,
         id: UserId,
-        patch: &ProfilePatch,
+        patch: &UpdateProfileInput,
         now: DateTime<Utc>,
     ) -> Result<User, UserStoreError>;
     async fn update_password(
@@ -59,7 +59,7 @@ pub trait UserStore: Send + Sync {
 
 #[async_trait]
 pub trait SessionStore: Send + Sync {
-    async fn insert(&self, session: NewLoginSession) -> Result<(), SessionStoreError>;
+    async fn insert(&self, session: CreateLoginSessionInput) -> Result<(), SessionStoreError>;
     async fn find_by_token_hash(
         &self,
         hash: &SessionTokenHash,
@@ -85,7 +85,7 @@ pub trait SessionStore: Send + Sync {
     async fn rotate(
         &self,
         old: SessionId,
-        new: NewLoginSession,
+        new: CreateLoginSessionInput,
         now: DateTime<Utc>,
     ) -> Result<(), SessionStoreError>;
 }

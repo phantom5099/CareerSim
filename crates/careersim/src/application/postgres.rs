@@ -11,7 +11,7 @@ use tracing::instrument;
 use super::{
     model::{
         Application, ApplicationError, ApplicationId, ApplicationStageView, ApplicationStatus,
-        ApplicationView, CurrentApplicationStage, NewApplication,
+        ApplicationView, CreateApplicationInput,
     },
     store::ApplicationStore,
 };
@@ -19,7 +19,7 @@ use crate::{
     account::model::UserId,
     agent::session::{SessionId, StageRef},
     catalog::model::{CompanyId, JobId, PipelineId},
-    pipeline::model::{StageDefinition, StageKind},
+    pipeline::model::StageKind,
     resume::model::ResumeId,
 };
 
@@ -87,16 +87,6 @@ fn application_from_row(row: &sqlx::postgres::PgRow) -> Result<Application, Appl
     })
 }
 
-const LIST_APPLICATIONS_SQL: &str = "SELECT id, user_id, job_id, resume_id, session_id, status, stage_position, created_at, updated_at \
-    FROM applications WHERE user_id = $1 ORDER BY updated_at DESC, id DESC";
-const GET_APPLICATION_SQL: &str = "SELECT id, user_id, job_id, resume_id, session_id, status, stage_position, created_at, updated_at \
-    FROM applications WHERE id = $1 AND user_id = $2";
-const GET_CURRENT_STAGE_SQL: &str = "SELECT a.id, a.user_id, a.job_id, a.resume_id, a.session_id, a.status, a.stage_position, a.created_at, a.updated_at, \
-    j.pipeline_id, ps.position, ps.kind, ps.title, ps.rubric, ps.min_rounds, ps.max_rounds \
-    FROM applications a \
-    JOIN jobs j ON j.id = a.job_id \
-    JOIN pipeline_stages ps ON ps.pipeline_id = j.pipeline_id AND ps.position = a.stage_position \
-    WHERE a.id = $1 AND a.user_id = $2";
 const LIST_APPLICATION_VIEWS_SQL: &str = "SELECT a.id, a.user_id, a.job_id, a.resume_id, a.session_id, a.status, a.stage_position, a.created_at, a.updated_at, \
     c.id AS company_id, \
     j.title AS job_title, r.title AS resume_title, j.pipeline_id \
@@ -120,33 +110,10 @@ const LIST_PIPELINE_STAGES_SQL: &str =
 const INITIAL_STAGE_SQL: &str = "SELECT ps.position, ps.kind FROM jobs j \
     JOIN recruitment_projects p ON p.id = j.project_id AND p.deleted_at IS NULL \
     JOIN companies c ON c.id = p.company_id AND c.deleted_at IS NULL \
-    JOIN pipeline_stages ps ON ps.pipeline_id = j.pipeline_id AND ps.position = 0 \
+    JOIN pipeline_stages ps ON ps.pipeline_id = j.pipeline_id \
     WHERE j.id = $1 AND j.deleted_at IS NULL AND j.status = 'open' \
-      AND (c.is_seed OR NOT c.is_private OR c.owner_user_id = $2)";
-
-fn stage_from_row(row: &sqlx::postgres::PgRow) -> Result<StageDefinition, ApplicationError> {
-    let value = json!({
-        "position": row
-            .try_get::<i16, _>("position")
-            .map_err(|error| backend("read application stage", error))?,
-        "kind": row
-            .try_get::<String, _>("kind")
-            .map_err(|error| backend("read application stage", error))?,
-        "title": row
-            .try_get::<String, _>("title")
-            .map_err(|error| backend("read application stage", error))?,
-        "minRounds": row
-            .try_get::<i16, _>("min_rounds")
-            .map_err(|error| backend("read application stage", error))?,
-        "maxRounds": row
-            .try_get::<i16, _>("max_rounds")
-            .map_err(|error| backend("read application stage", error))?,
-        "rubric": row
-            .try_get::<serde_json::Value, _>("rubric")
-            .map_err(|error| backend("read application stage", error))?,
-    });
-    serde_json::from_value(value).map_err(|error| ApplicationError::InvalidState(error.to_string()))
-}
+      AND (c.is_seed OR NOT c.is_private OR c.owner_user_id = $2) \
+    ORDER BY ps.position LIMIT 1 FOR SHARE";
 
 fn stage_view_from_row(
     row: &sqlx::postgres::PgRow,
@@ -204,53 +171,6 @@ fn application_view_from_row(
 
 #[async_trait]
 impl ApplicationStore for PgApplicationStore {
-    #[instrument(name = "application.postgres.list", level = "debug", skip(self), fields(owner_id = ?owner))]
-    async fn list(&self, owner: UserId) -> Result<Vec<Application>, ApplicationError> {
-        let rows = sqlx::query(LIST_APPLICATIONS_SQL)
-            .bind(owner.into_uuid())
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|error| backend("list applications", error))?;
-        rows.iter().map(application_from_row).collect()
-    }
-
-    #[instrument(name = "application.postgres.get", level = "debug", skip(self), fields(owner_id = ?owner, application_id = ?id))]
-    async fn get(&self, owner: UserId, id: ApplicationId) -> Result<Application, ApplicationError> {
-        let row = sqlx::query(GET_APPLICATION_SQL)
-            .bind(id.into_uuid())
-            .bind(owner.into_uuid())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|error| backend("get application", error))?
-            .ok_or(ApplicationError::NotFound)?;
-        application_from_row(&row)
-    }
-
-    #[instrument(name = "application.postgres.current_stage", level = "debug", skip(self), fields(owner_id = ?owner, application_id = ?id))]
-    async fn current_stage(
-        &self,
-        owner: UserId,
-        id: ApplicationId,
-    ) -> Result<CurrentApplicationStage, ApplicationError> {
-        let row = sqlx::query(GET_CURRENT_STAGE_SQL)
-            .bind(id.into_uuid())
-            .bind(owner.into_uuid())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|error| backend("get current application stage", error))?
-            .ok_or(ApplicationError::NotFound)?;
-        let application = application_from_row(&row)?;
-        let pipeline_id = PipelineId::from_uuid(
-            row.try_get("pipeline_id")
-                .map_err(|error| backend("read application pipeline", error))?,
-        );
-        Ok(CurrentApplicationStage {
-            application,
-            pipeline_id,
-            stage: stage_from_row(&row)?,
-        })
-    }
-
     #[instrument(name = "application.postgres.list_views", level = "debug", skip(self), fields(owner_id = ?owner))]
     async fn list_views(&self, owner: UserId) -> Result<Vec<ApplicationView>, ApplicationError> {
         let rows = sqlx::query(LIST_APPLICATION_VIEWS_SQL)
@@ -330,7 +250,8 @@ impl ApplicationStore for PgApplicationStore {
     async fn create(
         &self,
         owner: UserId,
-        new: NewApplication,
+        new: CreateApplicationInput,
+        initial_stage: StageRef,
         now: DateTime<Utc>,
     ) -> Result<Application, ApplicationError> {
         let mut tx = self
@@ -338,37 +259,25 @@ impl ApplicationStore for PgApplicationStore {
             .begin()
             .await
             .map_err(|error| backend("begin create application", error))?;
-        let job = sqlx::query(
-            "SELECT 1 FROM jobs j \
-             JOIN recruitment_projects p ON p.id = j.project_id AND p.deleted_at IS NULL \
-             JOIN companies c ON c.id = p.company_id AND c.deleted_at IS NULL \
-             WHERE j.id = $1 AND j.deleted_at IS NULL AND j.status = 'open' \
-               AND (c.is_seed OR NOT c.is_private OR c.owner_user_id = $2)",
-        )
-        .bind(new.job_id.into_uuid())
-        .bind(owner.into_uuid())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|error| backend("validate application job", error))?;
-        if job.is_none() {
-            return Err(ApplicationError::JobUnavailable);
-        }
-        let stage =
-            sqlx::query(
-                "SELECT 1 FROM jobs j \
-             JOIN pipeline_stages ps ON ps.pipeline_id = j.pipeline_id \
-             WHERE j.id = $1 AND ps.position = $2",
-            )
+        let stage = sqlx::query(INITIAL_STAGE_SQL)
             .bind(new.job_id.into_uuid())
-            .bind(i32::try_from(new.stage_position).map_err(|_| {
-                ApplicationError::InvalidState("stage position overflow".to_owned())
-            })?)
+            .bind(owner.into_uuid())
             .fetch_optional(&mut *tx)
             .await
-            .map_err(|error| backend("validate application stage position", error))?;
-        if stage.is_none() {
+            .map_err(|error| backend("validate application initial stage", error))?
+            .ok_or(ApplicationError::JobUnavailable)?;
+        let stage_position: i16 = stage
+            .try_get("position")
+            .map_err(|error| backend("read application initial stage", error))?;
+        let stage_position = u16::try_from(stage_position).map_err(|_| {
+            ApplicationError::InvalidState("negative initial stage position".to_owned())
+        })?;
+        let stage_kind: String = stage
+            .try_get("kind")
+            .map_err(|error| backend("read application initial stage", error))?;
+        if stage_position != initial_stage.position || stage_kind != initial_stage.kind.as_str() {
             return Err(ApplicationError::InvalidState(
-                "stage position is not present in the job pipeline".to_owned(),
+                "initial stage changed while creating application".to_owned(),
             ));
         }
         let resume = sqlx::query(
@@ -409,9 +318,7 @@ impl ApplicationStore for PgApplicationStore {
         .bind(new.job_id.into_uuid())
         .bind(new.resume_id.into_uuid())
         .bind(new.session_id.into_uuid())
-        .bind(i32::try_from(new.stage_position).map_err(|_| {
-            ApplicationError::InvalidState("stage position overflow".to_owned())
-        })?)
+        .bind(i32::from(initial_stage.position))
         .bind(now)
         .fetch_one(&mut *tx)
         .await

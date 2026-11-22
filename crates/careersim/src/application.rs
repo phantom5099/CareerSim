@@ -7,7 +7,7 @@ pub mod store;
 
 pub use model::{
     Application, ApplicationError, ApplicationId, ApplicationStageView, ApplicationStatus,
-    ApplicationView, CurrentApplicationStage, NewApplication,
+    ApplicationView, CreateApplicationInput,
 };
 pub use service::ApplicationService;
 

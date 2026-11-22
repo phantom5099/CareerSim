@@ -13,10 +13,11 @@ use sqlx::{Executor, PgPool, Postgres, Row, postgres::PgRow};
 
 use super::{
     model::{
-        CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySource,
-        CompanySummary, Job, JobId, JobPatch, JobStatus, JobType, ListCursor, NewCompany, NewJob,
-        NewPipeline, NewProject, Pipeline, PipelineId, ProjectId, ProjectPatch, ProjectStatus,
-        RecruitmentProject, normalize_key,
+        CatalogError, Company, CompanyDetail, CompanyId, CompanySource, CompanySummary, Job, JobId,
+        JobStatus, JobType, ListCursor, Pipeline, PipelineId, ProjectId, ProjectStatus,
+        RecruitmentProject, ValidatedCompanyInput, ValidatedCompanyUpdateInput, ValidatedJobInput,
+        ValidatedJobUpdateInput, ValidatedPipelineInput, ValidatedProjectInput,
+        ValidatedProjectUpdateInput, normalize_key,
     },
     store::{CatalogScope, CatalogStore},
     template::ValidatedTemplate,
@@ -779,7 +780,7 @@ impl CatalogStore for PgCatalogStore {
     async fn create_company(
         &self,
         owner: UserId,
-        new: NewCompany,
+        new: ValidatedCompanyInput,
         now: DateTime<Utc>,
     ) -> Result<Company, CatalogError> {
         let id = CompanyId::generate();
@@ -825,7 +826,7 @@ impl CatalogStore for PgCatalogStore {
         &self,
         owner: UserId,
         id: CompanyId,
-        patch: &CompanyPatch,
+        patch: &ValidatedCompanyUpdateInput,
         now: DateTime<Utc>,
     ) -> Result<Company, CatalogError> {
         let name_key = patch.name.as_deref().map(normalize_key);
@@ -880,7 +881,7 @@ impl CatalogStore for PgCatalogStore {
         &self,
         owner: UserId,
         company_id: CompanyId,
-        new: NewProject,
+        new: ValidatedProjectInput,
         now: DateTime<Utc>,
     ) -> Result<RecruitmentProject, CatalogError> {
         self.ensure_company_owned(owner, company_id).await?;
@@ -914,7 +915,7 @@ impl CatalogStore for PgCatalogStore {
         &self,
         owner: UserId,
         id: ProjectId,
-        patch: &ProjectPatch,
+        patch: &ValidatedProjectUpdateInput,
         now: DateTime<Utc>,
     ) -> Result<RecruitmentProject, CatalogError> {
         let name_key = patch.name.as_deref().map(normalize_key);
@@ -968,7 +969,7 @@ impl CatalogStore for PgCatalogStore {
         &self,
         owner: UserId,
         project_id: ProjectId,
-        new: NewPipeline,
+        new: ValidatedPipelineInput,
         now: DateTime<Utc>,
     ) -> Result<Pipeline, CatalogError> {
         self.ensure_project_owned(owner, project_id).await?;
@@ -1030,7 +1031,7 @@ impl CatalogStore for PgCatalogStore {
         &self,
         owner: UserId,
         id: PipelineId,
-        new: NewPipeline,
+        new: ValidatedPipelineInput,
         now: DateTime<Utc>,
     ) -> Result<Pipeline, CatalogError> {
         let mut tx = self
@@ -1098,7 +1099,7 @@ impl CatalogStore for PgCatalogStore {
         &self,
         owner: UserId,
         project_id: ProjectId,
-        new: NewJob,
+        new: ValidatedJobInput,
         now: DateTime<Utc>,
     ) -> Result<Job, CatalogError> {
         self.ensure_project_owned(owner, project_id).await?;
@@ -1144,7 +1145,7 @@ impl CatalogStore for PgCatalogStore {
         &self,
         owner: UserId,
         id: JobId,
-        patch: &JobPatch,
+        patch: &ValidatedJobUpdateInput,
         now: DateTime<Utc>,
     ) -> Result<Job, CatalogError> {
         let project_row = sqlx::query(

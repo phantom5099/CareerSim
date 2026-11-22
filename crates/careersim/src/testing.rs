@@ -21,23 +21,27 @@ use tower::ServiceExt;
 
 use crate::{
     account::{
-        model::{CredentialUser, NewUser, Password, PasswordHash, ProfilePatch, User, UserId},
+        model::{
+            CredentialUser, Password, PasswordHash, UpdateProfileInput, User, UserId,
+            ValidatedUserInput,
+        },
         password::{PasswordError, PasswordHasher},
         service::{AccountService, Clock},
-        session::{LoginSession, NewLoginSession, SessionId, SessionTokenHash},
+        session::{CreateLoginSessionInput, LoginSession, SessionId, SessionTokenHash},
         store::{SessionStore, SessionStoreError, UserStore, UserStoreError},
     },
     agent::session::{StageRef, StoreSessionService},
     application::{
         Application, ApplicationError, ApplicationId, ApplicationService, ApplicationStatus,
-        ApplicationView, CurrentApplicationStage, NewApplication, store::ApplicationStore,
+        ApplicationView, CreateApplicationInput, store::ApplicationStore,
     },
     catalog::{
         model::{
-            CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySource,
-            CompanySummary, Job, JobId, JobPatch, JobStatus, ListCursor, NewCompany, NewJob,
-            NewPipeline, NewProject, Pipeline, PipelineId, ProjectId, ProjectPatch,
-            RecruitmentProject, normalize_key,
+            CatalogError, Company, CompanyDetail, CompanyId, CompanySource, CompanySummary, Job,
+            JobId, JobStatus, ListCursor, Pipeline, PipelineId, ProjectId, RecruitmentProject,
+            ValidatedCompanyInput, ValidatedCompanyUpdateInput, ValidatedJobInput,
+            ValidatedJobUpdateInput, ValidatedPipelineInput, ValidatedProjectInput,
+            ValidatedProjectUpdateInput, normalize_key,
         },
         service::CatalogService,
         store::{CatalogScope, CatalogStore},
@@ -47,8 +51,8 @@ use crate::{
     resume::{
         content::ResumeContent,
         model::{
-            NewResume, NewResumeAttachment, ParseStatus, RESUME_LIMIT, Resume, ResumeAttachment,
-            ResumeId, ResumePatch,
+            ParseStatus, RESUME_LIMIT, Resume, ResumeAttachment, ResumeId,
+            ValidatedResumeAttachmentInput, ValidatedResumeInput, ValidatedResumeUpdateInput,
         },
         parse::{AttachmentKind, ParseError, ResumeTextExtractor},
         service::ResumeService,
@@ -81,7 +85,7 @@ impl InMemoryUserStore {
 
 #[async_trait]
 impl UserStore for InMemoryUserStore {
-    async fn insert(&self, new: NewUser) -> Result<User, UserStoreError> {
+    async fn insert(&self, new: ValidatedUserInput) -> Result<User, UserStoreError> {
         let mut users = self.users.lock().unwrap();
         if users
             .values()
@@ -136,7 +140,7 @@ impl UserStore for InMemoryUserStore {
     async fn update_profile(
         &self,
         id: UserId,
-        patch: &ProfilePatch,
+        patch: &UpdateProfileInput,
         now: DateTime<Utc>,
     ) -> Result<User, UserStoreError> {
         let mut users = self.users.lock().unwrap();
@@ -164,7 +168,7 @@ impl UserStore for InMemoryUserStore {
 }
 
 /// PATCH 双层 Option 语义的参考实现；PG 适配器行为须与其一致。
-fn apply_patch(user: &mut User, patch: &ProfilePatch, now: DateTime<Utc>) {
+fn apply_patch(user: &mut User, patch: &UpdateProfileInput, now: DateTime<Utc>) {
     if let Some(name) = &patch.display_name {
         user.display_name = name.clone();
     }
@@ -200,7 +204,7 @@ impl InMemorySessionStore {
         }
     }
 
-    fn login_session(new: NewLoginSession) -> LoginSession {
+    fn login_session(new: CreateLoginSessionInput) -> LoginSession {
         LoginSession {
             id: new.id,
             user_id: new.user_id,
@@ -215,7 +219,7 @@ impl InMemorySessionStore {
 
 #[async_trait]
 impl SessionStore for InMemorySessionStore {
-    async fn insert(&self, session: NewLoginSession) -> Result<(), SessionStoreError> {
+    async fn insert(&self, session: CreateLoginSessionInput) -> Result<(), SessionStoreError> {
         self.by_hash
             .lock()
             .unwrap()
@@ -275,7 +279,7 @@ impl SessionStore for InMemorySessionStore {
     async fn rotate(
         &self,
         old: SessionId,
-        new: NewLoginSession,
+        new: CreateLoginSessionInput,
         now: DateTime<Utc>,
     ) -> Result<(), SessionStoreError> {
         let mut sessions = self.sessions.lock().unwrap();
@@ -528,7 +532,7 @@ impl CatalogStore for InMemoryCatalogStore {
     async fn create_company(
         &self,
         owner: UserId,
-        new: NewCompany,
+        new: ValidatedCompanyInput,
         now: DateTime<Utc>,
     ) -> Result<Company, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -566,7 +570,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         id: CompanyId,
-        patch: &CompanyPatch,
+        patch: &ValidatedCompanyUpdateInput,
         now: DateTime<Utc>,
     ) -> Result<Company, CatalogError> {
         // 先做只读校验（存在、归属、改名冲突），再可变更新。
@@ -665,7 +669,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         company_id: CompanyId,
-        new: NewProject,
+        new: ValidatedProjectInput,
         now: DateTime<Utc>,
     ) -> Result<RecruitmentProject, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -698,7 +702,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         id: ProjectId,
-        patch: &ProjectPatch,
+        patch: &ValidatedProjectUpdateInput,
         now: DateTime<Utc>,
     ) -> Result<RecruitmentProject, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -759,7 +763,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         project_id: ProjectId,
-        new: NewPipeline,
+        new: ValidatedPipelineInput,
         now: DateTime<Utc>,
     ) -> Result<Pipeline, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -834,7 +838,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         id: PipelineId,
-        new: NewPipeline,
+        new: ValidatedPipelineInput,
         now: DateTime<Utc>,
     ) -> Result<Pipeline, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -903,7 +907,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         project_id: ProjectId,
-        new: NewJob,
+        new: ValidatedJobInput,
         now: DateTime<Utc>,
     ) -> Result<Job, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -943,7 +947,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         id: JobId,
-        patch: &JobPatch,
+        patch: &ValidatedJobUpdateInput,
         now: DateTime<Utc>,
     ) -> Result<Job, CatalogError> {
         // 先做只读校验（存在、归属链、流水线引用），再可变更新。
@@ -1176,7 +1180,11 @@ impl ResumeStore for InMemoryResumeStore {
             .ok_or(ResumeStoreError::NotFound)
     }
 
-    async fn insert(&self, owner: UserId, resume: NewResume) -> Result<Resume, ResumeStoreError> {
+    async fn insert(
+        &self,
+        owner: UserId,
+        resume: ValidatedResumeInput,
+    ) -> Result<Resume, ResumeStoreError> {
         let mut data = self.data.lock().unwrap();
         let live_count = data
             .iter()
@@ -1223,7 +1231,7 @@ impl ResumeStore for InMemoryResumeStore {
         &self,
         owner: UserId,
         id: ResumeId,
-        patch: ResumePatch,
+        patch: ValidatedResumeUpdateInput,
     ) -> Result<Resume, ResumeStoreError> {
         let mut data = self.data.lock().unwrap();
         let Some(row) = data
@@ -1295,7 +1303,7 @@ impl ResumeStore for InMemoryResumeStore {
         &self,
         owner: UserId,
         id: ResumeId,
-        attachment: NewResumeAttachment,
+        attachment: ValidatedResumeAttachmentInput,
         parse_status: ParseStatus,
         content: serde_json::Value,
     ) -> Result<Resume, ResumeStoreError> {
@@ -1396,26 +1404,6 @@ struct NoopApplicationStore;
 
 #[async_trait]
 impl ApplicationStore for NoopApplicationStore {
-    async fn list(&self, _owner: UserId) -> Result<Vec<Application>, ApplicationError> {
-        Err(ApplicationError::NotFound)
-    }
-
-    async fn get(
-        &self,
-        _owner: UserId,
-        _id: ApplicationId,
-    ) -> Result<Application, ApplicationError> {
-        Err(ApplicationError::NotFound)
-    }
-
-    async fn current_stage(
-        &self,
-        _owner: UserId,
-        _id: ApplicationId,
-    ) -> Result<CurrentApplicationStage, ApplicationError> {
-        Err(ApplicationError::NotFound)
-    }
-
     async fn list_views(&self, _owner: UserId) -> Result<Vec<ApplicationView>, ApplicationError> {
         Err(ApplicationError::NotFound)
     }
@@ -1439,7 +1427,8 @@ impl ApplicationStore for NoopApplicationStore {
     async fn create(
         &self,
         _owner: UserId,
-        _new: NewApplication,
+        _new: CreateApplicationInput,
+        _initial_stage: StageRef,
         _now: DateTime<Utc>,
     ) -> Result<Application, ApplicationError> {
         Err(ApplicationError::NotFound)

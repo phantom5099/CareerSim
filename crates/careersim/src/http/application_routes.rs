@@ -13,11 +13,12 @@ use uuid::Uuid;
 use super::{
     auth::AuthContext,
     error::{ApiError, render_backend_chain},
+    format_timestamp,
     router::AppState,
 };
 use crate::{
     agent::session::{ApplicationId, SessionBinding, SessionService},
-    application::{ApplicationError, ApplicationStatus, NewApplication},
+    application::{ApplicationError, ApplicationStatus, CreateApplicationInput},
     catalog::model::JobId,
     pipeline::model::StageKind,
     resume::model::ResumeId,
@@ -42,26 +43,26 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ApplicationStageDto {
+struct ApplicationStageResponse {
     position: u16,
-    kind: StageKind,
+    kind: String,
     title: String,
     state: &'static str,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ApplicationDto {
+struct ApplicationResponse {
     id: String,
     company_id: String,
     job_id: String,
     job_title: String,
     resume_id: String,
     resume_title: String,
-    applied_at: chrono::DateTime<Utc>,
-    status: ApplicationStatus,
-    current_stage: StageKind,
-    stages: Vec<ApplicationStageDto>,
+    applied_at: String,
+    status: String,
+    current_stage: String,
+    stages: Vec<ApplicationStageResponse>,
     next_action: String,
 }
 
@@ -125,7 +126,7 @@ fn next_action(kind: StageKind, title: &str, status: ApplicationStatus) -> Strin
     }
 }
 
-fn to_dto(view: crate::application::ApplicationView) -> Result<ApplicationDto, ApiError> {
+fn to_response(view: crate::application::ApplicationView) -> Result<ApplicationResponse, ApiError> {
     let current = view
         .stages
         .iter()
@@ -134,9 +135,9 @@ fn to_dto(view: crate::application::ApplicationView) -> Result<ApplicationDto, A
     let stages = view
         .stages
         .iter()
-        .map(|stage| ApplicationStageDto {
+        .map(|stage| ApplicationStageResponse {
             position: stage.position,
-            kind: stage.kind,
+            kind: stage.kind.as_str().to_owned(),
             title: stage.title.clone(),
             state: stage_state(
                 view.application.status,
@@ -145,7 +146,7 @@ fn to_dto(view: crate::application::ApplicationView) -> Result<ApplicationDto, A
             ),
         })
         .collect();
-    Ok(ApplicationDto {
+    Ok(ApplicationResponse {
         id: view.application.id.into_uuid().to_string(),
         company_id: view.company_id.into_uuid().to_string(),
         job_id: view.application.job_id.into_uuid().to_string(),
@@ -154,9 +155,9 @@ fn to_dto(view: crate::application::ApplicationView) -> Result<ApplicationDto, A
         resume_title: view
             .resume_title
             .unwrap_or_else(|| "已删除的简历".to_owned()),
-        applied_at: view.application.created_at,
-        status: view.application.status,
-        current_stage: current.kind,
+        applied_at: format_timestamp(view.application.created_at),
+        status: view.application.status.as_str().to_owned(),
+        current_stage: current.kind.as_str().to_owned(),
         stages,
         next_action: next_action(current.kind, &current.title, view.application.status),
     })
@@ -165,11 +166,11 @@ fn to_dto(view: crate::application::ApplicationView) -> Result<ApplicationDto, A
 async fn list_applications(
     State(state): State<AppState>,
     auth: AuthContext,
-) -> Result<Json<Vec<ApplicationDto>>, ApiError> {
+) -> Result<Json<Vec<ApplicationResponse>>, ApiError> {
     let views = state.application.list_views(auth.user_id).await?;
     views
         .into_iter()
-        .map(to_dto)
+        .map(to_response)
         .collect::<Result<Vec<_>, _>>()
         .map(Json)
 }
@@ -178,19 +179,19 @@ async fn get_application(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(application_id): Path<Uuid>,
-) -> Result<Json<ApplicationDto>, ApiError> {
+) -> Result<Json<ApplicationResponse>, ApiError> {
     let view = state
         .application
         .get_view(auth.user_id, ApplicationId::from_uuid(application_id))
         .await?;
-    Ok(Json(to_dto(view)?))
+    Ok(Json(to_response(view)?))
 }
 
 async fn get_current_application(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(application_id): Path<Uuid>,
-) -> Result<Json<ApplicationDto>, ApiError> {
+) -> Result<Json<ApplicationResponse>, ApiError> {
     get_application(State(state), auth, Path(application_id)).await
 }
 
@@ -198,7 +199,7 @@ async fn create_application(
     State(state): State<AppState>,
     auth: AuthContext,
     Json(request): Json<CreateApplicationRequest>,
-) -> Result<(StatusCode, Json<ApplicationDto>), ApiError> {
+) -> Result<(StatusCode, Json<ApplicationResponse>), ApiError> {
     let application_id = ApplicationId::generate();
     let stage = state
         .application
@@ -216,13 +217,13 @@ async fn create_application(
         .application
         .create(
             auth.user_id,
-            NewApplication {
+            CreateApplicationInput {
                 id: application_id,
                 job_id: JobId::from_uuid(request.job_id),
                 resume_id: ResumeId::from_uuid(request.resume_id),
                 session_id: session.id,
-                stage_position: u32::from(stage.position),
             },
+            stage,
             Utc::now(),
         )
         .await;
@@ -234,20 +235,20 @@ async fn create_application(
         .application
         .get_view(auth.user_id, application_id)
         .await?;
-    Ok((StatusCode::CREATED, Json(to_dto(view)?)))
+    Ok((StatusCode::CREATED, Json(to_response(view)?)))
 }
 
 async fn advance_application(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(application_id): Path<Uuid>,
-) -> Result<Json<ApplicationDto>, ApiError> {
+) -> Result<Json<ApplicationResponse>, ApiError> {
     let view = state
         .application
         .get_view(auth.user_id, ApplicationId::from_uuid(application_id))
         .await?;
     if view.application.status != ApplicationStatus::Active {
-        return Ok(Json(to_dto(view)?));
+        return Ok(Json(to_response(view)?));
     }
     let current_index = view
         .stages
@@ -272,5 +273,5 @@ async fn advance_application(
         .application
         .get_view(auth.user_id, ApplicationId::from_uuid(application_id))
         .await?;
-    Ok(Json(to_dto(updated)?))
+    Ok(Json(to_response(updated)?))
 }

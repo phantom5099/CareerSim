@@ -7,11 +7,11 @@ use chrono::{DateTime, Utc};
 use super::{
     model::{
         Application, ApplicationError, ApplicationId, ApplicationStatus, ApplicationView,
-        CurrentApplicationStage, NewApplication,
+        CreateApplicationInput,
     },
     store::ApplicationStore,
 };
-use crate::account::model::UserId;
+use crate::{account::model::UserId, agent::session::StageRef};
 
 pub struct ApplicationService {
     store: Arc<dyn ApplicationStore>,
@@ -20,26 +20,6 @@ pub struct ApplicationService {
 impl ApplicationService {
     pub fn new(store: Arc<dyn ApplicationStore>) -> Self {
         Self { store }
-    }
-
-    pub async fn list(&self, owner: UserId) -> Result<Vec<Application>, ApplicationError> {
-        self.store.list(owner).await
-    }
-
-    pub async fn get(
-        &self,
-        owner: UserId,
-        id: ApplicationId,
-    ) -> Result<Application, ApplicationError> {
-        self.store.get(owner, id).await
-    }
-
-    pub async fn current_stage(
-        &self,
-        owner: UserId,
-        id: ApplicationId,
-    ) -> Result<CurrentApplicationStage, ApplicationError> {
-        self.store.current_stage(owner, id).await
     }
 
     pub async fn list_views(
@@ -68,10 +48,11 @@ impl ApplicationService {
     pub async fn create(
         &self,
         owner: UserId,
-        new: NewApplication,
+        new: CreateApplicationInput,
+        initial_stage: StageRef,
         now: DateTime<Utc>,
     ) -> Result<Application, ApplicationError> {
-        self.store.create(owner, new, now).await
+        self.store.create(owner, new, initial_stage, now).await
     }
 
     pub async fn update_progress(

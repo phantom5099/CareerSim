@@ -105,7 +105,7 @@ async fn create_company_without_cookie_is_unauthenticated() {
 // ---------- 公司创建与校验 ----------
 
 #[tokio::test]
-async fn create_company_returns_created_with_owner_dto() {
+async fn create_company_returns_created_with_owner_response() {
     let app = crate::testing::app();
     let cookie = registered_cookie(&app, "alice").await;
     let (status, body) = create_company(&app, &cookie, "星桥科技").await;
@@ -505,7 +505,7 @@ async fn import_template_creates_browsable_company() {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     let detail = body_json(response).await;
-    // CompanyDetailDto 扁平化公司字段，顶层即 company 的全部键。
+    // CompanyDetailResponse 扁平化公司字段，顶层即 company 的全部键。
     assert_eq!(detail["name"], "虚构星桥科技");
     assert_eq!(detail["projects"].as_array().unwrap().len(), 1);
     assert_eq!(detail["pipelines"].as_array().unwrap().len(), 1);

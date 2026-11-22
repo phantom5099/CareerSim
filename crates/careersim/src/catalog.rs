@@ -8,11 +8,17 @@ pub mod store;
 pub mod template;
 
 pub use model::{
-    CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySource, CompanySummary,
-    Job, JobId, JobPatch, JobStatus, JobType, ListCursor, NewCompany, NewJob, NewPipeline,
-    NewProject, Pipeline, PipelineId, ProjectId, ProjectPatch, ProjectStatus, RecruitmentProject,
+    CatalogError, Company, CompanyDetail, CompanyId, CompanySource, CompanySummary, Job, JobId,
+    JobStatus, JobType, ListCursor, Pipeline, PipelineId, ProjectId, ProjectStatus,
+    RecruitmentProject, ValidatedCompanyInput, ValidatedCompanyUpdateInput, ValidatedJobInput,
+    ValidatedJobUpdateInput, ValidatedPipelineInput, ValidatedProjectInput,
+    ValidatedProjectUpdateInput,
 };
-pub use service::CatalogService;
+pub use service::{
+    CatalogService, CreateCompanyInput, CreateJobInput, CreatePipelineInput, CreateProjectInput,
+    ReplacePipelineInput, UpdateCompanyInput, UpdateJobInput, UpdatePipelineInput,
+    UpdateProjectInput,
+};
 pub use store::CatalogScope;
 pub use template::{TemplateError, ValidatedTemplate};
 

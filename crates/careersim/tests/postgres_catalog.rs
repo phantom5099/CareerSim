@@ -13,7 +13,10 @@ use std::{
 
 use careersim::{
     account::{
-        model::UserId, password::Argon2idHasher, postgres_account_service, service::AccountService,
+        model::UserId,
+        password::Argon2idHasher,
+        postgres_account_service,
+        service::{AccountService, RegisterInput},
     },
     catalog::{
         model::{
@@ -21,8 +24,9 @@ use careersim::{
         },
         postgres_catalog_service,
         service::{
-            CatalogService, CompanyInput, CompanyPatchInput, JobInput, JobPatchInput,
-            PipelineInput, ProjectInput, ProjectPatchInput,
+            CatalogService, CreateCompanyInput, CreateJobInput, CreatePipelineInput,
+            CreateProjectInput, UpdateCompanyInput, UpdateJobInput, UpdatePipelineInput,
+            UpdateProjectInput,
         },
         store::CatalogScope,
     },
@@ -63,11 +67,11 @@ fn unique_suffix() -> u128 {
 
 async fn new_user(service: &AccountService, cleanup: &mut CleanupGuard, tag: &str) -> UserId {
     let user = service
-        .register(
-            &format!("b1_{}_{}", tag, unique_suffix()),
-            "password123",
-            "B1 测试",
-        )
+        .register(RegisterInput {
+            username: format!("b1_{}_{}", tag, unique_suffix()),
+            password: "password123".to_owned(),
+            display_name: "B1 测试".to_owned(),
+        })
         .await
         .expect("register")
         .user;
@@ -107,7 +111,7 @@ async fn create_company(
     catalog
         .create_company(
             owner,
-            CompanyInput {
+            CreateCompanyInput {
                 name: name.to_owned(),
                 english_name: String::new(),
                 industry: "测试行业".to_owned(),
@@ -139,7 +143,7 @@ async fn create_full_company(
         .create_project(
             owner,
             company.id,
-            ProjectInput {
+            CreateProjectInput {
                 name: "2027 校招".to_owned(),
                 season: "2027".to_owned(),
                 status: None,
@@ -154,7 +158,7 @@ async fn create_full_company(
         .create_pipeline(
             owner,
             project.id,
-            PipelineInput {
+            CreatePipelineInput {
                 name: "校招主流程".to_owned(),
                 stages: Some(two_stage_input()),
             },
@@ -170,7 +174,7 @@ async fn create_full_company(
             .create_job(
                 owner,
                 project.id,
-                JobInput {
+                CreateJobInput {
                     pipeline_id: Some(pipeline.id),
                     title: title.to_owned(),
                     city: "上海".to_owned(),
@@ -215,9 +219,9 @@ async fn seed_templates_are_read_only() {
             .update_company(
                 viewer,
                 seed_id,
-                CompanyPatchInput {
+                UpdateCompanyInput {
                     name: Some("篡改".to_owned()),
-                    ..CompanyPatchInput::default()
+                    ..UpdateCompanyInput::default()
                 },
                 chrono::Utc::now(),
             )
@@ -235,7 +239,7 @@ async fn seed_templates_are_read_only() {
             .create_project(
                 viewer,
                 seed_id,
-                ProjectInput {
+                CreateProjectInput {
                     name: "植入项目".to_owned(),
                     season: String::new(),
                     status: None,
@@ -296,9 +300,9 @@ async fn others_public_templates_readable_not_writable() {
             .update_company(
                 bob,
                 company_id,
-                CompanyPatchInput {
+                UpdateCompanyInput {
                     name: Some("抢改".to_owned()),
-                    ..CompanyPatchInput::default()
+                    ..UpdateCompanyInput::default()
                 },
                 chrono::Utc::now(),
             )
@@ -316,7 +320,7 @@ async fn others_public_templates_readable_not_writable() {
             .create_project(
                 bob,
                 company_id,
-                ProjectInput {
+                CreateProjectInput {
                     name: "越权项目".to_owned(),
                     season: String::new(),
                     status: None,
@@ -404,10 +408,10 @@ async fn company_name_conflicts_within_owner() {
     let err = catalog
         .create_company(
             alice,
-            CompanyInput {
+            CreateCompanyInput {
                 name: format!("{name} "),
                 industry: "测试行业".to_owned(),
-                ..CompanyInput::default()
+                ..CreateCompanyInput::default()
             },
             chrono::Utc::now(),
         )
@@ -476,7 +480,7 @@ async fn pipeline_must_belong_to_same_project() {
         .create_project(
             alice,
             company.id,
-            ProjectInput {
+            CreateProjectInput {
                 name: "项目甲".to_owned(),
                 season: String::new(),
                 status: None,
@@ -491,7 +495,7 @@ async fn pipeline_must_belong_to_same_project() {
         .create_project(
             alice,
             company.id,
-            ProjectInput {
+            CreateProjectInput {
                 name: "项目乙".to_owned(),
                 season: String::new(),
                 status: None,
@@ -506,7 +510,7 @@ async fn pipeline_must_belong_to_same_project() {
         .create_pipeline(
             alice,
             project_a.id,
-            PipelineInput {
+            CreatePipelineInput {
                 name: "甲流程".to_owned(),
                 stages: Some(two_stage_input()),
             },
@@ -520,7 +524,7 @@ async fn pipeline_must_belong_to_same_project() {
         .create_job(
             alice,
             project_b.id,
-            JobInput {
+            CreateJobInput {
                 pipeline_id: Some(pipeline.id),
                 title: "跨项目岗位".to_owned(),
                 city: String::new(),
@@ -551,7 +555,7 @@ async fn pipeline_must_belong_to_same_project() {
         .create_job(
             alice,
             project_a.id,
-            JobInput {
+            CreateJobInput {
                 pipeline_id: Some(pipeline.id),
                 title: "合法岗位".to_owned(),
                 city: String::new(),
@@ -571,13 +575,13 @@ async fn pipeline_must_belong_to_same_project() {
         .update_job(
             alice,
             job.id,
-            careersim::catalog::service::JobPatchInput {
+            careersim::catalog::service::UpdateJobInput {
                 pipeline_id: Some(
                     catalog
                         .create_pipeline(
                             alice,
                             project_b.id,
-                            PipelineInput {
+                            CreatePipelineInput {
                                 name: "乙流程".to_owned(),
                                 stages: Some(two_stage_input()),
                             },
@@ -587,7 +591,7 @@ async fn pipeline_must_belong_to_same_project() {
                         .expect("pipeline b")
                         .id,
                 ),
-                ..JobPatchInput::default()
+                ..UpdateJobInput::default()
             },
             now,
         )
@@ -727,11 +731,11 @@ async fn project_and_pipeline_updates_and_deletes() {
         .update_project(
             alice,
             project_id,
-            ProjectPatchInput {
+            UpdateProjectInput {
                 name: Some("改名项目".to_owned()),
                 status: Some(ProjectStatus::Closed),
                 deadline: Some(None),
-                ..ProjectPatchInput::default()
+                ..UpdateProjectInput::default()
             },
             now,
         )
@@ -746,10 +750,10 @@ async fn project_and_pipeline_updates_and_deletes() {
         .update_project(
             alice,
             project_id,
-            ProjectPatchInput {
+            UpdateProjectInput {
                 status: Some(ProjectStatus::Open),
                 deadline: Some(Some(now.date_naive() - chrono::Duration::days(1))),
-                ..ProjectPatchInput::default()
+                ..UpdateProjectInput::default()
             },
             now,
         )
@@ -760,9 +764,9 @@ async fn project_and_pipeline_updates_and_deletes() {
         .update_project(
             alice,
             project_id,
-            ProjectPatchInput {
+            UpdateProjectInput {
                 deadline: Some(Some(now.date_naive() + chrono::Duration::days(30))),
-                ..ProjectPatchInput::default()
+                ..UpdateProjectInput::default()
             },
             now,
         )
@@ -772,13 +776,27 @@ async fn project_and_pipeline_updates_and_deletes() {
 
     // 流水线改名；Bob 越权拒绝。
     let renamed = catalog
-        .update_pipeline(alice, pipeline_id, "新流程名", now)
+        .update_pipeline(
+            alice,
+            pipeline_id,
+            UpdatePipelineInput {
+                name: "新流程名".to_owned(),
+            },
+            now,
+        )
         .await
         .expect("rename pipeline");
     assert_eq!(renamed.name, "新流程名");
     assert!(matches!(
         catalog
-            .update_pipeline(bob, pipeline_id, "越权名", now)
+            .update_pipeline(
+                bob,
+                pipeline_id,
+                UpdatePipelineInput {
+                    name: "越权名".to_owned(),
+                },
+                now,
+            )
             .await,
         Err(CatalogError::NotFound)
     ));

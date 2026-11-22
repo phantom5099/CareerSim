@@ -7,8 +7,8 @@ pub use crate::agent::session::ApplicationId;
 use crate::{
     account::model::UserId,
     agent::session::SessionId,
-    catalog::model::{CompanyId, JobId, PipelineId},
-    pipeline::model::{StageDefinition, StageKind, StagePosition},
+    catalog::model::{CompanyId, JobId},
+    pipeline::model::{StageKind, StagePosition},
     resume::model::ResumeId,
 };
 
@@ -57,19 +57,11 @@ pub struct Application {
 }
 
 #[derive(Debug, Clone)]
-pub struct NewApplication {
+pub struct CreateApplicationInput {
     pub id: ApplicationId,
     pub job_id: JobId,
     pub resume_id: ResumeId,
     pub session_id: SessionId,
-    pub stage_position: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CurrentApplicationStage {
-    pub application: Application,
-    pub pipeline_id: PipelineId,
-    pub stage: StageDefinition,
 }
 
 /// 面向 HTTP 与客户端的投递视图；阶段位置和类型来自岗位关联的流程模板。

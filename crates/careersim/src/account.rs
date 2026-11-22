@@ -16,13 +16,16 @@ mod tests;
 use std::sync::Arc;
 
 pub use model::{
-    AccountError, CredentialUser, NewUser, Password, PasswordHash, ProfilePatch, User, UserId,
-    Username,
+    AccountError, CredentialUser, Password, PasswordHash, UpdateProfileInput, User, UserId,
+    Username, ValidatedUserInput,
 };
 pub use password::{Argon2idHasher, PasswordError, PasswordHasher};
-pub use service::{AccountService, Authenticated, Clock, SessionGrant, SystemClock};
+pub use service::{
+    AccountService, Authenticated, ChangePasswordInput, Clock, LoginInput, RegisterInput,
+    SessionGrant, SystemClock,
+};
 pub use session::{
-    IDLE_TIMEOUT, LoginSession, NewLoginSession, SESSION_COOKIE, SessionId, SessionToken,
+    CreateLoginSessionInput, IDLE_TIMEOUT, LoginSession, SESSION_COOKIE, SessionId, SessionToken,
     SessionTokenHash, TOUCH_THROTTLE,
 };
 use sqlx::PgPool;

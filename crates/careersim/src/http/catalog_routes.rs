@@ -16,22 +16,25 @@ use uuid::Uuid;
 use super::{
     auth::AuthContext,
     error::{ApiError, render_backend_chain},
+    format_timestamp,
     router::AppState,
 };
 use crate::{
     catalog::{
+        CatalogService, CreateCompanyInput, CreateJobInput, CreatePipelineInput,
+        CreateProjectInput, ReplacePipelineInput, UpdateCompanyInput, UpdateJobInput,
+        UpdatePipelineInput, UpdateProjectInput,
         model::{
             CatalogError, Company, CompanyId, CompanySummary, JobId, JobStatus, JobType,
             ListCursor, PipelineId, ProjectId, ProjectStatus,
         },
-        service::{
-            CatalogService, CompanyInput, CompanyPatchInput, JobInput, JobPatchInput,
-            PipelineInput, ProjectInput, ProjectPatchInput,
-        },
         store::CatalogScope,
         template::TemplateError,
     },
-    pipeline::model::StageDefinition,
+    pipeline::{
+        model::{StageDefinition, StageKind},
+        rubric::EvaluationRubric,
+    },
 };
 
 #[cfg(test)]
@@ -123,7 +126,7 @@ fn render_template_issue(issue: TemplateError) -> String {
     }
 }
 
-// ---------- 输入 DTO ----------
+// ---------- HTTP 请求结构体 ----------
 
 fn parse_status<T>(
     raw: &str,
@@ -150,7 +153,7 @@ fn parse_date(raw: &str, field: &'static str) -> Result<NaiveDate, ApiError> {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CompanyRequest {
+struct CreateCompanyRequest {
     name: String,
     #[serde(default)]
     english_name: String,
@@ -173,27 +176,27 @@ struct CompanyRequest {
     is_private: bool,
 }
 
-impl From<CompanyRequest> for CompanyInput {
-    fn from(dto: CompanyRequest) -> Self {
+impl From<CreateCompanyRequest> for CreateCompanyInput {
+    fn from(request: CreateCompanyRequest) -> Self {
         Self {
-            name: dto.name,
-            english_name: dto.english_name,
-            industry: dto.industry,
-            city: dto.city,
-            size: dto.size,
-            tagline: dto.tagline,
-            description: dto.description,
-            highlights: dto.highlights,
-            logo_text: dto.logo_text,
-            accent: dto.accent,
-            is_private: dto.is_private,
+            name: request.name,
+            english_name: request.english_name,
+            industry: request.industry,
+            city: request.city,
+            size: request.size,
+            tagline: request.tagline,
+            description: request.description,
+            highlights: request.highlights,
+            logo_text: request.logo_text,
+            accent: request.accent,
+            is_private: request.is_private,
         }
     }
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CompanyPatchRequest {
+struct UpdateCompanyRequest {
     name: Option<String>,
     english_name: Option<String>,
     industry: Option<String>,
@@ -207,27 +210,27 @@ struct CompanyPatchRequest {
     is_private: Option<bool>,
 }
 
-impl From<CompanyPatchRequest> for CompanyPatchInput {
-    fn from(dto: CompanyPatchRequest) -> Self {
+impl From<UpdateCompanyRequest> for UpdateCompanyInput {
+    fn from(request: UpdateCompanyRequest) -> Self {
         Self {
-            name: dto.name,
-            english_name: dto.english_name,
-            industry: dto.industry,
-            city: dto.city,
-            size: dto.size,
-            tagline: dto.tagline,
-            description: dto.description,
-            highlights: dto.highlights,
-            logo_text: dto.logo_text,
-            accent: dto.accent,
-            is_private: dto.is_private,
+            name: request.name,
+            english_name: request.english_name,
+            industry: request.industry,
+            city: request.city,
+            size: request.size,
+            tagline: request.tagline,
+            description: request.description,
+            highlights: request.highlights,
+            logo_text: request.logo_text,
+            accent: request.accent,
+            is_private: request.is_private,
         }
     }
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ProjectRequest {
+struct CreateProjectRequest {
     name: String,
     #[serde(default)]
     season: String,
@@ -237,9 +240,9 @@ struct ProjectRequest {
     description: String,
 }
 
-impl ProjectRequest {
-    fn into_input(self) -> Result<ProjectInput, ApiError> {
-        Ok(ProjectInput {
+impl CreateProjectRequest {
+    fn into_input(self) -> Result<CreateProjectInput, ApiError> {
+        Ok(CreateProjectInput {
             name: self.name,
             season: self.season,
             status: self
@@ -257,7 +260,7 @@ impl ProjectRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ProjectPatchRequest {
+struct UpdateProjectRequest {
     name: Option<String>,
     season: Option<String>,
     status: Option<String>,
@@ -266,9 +269,9 @@ struct ProjectPatchRequest {
     description: Option<String>,
 }
 
-impl ProjectPatchRequest {
-    fn into_input(self) -> Result<ProjectPatchInput, ApiError> {
-        Ok(ProjectPatchInput {
+impl UpdateProjectRequest {
+    fn into_input(self) -> Result<UpdateProjectInput, ApiError> {
+        Ok(UpdateProjectInput {
             name: self.name,
             season: self.season,
             status: self
@@ -286,15 +289,54 @@ impl ProjectPatchRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PipelineRequest {
+struct CreatePipelineRequest {
     name: String,
     /// 阶段定义必填；缺省或为空会被服务层拒绝。
-    stages: Option<Vec<StageDefinition>>,
+    stages: Option<Vec<PipelineStageRequest>>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct JobRequest {
+struct UpdatePipelineRequest {
+    name: String,
+    #[serde(default)]
+    stages: Option<Vec<PipelineStageRequest>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReplacePipelineRequest {
+    name: String,
+    stages: Option<Vec<PipelineStageRequest>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PipelineStageRequest {
+    position: u16,
+    kind: StageKind,
+    title: String,
+    min_rounds: u8,
+    max_rounds: u8,
+    rubric: EvaluationRubric,
+}
+
+impl From<PipelineStageRequest> for StageDefinition {
+    fn from(stage: PipelineStageRequest) -> Self {
+        Self {
+            position: stage.position,
+            kind: stage.kind,
+            title: stage.title,
+            min_rounds: stage.min_rounds,
+            max_rounds: stage.max_rounds,
+            rubric: stage.rubric,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateJobRequest {
     pipeline_id: Uuid,
     title: String,
     #[serde(default)]
@@ -310,9 +352,9 @@ struct JobRequest {
     status: Option<String>,
 }
 
-impl JobRequest {
-    fn into_input(self) -> Result<JobInput, ApiError> {
-        Ok(JobInput {
+impl CreateJobRequest {
+    fn into_input(self) -> Result<CreateJobInput, ApiError> {
+        Ok(CreateJobInput {
             pipeline_id: Some(PipelineId::from_uuid(self.pipeline_id)),
             title: self.title,
             city: self.city,
@@ -342,7 +384,7 @@ impl JobRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct JobPatchRequest {
+struct UpdateJobRequest {
     pipeline_id: Option<Uuid>,
     title: Option<String>,
     city: Option<String>,
@@ -355,9 +397,9 @@ struct JobPatchRequest {
     status: Option<String>,
 }
 
-impl JobPatchRequest {
-    fn into_input(self) -> Result<JobPatchInput, ApiError> {
-        Ok(JobPatchInput {
+impl UpdateJobRequest {
+    fn into_input(self) -> Result<UpdateJobInput, ApiError> {
+        Ok(UpdateJobInput {
             pipeline_id: self.pipeline_id.map(PipelineId::from_uuid),
             title: self.title,
             city: self.city,
@@ -402,10 +444,10 @@ fn parse_cursor(raw: &str) -> Result<ListCursor, ApiError> {
     Ok(ListCursor { updated_at, id })
 }
 
-// ---------- 响应 DTO ----------
+// ---------- HTTP 响应结构体 ----------
 
-fn company_dto(company: &Company, viewer: crate::account::UserId) -> CompanyDto {
-    CompanyDto {
+fn company_response(company: &Company, viewer: crate::account::UserId) -> CompanyResponse {
+    CompanyResponse {
         id: company.id.into_uuid().to_string(),
         source: company.source.as_str(),
         owner_id: company.owner.map(|user| user.into_uuid().to_string()),
@@ -421,14 +463,14 @@ fn company_dto(company: &Company, viewer: crate::account::UserId) -> CompanyDto 
         highlights: company.highlights.clone(),
         logo_text: company.logo_text.clone(),
         accent: company.accent.clone(),
-        created_at: company.created_at.to_rfc3339(),
-        updated_at: company.updated_at.to_rfc3339(),
+        created_at: format_timestamp(company.created_at),
+        updated_at: format_timestamp(company.updated_at),
     }
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CompanyDto {
+struct CompanyResponse {
     id: String,
     source: &'static str,
     owner_id: Option<String>,
@@ -450,7 +492,7 @@ struct CompanyDto {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ProjectDto {
+struct ProjectResponse {
     id: String,
     company_id: String,
     name: String,
@@ -462,7 +504,7 @@ struct ProjectDto {
     updated_at: String,
 }
 
-impl From<crate::catalog::RecruitmentProject> for ProjectDto {
+impl From<crate::catalog::RecruitmentProject> for ProjectResponse {
     fn from(project: crate::catalog::RecruitmentProject) -> Self {
         Self {
             id: project.id.into_uuid().to_string(),
@@ -472,39 +514,68 @@ impl From<crate::catalog::RecruitmentProject> for ProjectDto {
             status: project.status.as_str().to_owned(),
             deadline: project.deadline.map(|date| date.to_string()),
             description: project.description,
-            created_at: project.created_at.to_rfc3339(),
-            updated_at: project.updated_at.to_rfc3339(),
+            created_at: format_timestamp(project.created_at),
+            updated_at: format_timestamp(project.updated_at),
         }
     }
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PipelineDto {
+struct PipelineResponse {
     id: String,
     project_id: String,
     name: String,
-    stages: Vec<StageDefinition>,
+    stages: Vec<PipelineStageResponse>,
     created_at: String,
     updated_at: String,
 }
 
-impl From<crate::catalog::Pipeline> for PipelineDto {
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PipelineStageResponse {
+    position: u16,
+    kind: StageKind,
+    title: String,
+    min_rounds: u8,
+    max_rounds: u8,
+    rubric: EvaluationRubric,
+}
+
+impl From<&StageDefinition> for PipelineStageResponse {
+    fn from(stage: &StageDefinition) -> Self {
+        Self {
+            position: stage.position,
+            kind: stage.kind,
+            title: stage.title.clone(),
+            min_rounds: stage.min_rounds,
+            max_rounds: stage.max_rounds,
+            rubric: stage.rubric.clone(),
+        }
+    }
+}
+
+impl From<crate::catalog::Pipeline> for PipelineResponse {
     fn from(pipeline: crate::catalog::Pipeline) -> Self {
         Self {
             id: pipeline.id.into_uuid().to_string(),
             project_id: pipeline.project_id.into_uuid().to_string(),
             name: pipeline.name,
-            stages: pipeline.definition.stages().to_vec(),
-            created_at: pipeline.created_at.to_rfc3339(),
-            updated_at: pipeline.updated_at.to_rfc3339(),
+            stages: pipeline
+                .definition
+                .stages()
+                .iter()
+                .map(PipelineStageResponse::from)
+                .collect(),
+            created_at: format_timestamp(pipeline.created_at),
+            updated_at: format_timestamp(pipeline.updated_at),
         }
     }
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct JobDto {
+struct JobResponse {
     id: String,
     project_id: String,
     pipeline_id: String,
@@ -521,7 +592,7 @@ struct JobDto {
     updated_at: String,
 }
 
-impl From<crate::catalog::Job> for JobDto {
+impl From<crate::catalog::Job> for JobResponse {
     fn from(job: crate::catalog::Job) -> Self {
         Self {
             id: job.id.into_uuid().to_string(),
@@ -536,48 +607,48 @@ impl From<crate::catalog::Job> for JobDto {
             tags: job.tags,
             description: job.description,
             status: job.status.as_str().to_owned(),
-            created_at: job.created_at.to_rfc3339(),
-            updated_at: job.updated_at.to_rfc3339(),
+            created_at: format_timestamp(job.created_at),
+            updated_at: format_timestamp(job.updated_at),
         }
     }
 }
 
 #[derive(Debug, Serialize)]
-struct CompanyDetailDto {
+struct CompanyDetailResponse {
     #[serde(flatten)]
-    company: CompanyDto,
-    projects: Vec<ProjectDto>,
-    pipelines: Vec<PipelineDto>,
-    jobs: Vec<JobDto>,
+    company: CompanyResponse,
+    projects: Vec<ProjectResponse>,
+    pipelines: Vec<PipelineResponse>,
+    jobs: Vec<JobResponse>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CompanyListItemDto {
+struct CompanyListItemResponse {
     #[serde(flatten)]
-    company: CompanyDto,
+    company: CompanyResponse,
     project_count: u32,
     visible_job_count: u32,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CompanyListDto {
-    items: Vec<CompanyListItemDto>,
+struct CompanyListResponse {
+    items: Vec<CompanyListItemResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_cursor: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TemplateIssueDto {
+struct TemplateIssueResponse {
     path: String,
     message: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TemplatePreviewDto {
+struct TemplatePreviewResponse {
     name: String,
     industry: String,
     project_count: usize,
@@ -587,17 +658,17 @@ struct TemplatePreviewDto {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TemplateValidateDto {
+struct TemplateValidationResponse {
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    preview: Option<TemplatePreviewDto>,
+    preview: Option<TemplatePreviewResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    errors: Option<Vec<TemplateIssueDto>>,
+    errors: Option<Vec<TemplateIssueResponse>>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ImportCreatedDto {
+struct ImportCompanyResponse {
     company_id: String,
 }
 
@@ -607,7 +678,7 @@ async fn list_companies(
     State(state): State<AppState>,
     auth: AuthContext,
     Query(query): Query<ListQuery>,
-) -> Result<Json<CompanyListDto>, ApiError> {
+) -> Result<Json<CompanyListResponse>, ApiError> {
     let scope = match query.scope.as_deref().unwrap_or("all") {
         "mine" => CatalogScope::Mine,
         "public" => CatalogScope::Public,
@@ -630,13 +701,13 @@ async fn list_companies(
         .await?;
     let items = summaries
         .iter()
-        .map(|summary: &CompanySummary| CompanyListItemDto {
-            company: company_dto(&summary.company, auth.user_id),
+        .map(|summary: &CompanySummary| CompanyListItemResponse {
+            company: company_response(&summary.company, auth.user_id),
             project_count: summary.project_count,
             visible_job_count: summary.visible_job_count,
         })
         .collect();
-    Ok(Json(CompanyListDto {
+    Ok(Json(CompanyListResponse {
         items,
         next_cursor: next_cursor.map(|cursor| cursor.to_string()),
     }))
@@ -646,36 +717,40 @@ async fn get_company(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(company_id): Path<Uuid>,
-) -> Result<Json<CompanyDetailDto>, ApiError> {
+) -> Result<Json<CompanyDetailResponse>, ApiError> {
     let detail = state
         .catalog
         .get_company(auth.user_id, CompanyId::from_uuid(company_id))
         .await?
         .ok_or_else(|| ApiError::not_found("resource not found"))?;
-    Ok(Json(CompanyDetailDto {
-        company: company_dto(&detail.company, auth.user_id),
-        projects: detail.projects.into_iter().map(ProjectDto::from).collect(),
+    Ok(Json(CompanyDetailResponse {
+        company: company_response(&detail.company, auth.user_id),
+        projects: detail
+            .projects
+            .into_iter()
+            .map(ProjectResponse::from)
+            .collect(),
         pipelines: detail
             .pipelines
             .into_iter()
-            .map(PipelineDto::from)
+            .map(PipelineResponse::from)
             .collect(),
-        jobs: detail.jobs.into_iter().map(JobDto::from).collect(),
+        jobs: detail.jobs.into_iter().map(JobResponse::from).collect(),
     }))
 }
 
 async fn create_company(
     State(state): State<AppState>,
     auth: AuthContext,
-    Json(request): Json<CompanyRequest>,
-) -> Result<(StatusCode, Json<CompanyDto>), ApiError> {
+    Json(request): Json<CreateCompanyRequest>,
+) -> Result<(StatusCode, Json<CompanyResponse>), ApiError> {
     let company = state
         .catalog
         .create_company(auth.user_id, request.into(), Utc::now())
         .await?;
     Ok((
         StatusCode::CREATED,
-        Json(company_dto(&company, auth.user_id)),
+        Json(company_response(&company, auth.user_id)),
     ))
 }
 
@@ -683,8 +758,8 @@ async fn update_company(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(company_id): Path<Uuid>,
-    Json(request): Json<CompanyPatchRequest>,
-) -> Result<Json<CompanyDto>, ApiError> {
+    Json(request): Json<UpdateCompanyRequest>,
+) -> Result<Json<CompanyResponse>, ApiError> {
     let company = state
         .catalog
         .update_company(
@@ -694,7 +769,7 @@ async fn update_company(
             Utc::now(),
         )
         .await?;
-    Ok(Json(company_dto(&company, auth.user_id)))
+    Ok(Json(company_response(&company, auth.user_id)))
 }
 
 async fn delete_company(
@@ -713,8 +788,8 @@ async fn create_project(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(company_id): Path<Uuid>,
-    Json(request): Json<ProjectRequest>,
-) -> Result<(StatusCode, Json<ProjectDto>), ApiError> {
+    Json(request): Json<CreateProjectRequest>,
+) -> Result<(StatusCode, Json<ProjectResponse>), ApiError> {
     let project = state
         .catalog
         .create_project(
@@ -724,15 +799,15 @@ async fn create_project(
             Utc::now(),
         )
         .await?;
-    Ok((StatusCode::CREATED, Json(ProjectDto::from(project))))
+    Ok((StatusCode::CREATED, Json(ProjectResponse::from(project))))
 }
 
 async fn update_project(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(project_id): Path<Uuid>,
-    Json(request): Json<ProjectPatchRequest>,
-) -> Result<Json<ProjectDto>, ApiError> {
+    Json(request): Json<UpdateProjectRequest>,
+) -> Result<Json<ProjectResponse>, ApiError> {
     let project = state
         .catalog
         .update_project(
@@ -742,7 +817,7 @@ async fn update_project(
             Utc::now(),
         )
         .await?;
-    Ok(Json(ProjectDto::from(project)))
+    Ok(Json(ProjectResponse::from(project)))
 }
 
 async fn delete_project(
@@ -761,29 +836,31 @@ async fn create_pipeline(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(project_id): Path<Uuid>,
-    Json(request): Json<PipelineRequest>,
-) -> Result<(StatusCode, Json<PipelineDto>), ApiError> {
+    Json(request): Json<CreatePipelineRequest>,
+) -> Result<(StatusCode, Json<PipelineResponse>), ApiError> {
     let pipeline = state
         .catalog
         .create_pipeline(
             auth.user_id,
             ProjectId::from_uuid(project_id),
-            PipelineInput {
+            CreatePipelineInput {
                 name: request.name,
-                stages: request.stages,
+                stages: request
+                    .stages
+                    .map(|stages| stages.into_iter().map(StageDefinition::from).collect()),
             },
             Utc::now(),
         )
         .await?;
-    Ok((StatusCode::CREATED, Json(PipelineDto::from(pipeline))))
+    Ok((StatusCode::CREATED, Json(PipelineResponse::from(pipeline))))
 }
 
 async fn update_pipeline(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(pipeline_id): Path<Uuid>,
-    Json(request): Json<PipelineRequest>,
-) -> Result<Json<PipelineDto>, ApiError> {
+    Json(request): Json<UpdatePipelineRequest>,
+) -> Result<Json<PipelineResponse>, ApiError> {
     // 阶段修改未纳入本期语义；显式拒绝而非静默丢弃。
     if request.stages.is_some() {
         return Err(ApiError::validation_fields(
@@ -796,19 +873,19 @@ async fn update_pipeline(
         .update_pipeline(
             auth.user_id,
             PipelineId::from_uuid(pipeline_id),
-            &request.name,
+            UpdatePipelineInput { name: request.name },
             Utc::now(),
         )
         .await?;
-    Ok(Json(PipelineDto::from(pipeline)))
+    Ok(Json(PipelineResponse::from(pipeline)))
 }
 
 async fn replace_pipeline(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(pipeline_id): Path<Uuid>,
-    Json(request): Json<PipelineRequest>,
-) -> Result<Json<PipelineDto>, ApiError> {
+    Json(request): Json<ReplacePipelineRequest>,
+) -> Result<Json<PipelineResponse>, ApiError> {
     let stages = request.stages.ok_or_else(|| {
         ApiError::validation_fields("pipeline stages are required", vec!["stages".to_owned()])
     })?;
@@ -817,14 +894,14 @@ async fn replace_pipeline(
         .replace_pipeline(
             auth.user_id,
             PipelineId::from_uuid(pipeline_id),
-            PipelineInput {
+            ReplacePipelineInput {
                 name: request.name,
-                stages: Some(stages),
+                stages: stages.into_iter().map(StageDefinition::from).collect(),
             },
             Utc::now(),
         )
         .await?;
-    Ok(Json(PipelineDto::from(pipeline)))
+    Ok(Json(PipelineResponse::from(pipeline)))
 }
 
 async fn delete_pipeline(
@@ -843,8 +920,8 @@ async fn create_job(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(project_id): Path<Uuid>,
-    Json(request): Json<JobRequest>,
-) -> Result<(StatusCode, Json<JobDto>), ApiError> {
+    Json(request): Json<CreateJobRequest>,
+) -> Result<(StatusCode, Json<JobResponse>), ApiError> {
     let job = state
         .catalog
         .create_job(
@@ -854,15 +931,15 @@ async fn create_job(
             Utc::now(),
         )
         .await?;
-    Ok((StatusCode::CREATED, Json(JobDto::from(job))))
+    Ok((StatusCode::CREATED, Json(JobResponse::from(job))))
 }
 
 async fn update_job(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(job_id): Path<Uuid>,
-    Json(request): Json<JobPatchRequest>,
-) -> Result<Json<JobDto>, ApiError> {
+    Json(request): Json<UpdateJobRequest>,
+) -> Result<Json<JobResponse>, ApiError> {
     let job = state
         .catalog
         .update_job(
@@ -872,7 +949,7 @@ async fn update_job(
             Utc::now(),
         )
         .await?;
-    Ok(Json(JobDto::from(job)))
+    Ok(Json(JobResponse::from(job)))
 }
 
 async fn delete_job(
@@ -892,11 +969,11 @@ async fn delete_job(
 async fn validate_template(
     _auth: AuthContext,
     Json(body): Json<Value>,
-) -> Result<Json<TemplateValidateDto>, ApiError> {
+) -> Result<Json<TemplateValidationResponse>, ApiError> {
     match CatalogService::validate_template(&body) {
-        Ok(validated) => Ok(Json(TemplateValidateDto {
+        Ok(validated) => Ok(Json(TemplateValidationResponse {
             ok: true,
-            preview: Some(TemplatePreviewDto {
+            preview: Some(TemplatePreviewResponse {
                 name: validated.company.name,
                 industry: validated.company.industry,
                 project_count: validated.projects.len(),
@@ -905,13 +982,13 @@ async fn validate_template(
             }),
             errors: None,
         })),
-        Err(errors) => Ok(Json(TemplateValidateDto {
+        Err(errors) => Ok(Json(TemplateValidationResponse {
             ok: false,
             preview: None,
             errors: Some(
                 errors
                     .into_iter()
-                    .map(|issue| TemplateIssueDto {
+                    .map(|issue| TemplateIssueResponse {
                         path: issue.path,
                         message: issue.message,
                     })
@@ -925,14 +1002,14 @@ async fn import_template(
     State(state): State<AppState>,
     auth: AuthContext,
     Json(body): Json<Value>,
-) -> Result<(StatusCode, Json<ImportCreatedDto>), ApiError> {
+) -> Result<(StatusCode, Json<ImportCompanyResponse>), ApiError> {
     let company_id = state
         .catalog
         .import_template(auth.user_id, &body, Utc::now())
         .await?;
     Ok((
         StatusCode::CREATED,
-        Json(ImportCreatedDto {
+        Json(ImportCompanyResponse {
             company_id: company_id.into_uuid().to_string(),
         }),
     ))

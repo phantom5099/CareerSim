@@ -118,7 +118,7 @@ pub struct ResumeAttachment {
 
 /// 待写入的附件元数据；MIME 由 `file_name` 后缀推导，不单独落库。
 #[derive(Debug, Clone)]
-pub struct NewResumeAttachment {
+pub struct ValidatedResumeAttachmentInput {
     pub storage_key: String,
     pub file_name: String,
 }
@@ -142,17 +142,17 @@ pub struct Resume {
 
 /// 插入简历的存储输入；`content` 已完成边界校验并序列化。
 #[derive(Debug, Clone)]
-pub struct NewResume {
+pub struct ValidatedResumeInput {
     pub id: ResumeId,
     pub title: String,
     pub content: serde_json::Value,
-    pub attachment: Option<NewResumeAttachment>,
+    pub attachment: Option<ValidatedResumeAttachmentInput>,
     pub parse_status: ParseStatus,
 }
 
 /// 编辑输入；PATCH 语义，字段为空表示不修改。
 #[derive(Debug, Clone, Default)]
-pub struct ResumePatch {
+pub struct ValidatedResumeUpdateInput {
     pub title: Option<String>,
     pub content: Option<serde_json::Value>,
 }

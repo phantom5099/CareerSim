@@ -8,9 +8,10 @@ use chrono::{DateTime, Utc};
 
 use super::{
     model::{
-        CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySummary, Job, JobId,
-        JobPatch, ListCursor, NewCompany, NewJob, NewPipeline, NewProject, Pipeline, PipelineId,
-        ProjectId, ProjectPatch, RecruitmentProject,
+        CatalogError, Company, CompanyDetail, CompanyId, CompanySummary, Job, JobId, ListCursor,
+        Pipeline, PipelineId, ProjectId, RecruitmentProject, ValidatedCompanyInput,
+        ValidatedCompanyUpdateInput, ValidatedJobInput, ValidatedJobUpdateInput,
+        ValidatedPipelineInput, ValidatedProjectInput, ValidatedProjectUpdateInput,
     },
     template::ValidatedTemplate,
 };
@@ -48,7 +49,7 @@ pub trait CatalogStore: Send + Sync {
     async fn create_company(
         &self,
         owner: UserId,
-        new: NewCompany,
+        new: ValidatedCompanyInput,
         now: DateTime<Utc>,
     ) -> Result<Company, CatalogError>;
 
@@ -56,7 +57,7 @@ pub trait CatalogStore: Send + Sync {
         &self,
         owner: UserId,
         id: CompanyId,
-        patch: &CompanyPatch,
+        patch: &ValidatedCompanyUpdateInput,
         now: DateTime<Utc>,
     ) -> Result<Company, CatalogError>;
 
@@ -71,7 +72,7 @@ pub trait CatalogStore: Send + Sync {
         &self,
         owner: UserId,
         company_id: CompanyId,
-        new: NewProject,
+        new: ValidatedProjectInput,
         now: DateTime<Utc>,
     ) -> Result<RecruitmentProject, CatalogError>;
 
@@ -79,7 +80,7 @@ pub trait CatalogStore: Send + Sync {
         &self,
         owner: UserId,
         id: ProjectId,
-        patch: &ProjectPatch,
+        patch: &ValidatedProjectUpdateInput,
         now: DateTime<Utc>,
     ) -> Result<RecruitmentProject, CatalogError>;
 
@@ -94,7 +95,7 @@ pub trait CatalogStore: Send + Sync {
         &self,
         owner: UserId,
         project_id: ProjectId,
-        new: NewPipeline,
+        new: ValidatedPipelineInput,
         now: DateTime<Utc>,
     ) -> Result<Pipeline, CatalogError>;
 
@@ -111,7 +112,7 @@ pub trait CatalogStore: Send + Sync {
         &self,
         owner: UserId,
         id: PipelineId,
-        new: NewPipeline,
+        new: ValidatedPipelineInput,
         now: DateTime<Utc>,
     ) -> Result<Pipeline, CatalogError>;
 
@@ -126,7 +127,7 @@ pub trait CatalogStore: Send + Sync {
         &self,
         owner: UserId,
         project_id: ProjectId,
-        new: NewJob,
+        new: ValidatedJobInput,
         now: DateTime<Utc>,
     ) -> Result<Job, CatalogError>;
 
@@ -134,7 +135,7 @@ pub trait CatalogStore: Send + Sync {
         &self,
         owner: UserId,
         id: JobId,
-        patch: &JobPatch,
+        patch: &ValidatedJobUpdateInput,
         now: DateTime<Utc>,
     ) -> Result<Job, CatalogError>;
 

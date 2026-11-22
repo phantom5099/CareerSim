@@ -8,10 +8,11 @@ use chrono::{DateTime, NaiveDate, Utc};
 
 use super::{
     model::{
-        CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySummary,
-        JOB_TAGS_MAX_ITEMS, Job, JobId, JobPatch, JobStatus, JobType, ListCursor, NewCompany,
-        NewJob, NewPipeline, NewProject, Pipeline, PipelineId, ProjectId, ProjectPatch,
-        ProjectStatus, RecruitmentProject, validate_company_fields, validate_project_name,
+        CatalogError, Company, CompanyDetail, CompanyId, CompanySummary, JOB_TAGS_MAX_ITEMS, Job,
+        JobId, JobStatus, JobType, ListCursor, Pipeline, PipelineId, ProjectId, ProjectStatus,
+        RecruitmentProject, ValidatedCompanyInput, ValidatedCompanyUpdateInput, ValidatedJobInput,
+        ValidatedJobUpdateInput, ValidatedPipelineInput, ValidatedProjectInput,
+        ValidatedProjectUpdateInput, validate_company_fields, validate_project_name,
         validate_salary,
     },
     store::{CatalogScope, CatalogStore},
@@ -55,7 +56,7 @@ impl CatalogService {
     pub async fn create_company(
         &self,
         owner: UserId,
-        input: CompanyInput,
+        input: CreateCompanyInput,
         now: DateTime<Utc>,
     ) -> Result<Company, CatalogError> {
         let new = input.validate()?;
@@ -66,7 +67,7 @@ impl CatalogService {
         &self,
         owner: UserId,
         id: CompanyId,
-        input: CompanyPatchInput,
+        input: UpdateCompanyInput,
         now: DateTime<Utc>,
     ) -> Result<Company, CatalogError> {
         let patch = input.validate()?;
@@ -86,7 +87,7 @@ impl CatalogService {
         &self,
         owner: UserId,
         company_id: CompanyId,
-        input: ProjectInput,
+        input: CreateProjectInput,
         now: DateTime<Utc>,
     ) -> Result<RecruitmentProject, CatalogError> {
         let new = input.validate()?;
@@ -97,7 +98,7 @@ impl CatalogService {
         &self,
         owner: UserId,
         id: ProjectId,
-        input: ProjectPatchInput,
+        input: UpdateProjectInput,
         now: DateTime<Utc>,
     ) -> Result<RecruitmentProject, CatalogError> {
         let patch = input.validate()?;
@@ -117,7 +118,7 @@ impl CatalogService {
         &self,
         owner: UserId,
         project_id: ProjectId,
-        input: PipelineInput,
+        input: CreatePipelineInput,
         now: DateTime<Utc>,
     ) -> Result<Pipeline, CatalogError> {
         let new = input.validate()?;
@@ -130,10 +131,10 @@ impl CatalogService {
         &self,
         owner: UserId,
         id: PipelineId,
-        name: &str,
+        input: UpdatePipelineInput,
         now: DateTime<Utc>,
     ) -> Result<Pipeline, CatalogError> {
-        let new_name = PipelineInput::validate_name(name)?;
+        let new_name = input.validate()?;
         self.store.update_pipeline(owner, id, &new_name, now).await
     }
 
@@ -141,7 +142,7 @@ impl CatalogService {
         &self,
         owner: UserId,
         id: PipelineId,
-        input: PipelineInput,
+        input: ReplacePipelineInput,
         now: DateTime<Utc>,
     ) -> Result<Pipeline, CatalogError> {
         let new = input.validate()?;
@@ -161,7 +162,7 @@ impl CatalogService {
         &self,
         owner: UserId,
         project_id: ProjectId,
-        input: JobInput,
+        input: CreateJobInput,
         now: DateTime<Utc>,
     ) -> Result<Job, CatalogError> {
         let new = input.validate()?;
@@ -172,7 +173,7 @@ impl CatalogService {
         &self,
         owner: UserId,
         id: JobId,
-        input: JobPatchInput,
+        input: UpdateJobInput,
         now: DateTime<Utc>,
     ) -> Result<Job, CatalogError> {
         let patch = input.validate()?;
@@ -209,7 +210,7 @@ impl CatalogService {
 
 /// 路由层提交的公司字段（未校验）。
 #[derive(Debug, Clone, Default)]
-pub struct CompanyInput {
+pub struct CreateCompanyInput {
     pub name: String,
     pub english_name: String,
     pub industry: String,
@@ -223,8 +224,8 @@ pub struct CompanyInput {
     pub is_private: bool,
 }
 
-impl CompanyInput {
-    fn validate(self) -> Result<NewCompany, CatalogError> {
+impl CreateCompanyInput {
+    fn validate(self) -> Result<ValidatedCompanyInput, CatalogError> {
         validate_company_fields(&self.name, &self.highlights, &self.logo_text, &self.accent)?;
         if self.industry.trim().is_empty() {
             return Err(CatalogError::InvalidInput {
@@ -232,7 +233,7 @@ impl CompanyInput {
                 reason: "must be a non-empty string".to_owned(),
             });
         }
-        Ok(NewCompany {
+        Ok(ValidatedCompanyInput {
             name: self.name.trim().to_owned(),
             english_name: self.english_name.trim().to_owned(),
             industry: self.industry.trim().to_owned(),
@@ -254,7 +255,7 @@ impl CompanyInput {
 
 /// 公司部分更新（未校验）；外层 `None` 表示不修改。
 #[derive(Debug, Clone, Default)]
-pub struct CompanyPatchInput {
+pub struct UpdateCompanyInput {
     pub name: Option<String>,
     pub english_name: Option<String>,
     pub industry: Option<String>,
@@ -268,8 +269,8 @@ pub struct CompanyPatchInput {
     pub is_private: Option<bool>,
 }
 
-impl CompanyPatchInput {
-    fn validate(self) -> Result<CompanyPatch, CatalogError> {
+impl UpdateCompanyInput {
+    fn validate(self) -> Result<ValidatedCompanyUpdateInput, CatalogError> {
         if let Some(name) = &self.name {
             validate_company_fields(name, &[], "", "")?;
         }
@@ -290,7 +291,7 @@ impl CompanyPatchInput {
                 reason: "must be a non-empty string".to_owned(),
             });
         }
-        Ok(CompanyPatch {
+        Ok(ValidatedCompanyUpdateInput {
             name: self.name.map(|value| value.trim().to_owned()),
             english_name: self.english_name.map(|value| value.trim().to_owned()),
             industry: self.industry.map(|value| value.trim().to_owned()),
@@ -312,7 +313,7 @@ impl CompanyPatchInput {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ProjectInput {
+pub struct CreateProjectInput {
     pub name: String,
     pub season: String,
     pub status: Option<ProjectStatus>,
@@ -320,10 +321,10 @@ pub struct ProjectInput {
     pub description: String,
 }
 
-impl ProjectInput {
-    fn validate(self) -> Result<NewProject, CatalogError> {
+impl CreateProjectInput {
+    fn validate(self) -> Result<ValidatedProjectInput, CatalogError> {
         validate_project_name(&self.name)?;
-        Ok(NewProject {
+        Ok(ValidatedProjectInput {
             name: self.name.trim().to_owned(),
             season: self.season.trim().to_owned(),
             status: self.status.unwrap_or(ProjectStatus::Open),
@@ -334,7 +335,7 @@ impl ProjectInput {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ProjectPatchInput {
+pub struct UpdateProjectInput {
     pub name: Option<String>,
     pub season: Option<String>,
     pub status: Option<ProjectStatus>,
@@ -342,12 +343,12 @@ pub struct ProjectPatchInput {
     pub description: Option<String>,
 }
 
-impl ProjectPatchInput {
-    fn validate(self) -> Result<ProjectPatch, CatalogError> {
+impl UpdateProjectInput {
+    fn validate(self) -> Result<ValidatedProjectUpdateInput, CatalogError> {
         if let Some(name) = &self.name {
             validate_project_name(name)?;
         }
-        Ok(ProjectPatch {
+        Ok(ValidatedProjectUpdateInput {
             name: self.name.map(|value| value.trim().to_owned()),
             season: self.season.map(|value| value.trim().to_owned()),
             status: self.status,
@@ -358,13 +359,13 @@ impl ProjectPatchInput {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct PipelineInput {
+pub struct CreatePipelineInput {
     pub name: String,
     pub stages: Option<Vec<StageDefinition>>,
 }
 
-impl PipelineInput {
-    fn validate(self) -> Result<NewPipeline, CatalogError> {
+impl CreatePipelineInput {
+    fn validate(self) -> Result<ValidatedPipelineInput, CatalogError> {
         let name = Self::validate_name(&self.name)?;
         let stages = self.stages.unwrap_or_default();
         let definition =
@@ -372,7 +373,7 @@ impl PipelineInput {
                 field: "stages",
                 reason: error.to_string(),
             })?;
-        Ok(NewPipeline { name, definition })
+        Ok(ValidatedPipelineInput { name, definition })
     }
 
     fn validate_name(name: &str) -> Result<String, CatalogError> {
@@ -381,8 +382,35 @@ impl PipelineInput {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct UpdatePipelineInput {
+    pub name: String,
+}
+
+impl UpdatePipelineInput {
+    fn validate(self) -> Result<String, CatalogError> {
+        CreatePipelineInput::validate_name(&self.name)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ReplacePipelineInput {
+    pub name: String,
+    pub stages: Vec<StageDefinition>,
+}
+
+impl ReplacePipelineInput {
+    fn validate(self) -> Result<ValidatedPipelineInput, CatalogError> {
+        CreatePipelineInput {
+            name: self.name,
+            stages: Some(self.stages),
+        }
+        .validate()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
-pub struct JobInput {
+pub struct CreateJobInput {
     pub pipeline_id: Option<PipelineId>,
     pub title: String,
     pub city: String,
@@ -395,8 +423,8 @@ pub struct JobInput {
     pub status: Option<JobStatus>,
 }
 
-impl JobInput {
-    fn validate(self) -> Result<NewJob, CatalogError> {
+impl CreateJobInput {
+    fn validate(self) -> Result<ValidatedJobInput, CatalogError> {
         let pipeline_id = self.pipeline_id.ok_or(CatalogError::InvalidInput {
             field: "pipelineId",
             reason: "is required".to_owned(),
@@ -414,7 +442,7 @@ impl JobInput {
             });
         }
         validate_salary(self.salary_min, self.salary_max, self.salary_months)?;
-        Ok(NewJob {
+        Ok(ValidatedJobInput {
             pipeline_id,
             title: self.title.trim().to_owned(),
             city: self.city.trim().to_owned(),
@@ -434,7 +462,7 @@ impl JobInput {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct JobPatchInput {
+pub struct UpdateJobInput {
     pub pipeline_id: Option<PipelineId>,
     pub title: Option<String>,
     pub city: Option<String>,
@@ -447,8 +475,8 @@ pub struct JobPatchInput {
     pub status: Option<JobStatus>,
 }
 
-impl JobPatchInput {
-    fn validate(self) -> Result<JobPatch, CatalogError> {
+impl UpdateJobInput {
+    fn validate(self) -> Result<ValidatedJobUpdateInput, CatalogError> {
         if let Some(title) = &self.title
             && title.trim().is_empty()
         {
@@ -477,7 +505,7 @@ impl JobPatchInput {
                 (min, max, months)
             }
         };
-        Ok(JobPatch {
+        Ok(ValidatedJobUpdateInput {
             pipeline_id: self.pipeline_id,
             title: self.title.map(|value| value.trim().to_owned()),
             city: self.city.map(|value| value.trim().to_owned()),

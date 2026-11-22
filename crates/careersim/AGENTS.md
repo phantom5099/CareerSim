@@ -17,7 +17,7 @@ src/
 ├── testing.rs         # crate 级测试装配：账户/catalog/resume 端口替身 + Router/oneshot（cfg(test)）
 ├── account.rs         # account 模块入口与公开类型聚合
 ├── account/
-│   ├── model.rs       # UserId/Username/Password/User/ProfilePatch 与字段边界
+│   ├── model.rs       # UserId/Username/Password/User/UpdateProfileInput 与字段边界
 │   ├── password.rs    # PasswordHasher trait 与 Argon2id 实现
 │   ├── session.rs     # 会话令牌、LoginSession 与空闲/绝对超时规则
 │   ├── service.rs     # AccountService：注册/登录/注销/资料/改密
@@ -32,7 +32,7 @@ src/
 │   └── postgres.rs    # PostgreSQL 适配器
 ├── pipeline.rs        # pipeline 模块入口（纯领域，无 IO）
 ├── pipeline/
-│   ├── model.rs       # StageKey/StageKind/StageDefinition/PipelineDefinition/Score、StageTransition/plan_transition、OfferTerms/build_offer_terms
+│   ├── model.rs       # StagePosition/StageKind/StageDefinition/PipelineDefinition/Score、StageTransition/plan_transition、OfferTerms/build_offer_terms
 │   ├── rubric.rs      # EvaluationRubric 与加权评估；StageEvaluation/DimensionScore/evaluate
 │   ├── validate.rs    # 纯校验函数与 PipelineError
 │   └── tests.rs
@@ -46,7 +46,7 @@ src/
 │   └── tests.rs       # 仅放该模块单测
 ├── resume.rs          # resume 模块入口与公开类型聚合
 ├── resume/
-│   ├── model.rs       # Resume/ResumeKind/ResumeAttachment/NewResume/ResumePatch 与限额
+│   ├── model.rs       # Resume/ResumeAttachment/ValidatedResumeInput/ValidatedResumeUpdateInput 与限额
 │   ├── content.rs     # ResumeContent 结构化简历与字段校验
 │   ├── parse.rs       # ResumeTextExtractor、附件类型检测与解析草稿构造
 │   ├── service.rs     # ResumeService：CRUD、上传解析、附件打开（≤3 份、默认提升）
@@ -228,6 +228,16 @@ application     → account / agent::session（ID）/ catalog（JobId）/ resume
 - 生产路径使用 `unwrap()` / `expect()` / `panic!()` / `todo!()` / `unimplemented!()`；
   必须处理 `Option` / `Result`（`unwrap_or` / `unwrap_or_else` 等返回值写法不受限）。
 - 在没有用户要求时注册生产工具。
+
+### 4.10 层间输入输出命名
+
+- HTTP 层请求体、查询参数和路径参数使用 `CreateXRequest`、`UpdateXRequest` 等 `Request` 后缀，响应使用 `XResponse`、`XListResponse` 等 `Response` 后缀；HTTP DTO 默认只在对应路由模块内可见。
+- service 层接收业务输入统一使用 `CreateXInput`、`UpdateXInput` 等 `Input` 后缀，不使用 `Command`、泛化的 `Request` 或 `NewX` 表示业务输入。
+- 已完成领域校验、可直接交给持久化层的输入使用 `ValidatedXInput` 或 `ValidatedXUpdateInput`，与未校验的 service 输入区分。
+- store 层只接收已校验输入、实体和值对象，不依赖 HTTP 请求或响应类型。
+- 领域实体、值对象和领域错误保留业务名称，不使用 `Dto`、`Request`、`Response` 后缀。
+- 查询聚合结果使用 `XView` 或明确的 `XDetails` 命名，HTTP 响应在边界层完成转换。
+- 同一层级和同一操作只保留一套输入或输出类型；本轮范围内未被真实调用且没有外部契约、迁移兼容或测试替身职责的冗余定义必须清理。
 
 ---
 
