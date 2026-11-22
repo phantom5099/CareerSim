@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 
 use super::{
     model::{
-        Application, ApplicationError, ApplicationId, ApplicationStatus, CurrentApplicationStage,
-        NewApplication,
+        Application, ApplicationError, ApplicationId, ApplicationStatus, ApplicationView,
+        CurrentApplicationStage, NewApplication,
     },
     store::ApplicationStore,
 };
@@ -40,6 +40,29 @@ impl ApplicationService {
         id: ApplicationId,
     ) -> Result<CurrentApplicationStage, ApplicationError> {
         self.store.current_stage(owner, id).await
+    }
+
+    pub async fn list_views(
+        &self,
+        owner: UserId,
+    ) -> Result<Vec<ApplicationView>, ApplicationError> {
+        self.store.list_views(owner).await
+    }
+
+    pub async fn get_view(
+        &self,
+        owner: UserId,
+        id: ApplicationId,
+    ) -> Result<ApplicationView, ApplicationError> {
+        self.store.get_view(owner, id).await
+    }
+
+    pub async fn initial_stage(
+        &self,
+        owner: UserId,
+        job_id: crate::catalog::model::JobId,
+    ) -> Result<crate::agent::session::StageRef, ApplicationError> {
+        self.store.initial_stage(owner, job_id).await
     }
 
     pub async fn create(

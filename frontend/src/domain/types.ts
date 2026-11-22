@@ -161,6 +161,7 @@ export type ApplicationStatus = 'active' | 'rejected' | 'offer' | 'withdrawn'
 export type StageState = 'done' | 'current' | 'pending' | 'failed'
 
 export interface ApplicationStage {
+  position: number
   key: StageKey
   state: StageState
   note?: string

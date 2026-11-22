@@ -27,6 +27,11 @@ use crate::{
         session::{LoginSession, NewLoginSession, SessionId, SessionTokenHash},
         store::{SessionStore, SessionStoreError, UserStore, UserStoreError},
     },
+    agent::session::{StageRef, StoreSessionService},
+    application::{
+        Application, ApplicationError, ApplicationId, ApplicationService, ApplicationStatus,
+        ApplicationView, CurrentApplicationStage, NewApplication, store::ApplicationStore,
+    },
     catalog::{
         model::{
             CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySource,
@@ -50,6 +55,7 @@ use crate::{
         storage::{AttachmentStore, AttachmentStoreError},
         store::{ResumeStore, ResumeStoreError},
     },
+    store::memory::MemorySessionStore,
 };
 
 // ---------- 账户端口替身 ----------
@@ -1394,6 +1400,71 @@ impl ResumeTextExtractor for StaticTextExtractor {
     }
 }
 
+struct NoopApplicationStore;
+
+#[async_trait]
+impl ApplicationStore for NoopApplicationStore {
+    async fn list(&self, _owner: UserId) -> Result<Vec<Application>, ApplicationError> {
+        Err(ApplicationError::NotFound)
+    }
+
+    async fn get(
+        &self,
+        _owner: UserId,
+        _id: ApplicationId,
+    ) -> Result<Application, ApplicationError> {
+        Err(ApplicationError::NotFound)
+    }
+
+    async fn current_stage(
+        &self,
+        _owner: UserId,
+        _id: ApplicationId,
+    ) -> Result<CurrentApplicationStage, ApplicationError> {
+        Err(ApplicationError::NotFound)
+    }
+
+    async fn list_views(&self, _owner: UserId) -> Result<Vec<ApplicationView>, ApplicationError> {
+        Err(ApplicationError::NotFound)
+    }
+
+    async fn get_view(
+        &self,
+        _owner: UserId,
+        _id: ApplicationId,
+    ) -> Result<ApplicationView, ApplicationError> {
+        Err(ApplicationError::NotFound)
+    }
+
+    async fn initial_stage(
+        &self,
+        _owner: UserId,
+        _job_id: JobId,
+    ) -> Result<StageRef, ApplicationError> {
+        Err(ApplicationError::NotFound)
+    }
+
+    async fn create(
+        &self,
+        _owner: UserId,
+        _new: NewApplication,
+        _now: DateTime<Utc>,
+    ) -> Result<Application, ApplicationError> {
+        Err(ApplicationError::NotFound)
+    }
+
+    async fn update_progress(
+        &self,
+        _owner: UserId,
+        _id: ApplicationId,
+        _status: ApplicationStatus,
+        _stage_position: u32,
+        _now: DateTime<Utc>,
+    ) -> Result<Application, ApplicationError> {
+        Err(ApplicationError::NotFound)
+    }
+}
+
 /// 组装带内存账户服务的完整应用路由。
 pub(crate) fn app() -> Router {
     let service = AccountService::new(
@@ -1408,10 +1479,14 @@ pub(crate) fn app() -> Router {
         Arc::new(InMemoryAttachmentStore::new()),
         Arc::new(StaticTextExtractor),
     );
+    let application = ApplicationService::new(Arc::new(NoopApplicationStore));
+    let sessions = StoreSessionService::new(Arc::new(MemorySessionStore::new()));
     let state = AppState {
         account: Arc::new(service),
         resume: Arc::new(resume),
         catalog: Arc::new(catalog),
+        application: Arc::new(application),
+        sessions: Arc::new(sessions),
         allowed_origins: Arc::from([ALLOWED_ORIGIN.to_owned()]),
         cookie_secure: false,
     };

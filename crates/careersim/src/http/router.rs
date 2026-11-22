@@ -18,9 +18,12 @@ use tower_http::{
 };
 use tracing::{Span, field};
 
-use super::{account_routes, auth::origin_check, catalog_routes, resume_routes};
+use super::{
+    account_routes, application_routes, auth::origin_check, catalog_routes, resume_routes,
+};
 use crate::{
-    account::service::AccountService, catalog::service::CatalogService,
+    account::service::AccountService, agent::session::StoreSessionService,
+    application::service::ApplicationService, catalog::service::CatalogService,
     resume::service::ResumeService,
 };
 
@@ -30,6 +33,8 @@ pub struct AppState {
     pub resume: Arc<ResumeService>,
     /// 公司模板目录服务（plan/01 §4.3）。
     pub catalog: Arc<CatalogService>,
+    pub application: Arc<ApplicationService>,
+    pub sessions: Arc<StoreSessionService>,
     /// 非 GET/HEAD/OPTIONS 请求的允许 Origin 列表（plan/01 §7.2）。
     pub allowed_origins: Arc<[String]>,
     /// Cookie `Secure` 属性开关；HttpOnly 恒开启。
@@ -43,6 +48,7 @@ pub fn router(state: AppState) -> Router {
         .route("/metrics", get(metrics))
         // 各业务路由自带分组限流，故在顶层合并（B2）。
         .merge(account_routes::router())
+        .merge(application_routes::router())
         .merge(resume_routes::router())
         .merge(catalog_routes::router())
         .layer(middleware::from_fn_with_state(state.clone(), origin_check))

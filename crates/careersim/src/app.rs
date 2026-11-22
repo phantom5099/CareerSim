@@ -12,6 +12,7 @@ use crate::{
         context::DefaultContextBuilder,
         tool::ToolRegistry,
     },
+    application::postgres_application_service,
     config::AppConfig,
     http::router::{AppState, router},
     llm::openai_compat::OpenAiCompatibleClient,
@@ -37,13 +38,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     sqlx::migrate!("./migrations").run(&pool).await?;
 
     let http = reqwest::Client::builder().timeout(MODEL_TIMEOUT).build()?;
+    let sessions = Arc::new(postgres_session_service(pool.clone()));
 
     // AgentLoop 先按原装配保留；投递编排接入属 02/04 方案。
     let _agent = AgentLoop::new(
         Arc::new(OpenAiCompatibleClient::new(config.llm, http)),
         Arc::new(DefaultContextBuilder),
         Arc::new(ToolRegistry::new()),
-        Arc::new(postgres_session_service(pool.clone())),
+        sessions.clone(),
         LoopConfig {
             max_steps: config.max_steps,
         },
@@ -78,6 +80,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let resume = postgres_resume_service(pool.clone(), attachment_store);
+    let application = postgres_application_service(pool.clone());
 
     // 公司模板目录（plan/01 §4.3）；PostgreSQL 适配。
     let catalog = crate::catalog::postgres_catalog_service(pool);
@@ -86,6 +89,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         account: Arc::new(account),
         resume: Arc::new(resume),
         catalog: Arc::new(catalog),
+        application: Arc::new(application),
+        sessions,
         allowed_origins: config.http.allowed_origins.clone().into(),
         cookie_secure: config.http.cookie_secure,
     };

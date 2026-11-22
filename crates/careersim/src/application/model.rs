@@ -1,17 +1,19 @@
 //! 投递领域模型。
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 pub use crate::agent::session::ApplicationId;
 use crate::{
     account::model::UserId,
     agent::session::SessionId,
-    catalog::model::{JobId, PipelineId},
-    pipeline::model::StageDefinition,
+    catalog::model::{CompanyId, JobId, PipelineId},
+    pipeline::model::{StageDefinition, StageKind, StagePosition},
     resume::model::ResumeId,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ApplicationStatus {
     Active,
     Rejected,
@@ -68,6 +70,23 @@ pub struct CurrentApplicationStage {
     pub application: Application,
     pub pipeline_id: PipelineId,
     pub stage: StageDefinition,
+}
+
+/// 面向 HTTP 与客户端的投递视图；阶段位置和类型来自岗位关联的流程模板。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplicationView {
+    pub application: Application,
+    pub company_id: CompanyId,
+    pub job_title: String,
+    pub resume_title: Option<String>,
+    pub stages: Vec<ApplicationStageView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplicationStageView {
+    pub position: StagePosition,
+    pub kind: StageKind,
+    pub title: String,
 }
 
 #[derive(Debug, thiserror::Error)]

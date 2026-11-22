@@ -1,5 +1,7 @@
 //! 投递 PostgreSQL 适配器。
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::json;
@@ -8,16 +10,16 @@ use tracing::instrument;
 
 use super::{
     model::{
-        Application, ApplicationError, ApplicationId, ApplicationStatus, CurrentApplicationStage,
-        NewApplication,
+        Application, ApplicationError, ApplicationId, ApplicationStageView, ApplicationStatus,
+        ApplicationView, CurrentApplicationStage, NewApplication,
     },
     store::ApplicationStore,
 };
 use crate::{
     account::model::UserId,
-    agent::session::SessionId,
-    catalog::model::{JobId, PipelineId},
-    pipeline::model::StageDefinition,
+    agent::session::{SessionId, StageRef},
+    catalog::model::{CompanyId, JobId, PipelineId},
+    pipeline::model::{StageDefinition, StageKind},
     resume::model::ResumeId,
 };
 
@@ -95,6 +97,32 @@ const GET_CURRENT_STAGE_SQL: &str = "SELECT a.id, a.user_id, a.job_id, a.resume_
     JOIN jobs j ON j.id = a.job_id \
     JOIN pipeline_stages ps ON ps.pipeline_id = j.pipeline_id AND ps.position = a.stage_position \
     WHERE a.id = $1 AND a.user_id = $2";
+const LIST_APPLICATION_VIEWS_SQL: &str = "SELECT a.id, a.user_id, a.job_id, a.resume_id, a.session_id, a.status, a.stage_position, a.created_at, a.updated_at, \
+    c.id AS company_id, \
+    j.title AS job_title, r.title AS resume_title, j.pipeline_id \
+    FROM applications a \
+    JOIN jobs j ON j.id = a.job_id AND j.deleted_at IS NULL \
+    JOIN recruitment_projects p ON p.id = j.project_id AND p.deleted_at IS NULL \
+    JOIN companies c ON c.id = p.company_id AND c.deleted_at IS NULL \
+    LEFT JOIN resumes r ON r.id = a.resume_id \
+    WHERE a.user_id = $1 ORDER BY a.updated_at DESC, a.id DESC";
+const GET_APPLICATION_VIEW_SQL: &str = "SELECT a.id, a.user_id, a.job_id, a.resume_id, a.session_id, a.status, a.stage_position, a.created_at, a.updated_at, \
+    c.id AS company_id, \
+    j.title AS job_title, r.title AS resume_title, j.pipeline_id \
+    FROM applications a \
+    JOIN jobs j ON j.id = a.job_id AND j.deleted_at IS NULL \
+    JOIN recruitment_projects p ON p.id = j.project_id AND p.deleted_at IS NULL \
+    JOIN companies c ON c.id = p.company_id AND c.deleted_at IS NULL \
+    LEFT JOIN resumes r ON r.id = a.resume_id \
+    WHERE a.id = $1 AND a.user_id = $2";
+const LIST_PIPELINE_STAGES_SQL: &str =
+    "SELECT position, kind, title FROM pipeline_stages WHERE pipeline_id = $1 ORDER BY position";
+const INITIAL_STAGE_SQL: &str = "SELECT ps.position, ps.kind FROM jobs j \
+    JOIN recruitment_projects p ON p.id = j.project_id AND p.deleted_at IS NULL \
+    JOIN companies c ON c.id = p.company_id AND c.deleted_at IS NULL \
+    JOIN pipeline_stages ps ON ps.pipeline_id = j.pipeline_id AND ps.position = 0 \
+    WHERE j.id = $1 AND j.deleted_at IS NULL AND j.status = 'open' \
+      AND (c.is_seed OR NOT c.is_private OR c.owner_user_id = $2)";
 
 fn stage_from_row(row: &sqlx::postgres::PgRow) -> Result<StageDefinition, ApplicationError> {
     let value = json!({
@@ -118,6 +146,60 @@ fn stage_from_row(row: &sqlx::postgres::PgRow) -> Result<StageDefinition, Applic
             .map_err(|error| backend("read application stage", error))?,
     });
     serde_json::from_value(value).map_err(|error| ApplicationError::InvalidState(error.to_string()))
+}
+
+fn stage_view_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<ApplicationStageView, ApplicationError> {
+    let position: i16 = row
+        .try_get("position")
+        .map_err(|error| backend("read application stage", error))?;
+    let position = u16::try_from(position)
+        .map_err(|_| ApplicationError::InvalidState("negative stage position".to_owned()))?;
+    let kind: String = row
+        .try_get("kind")
+        .map_err(|error| backend("read application stage", error))?;
+    let kind = serde_json::from_value::<StageKind>(json!(kind))
+        .map_err(|error| ApplicationError::InvalidState(error.to_string()))?;
+    Ok(ApplicationStageView {
+        position,
+        kind,
+        title: row
+            .try_get("title")
+            .map_err(|error| backend("read application stage", error))?,
+    })
+}
+
+async fn load_pipeline_stages(
+    pool: &PgPool,
+    pipeline_id: PipelineId,
+) -> Result<Vec<ApplicationStageView>, ApplicationError> {
+    let rows = sqlx::query(LIST_PIPELINE_STAGES_SQL)
+        .bind(pipeline_id.into_uuid())
+        .fetch_all(pool)
+        .await
+        .map_err(|error| backend("list application stages", error))?;
+    rows.iter().map(stage_view_from_row).collect()
+}
+
+fn application_view_from_row(
+    row: &sqlx::postgres::PgRow,
+    stages: Vec<ApplicationStageView>,
+) -> Result<ApplicationView, ApplicationError> {
+    Ok(ApplicationView {
+        application: application_from_row(row)?,
+        company_id: CompanyId::from_uuid(
+            row.try_get("company_id")
+                .map_err(|error| backend("read application company", error))?,
+        ),
+        job_title: row
+            .try_get("job_title")
+            .map_err(|error| backend("read application job", error))?,
+        resume_title: row
+            .try_get("resume_title")
+            .map_err(|error| backend("read application resume", error))?,
+        stages,
+    })
 }
 
 #[async_trait]
@@ -166,6 +248,81 @@ impl ApplicationStore for PgApplicationStore {
             application,
             pipeline_id,
             stage: stage_from_row(&row)?,
+        })
+    }
+
+    #[instrument(name = "application.postgres.list_views", level = "debug", skip(self), fields(owner_id = ?owner))]
+    async fn list_views(&self, owner: UserId) -> Result<Vec<ApplicationView>, ApplicationError> {
+        let rows = sqlx::query(LIST_APPLICATION_VIEWS_SQL)
+            .bind(owner.into_uuid())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| backend("list application views", error))?;
+        let mut stages_by_pipeline: HashMap<PipelineId, Vec<ApplicationStageView>> = HashMap::new();
+        let mut views = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let pipeline_id = PipelineId::from_uuid(
+                row.try_get("pipeline_id")
+                    .map_err(|error| backend("read application pipeline", error))?,
+            );
+            let stages = if let Some(stages) = stages_by_pipeline.get(&pipeline_id) {
+                stages.clone()
+            } else {
+                let stages = load_pipeline_stages(&self.pool, pipeline_id).await?;
+                stages_by_pipeline.insert(pipeline_id, stages.clone());
+                stages
+            };
+            views.push(application_view_from_row(row, stages)?);
+        }
+        Ok(views)
+    }
+
+    #[instrument(name = "application.postgres.get_view", level = "debug", skip(self), fields(owner_id = ?owner, application_id = ?id))]
+    async fn get_view(
+        &self,
+        owner: UserId,
+        id: ApplicationId,
+    ) -> Result<ApplicationView, ApplicationError> {
+        let row = sqlx::query(GET_APPLICATION_VIEW_SQL)
+            .bind(id.into_uuid())
+            .bind(owner.into_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|error| backend("get application view", error))?
+            .ok_or(ApplicationError::NotFound)?;
+        let pipeline_id = PipelineId::from_uuid(
+            row.try_get("pipeline_id")
+                .map_err(|error| backend("read application pipeline", error))?,
+        );
+        let stages = load_pipeline_stages(&self.pool, pipeline_id).await?;
+        application_view_from_row(&row, stages)
+    }
+
+    #[instrument(name = "application.postgres.initial_stage", level = "debug", skip(self), fields(owner_id = ?owner, job_id = ?job_id))]
+    async fn initial_stage(
+        &self,
+        owner: UserId,
+        job_id: JobId,
+    ) -> Result<StageRef, ApplicationError> {
+        let row = sqlx::query(INITIAL_STAGE_SQL)
+            .bind(job_id.into_uuid())
+            .bind(owner.into_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|error| backend("get application initial stage", error))?
+            .ok_or(ApplicationError::JobUnavailable)?;
+        let position: i16 = row
+            .try_get("position")
+            .map_err(|error| backend("read application initial stage", error))?;
+        let kind: String = row
+            .try_get("kind")
+            .map_err(|error| backend("read application initial stage", error))?;
+        Ok(StageRef {
+            position: u16::try_from(position).map_err(|_| {
+                ApplicationError::InvalidState("negative stage position".to_owned())
+            })?,
+            kind: serde_json::from_value::<StageKind>(json!(kind))
+                .map_err(|error| ApplicationError::InvalidState(error.to_string()))?,
         })
     }
 

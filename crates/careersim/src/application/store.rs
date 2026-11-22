@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use chrono::DateTime;
 
 use super::model::{
-    Application, ApplicationError, ApplicationId, ApplicationStatus, CurrentApplicationStage,
-    NewApplication,
+    Application, ApplicationError, ApplicationId, ApplicationStatus, ApplicationView,
+    CurrentApplicationStage, NewApplication,
 };
 use crate::account::model::UserId;
 
@@ -20,6 +20,20 @@ pub trait ApplicationStore: Send + Sync {
         owner: UserId,
         id: ApplicationId,
     ) -> Result<CurrentApplicationStage, ApplicationError>;
+
+    async fn list_views(&self, owner: UserId) -> Result<Vec<ApplicationView>, ApplicationError>;
+
+    async fn get_view(
+        &self,
+        owner: UserId,
+        id: ApplicationId,
+    ) -> Result<ApplicationView, ApplicationError>;
+
+    async fn initial_stage(
+        &self,
+        owner: UserId,
+        job_id: crate::catalog::model::JobId,
+    ) -> Result<crate::agent::session::StageRef, ApplicationError>;
 
     async fn create(
         &self,

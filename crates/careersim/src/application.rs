@@ -6,8 +6,8 @@ pub mod service;
 pub mod store;
 
 pub use model::{
-    Application, ApplicationError, ApplicationId, ApplicationStatus, CurrentApplicationStage,
-    NewApplication,
+    Application, ApplicationError, ApplicationId, ApplicationStageView, ApplicationStatus,
+    ApplicationView, CurrentApplicationStage, NewApplication,
 };
 pub use service::ApplicationService;
 
