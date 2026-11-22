@@ -153,20 +153,19 @@ const UPDATE_PIPELINE_SQL: &str = "UPDATE pipelines pl SET name = $3, name_key =
 const UPDATE_JOB_SQL: &str = "UPDATE jobs j SET \
      pipeline_id = COALESCE($3, j.pipeline_id), \
      title = COALESCE($4, j.title), \
-     title_key = COALESCE($5, j.title_key), \
-     city = COALESCE($6, j.city), \
-     job_type = COALESCE($7::text, j.job_type), \
-     salary_min = CASE WHEN $8::bool THEN NULL ELSE COALESCE($9, j.salary_min) END, \
-     salary_max = CASE WHEN $10::bool THEN NULL ELSE COALESCE($11, j.salary_max) END, \
-     salary_months = CASE WHEN $12::bool THEN NULL ELSE COALESCE($13, j.salary_months) END, \
-     tags = COALESCE($14, j.tags), \
-     description = COALESCE($15, j.description), \
-     status = COALESCE($16::text, j.status), \
+     city = COALESCE($5, j.city), \
+     job_type = COALESCE($6::text, j.job_type), \
+     salary_min = CASE WHEN $7::bool THEN NULL ELSE COALESCE($8, j.salary_min) END, \
+     salary_max = CASE WHEN $9::bool THEN NULL ELSE COALESCE($10, j.salary_max) END, \
+     salary_months = CASE WHEN $11::bool THEN NULL ELSE COALESCE($12, j.salary_months) END, \
+     tags = COALESCE($13, j.tags), \
+     description = COALESCE($14, j.description), \
+     status = COALESCE($15::text, j.status), \
      updated_at = $2 \
      FROM recruitment_projects p \
      JOIN companies c ON c.id = p.company_id AND c.deleted_at IS NULL \
      WHERE j.id = $1 AND j.deleted_at IS NULL AND j.project_id = p.id \
-       AND c.owner_user_id = $17 \
+       AND c.owner_user_id = $16 \
      RETURNING j.id, j.project_id, j.pipeline_id, j.title, j.city, j.job_type, j.salary_min, \
      j.salary_max, j.salary_months, j.tags, j.description, j.status, j.created_at, j.updated_at";
 
@@ -210,11 +209,8 @@ fn write_error(err: sqlx::Error, conflict: Option<&'static str>, operation: &str
     }
 }
 
-/// 岗位写入错误映射：标题唯一冲突与流水线复合外键单独识别。
+/// 岗位写入错误映射：流水线复合外键单独识别。
 fn job_write_error(err: sqlx::Error, operation: &str) -> CatalogError {
-    if is_unique_violation(&err) {
-        return CatalogError::Conflict("title");
-    }
     if is_foreign_key_violation(&err) {
         return CatalogError::InvalidReference {
             field: "pipelineId",
@@ -546,15 +542,14 @@ where
 {
     sqlx::query(
         "INSERT INTO jobs \
-         (id, project_id, pipeline_id, title, title_key, city, job_type, salary_min, \
-         salary_max, salary_months, tags, description, status, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)",
+         (id, project_id, pipeline_id, title, city, job_type, salary_min, salary_max, \
+         salary_months, tags, description, status, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)",
     )
     .bind(id.into_uuid())
     .bind(project_id.into_uuid())
     .bind(pipeline_id.into_uuid())
     .bind(title)
-    .bind(normalize_key(title))
     .bind(city)
     .bind(job_type.as_str())
     .bind(salary_i32(salary_min)?)
@@ -1172,7 +1167,6 @@ impl CatalogStore for PgCatalogStore {
                 .await?;
         }
 
-        let title_key = patch.title.as_deref().map(normalize_key);
         let salary_min_clear = matches!(patch.salary_min, Some(None));
         let salary_min_value = salary_i32(patch.salary_min.unwrap_or(None))?;
         let salary_max_clear = matches!(patch.salary_max, Some(None));
@@ -1184,7 +1178,6 @@ impl CatalogStore for PgCatalogStore {
             .bind(now)
             .bind(patch.pipeline_id.map(PipelineId::into_uuid))
             .bind(patch.title.clone())
-            .bind(title_key)
             .bind(patch.city.clone())
             .bind(patch.job_type.map(JobType::as_str))
             .bind(salary_min_clear)

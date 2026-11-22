@@ -692,7 +692,6 @@ fn validate_jobs(
     };
     let mut jobs = Vec::new();
     let mut seen_keys = Vec::new();
-    let mut seen_titles = Vec::new();
     for (index, item) in items.iter().enumerate() {
         let path = format!("jobs[{index}]");
         let Some(obj) = object_of(Some(item), &path, errors) else {
@@ -794,18 +793,6 @@ fn validate_jobs(
                 seen_keys.push(key.clone());
             }
         }
-        if let (Some(project_key), Some(title)) = (&project_key, &title) {
-            let title_key = (project_key.clone(), normalize_key(title));
-            if seen_titles.contains(&title_key) {
-                errors.push(TemplateError::new(
-                    format!("{path}.title"),
-                    format!("duplicate job title `{title}` in project `{project_key}`"),
-                ));
-            } else {
-                seen_titles.push(title_key);
-            }
-        }
-
         let salary_min = read_salary(obj, "salaryMin", &format!("{path}.salaryMin"), errors);
         let salary_max = read_salary(obj, "salaryMax", &format!("{path}.salaryMax"), errors);
         if let (Some(Some(min)), Some(Some(max))) = (salary_min, salary_max)

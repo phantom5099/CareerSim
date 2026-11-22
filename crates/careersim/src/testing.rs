@@ -919,14 +919,6 @@ impl CatalogStore for InMemoryCatalogStore {
                 field: "pipelineId",
             });
         }
-        let key = normalize_key(&new.title);
-        if data.jobs.iter().any(|row| {
-            row.deleted_at.is_none()
-                && row.value.project_id == project_id
-                && normalize_key(&row.value.title) == key
-        }) {
-            return Err(CatalogError::Conflict("title"));
-        }
         let job = Job {
             id: JobId::generate(),
             project_id,

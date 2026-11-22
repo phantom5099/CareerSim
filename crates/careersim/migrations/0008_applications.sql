@@ -41,3 +41,8 @@ CREATE INDEX applications_job_idx
 CREATE INDEX jobs_pipeline_idx
     ON jobs (pipeline_id)
     WHERE deleted_at IS NULL;
+
+DROP INDEX jobs_project_title_uq;
+
+ALTER TABLE jobs
+    DROP COLUMN title_key;
