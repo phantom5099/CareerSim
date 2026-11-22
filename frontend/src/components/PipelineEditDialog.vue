@@ -96,6 +96,91 @@ function removeStage(index: number) {
   }
 }
 
+function stageWeightTotal(stage: StageDefinitionPayload): number {
+  return stage.rubric.dimensions.reduce(
+    (total, dimension) => total + (Number.isFinite(dimension.weight) ? dimension.weight : 0),
+    0,
+  )
+}
+
+function stageLabel(stage: StageDefinitionPayload, index: number): string {
+  return `第 ${index + 1} 阶段「${stage.title.trim() || STAGE_LABELS[stage.kind as StageKind] || stage.kind}」`
+}
+
+function validateStages(): string | undefined {
+  const offerIndexes = form.stages
+    .map((stage, index) => (stage.kind === 'offer' ? index : -1))
+    .filter((index) => index >= 0)
+  if (offerIndexes.length === 0) {
+    return '流程必须包含 1 个 Offer 阶段，当前没有 Offer 阶段。'
+  }
+  if (offerIndexes.length > 1) {
+    const stages = offerIndexes.map((index) => `第 ${index + 1} 阶段`).join('、')
+    return `流程只能包含 1 个 Offer 阶段，当前有 ${offerIndexes.length} 个（${stages}）。`
+  }
+  if (offerIndexes[0] !== form.stages.length - 1) {
+    return `${stageLabel(form.stages[offerIndexes[0]], offerIndexes[0])}必须放在最后。`
+  }
+
+  for (const [index, stage] of form.stages.entries()) {
+    const label = stageLabel(stage, index)
+    if (!stage.title.trim()) {
+      return `${label}的阶段标题不能为空。`
+    }
+    if ([...stage.title.trim()].length > 40) {
+      return `${label}的阶段标题超过 40 个字符。`
+    }
+    if (
+      !Number.isInteger(stage.minRounds) ||
+      !Number.isInteger(stage.maxRounds) ||
+      stage.minRounds < 1 ||
+      stage.maxRounds < stage.minRounds ||
+      stage.maxRounds > 20
+    ) {
+      return `${label}的轮次设置无效，必须满足 1 ≤ 最少轮次 ≤ 最多轮次 ≤ 20。`
+    }
+    if (!Number.isInteger(stage.rubric.passScore) || stage.rubric.passScore < 0 || stage.rubric.passScore > 100) {
+      return `${label}的通过分数必须是 0 到 100 的整数。`
+    }
+    if (!stage.rubric.dimensions.length) {
+      return `${label}至少需要一个评分维度。`
+    }
+    if (stage.rubric.dimensions.length > 10) {
+      return `${label}最多只能有 10 个评分维度。`
+    }
+
+    let total = 0
+    let hasZero = false
+    const dimensionKeys = new Set<string>()
+    for (const [dimensionIndex, dimension] of stage.rubric.dimensions.entries()) {
+      const dimensionLabel = dimension.label.trim() || `第 ${dimensionIndex + 1} 个维度`
+      const dimensionKey = dimension.key.trim()
+      if (!dimensionKey) {
+        return `${label}的${dimensionLabel}缺少维度键。`
+      }
+      if (dimensionKeys.has(dimensionKey)) {
+        return `${label}存在重复的评分维度键「${dimensionKey}」。`
+      }
+      dimensionKeys.add(dimensionKey)
+      if (!Number.isInteger(dimension.weight)) {
+        return `${label}的评分维度「${dimensionLabel}」权重必须是整数。`
+      }
+      if (dimension.weight < 0 || dimension.weight > 100) {
+        return `${label}的评分维度「${dimensionLabel}」权重为 ${dimension.weight}，必须在 0 到 100 之间。`
+      }
+      total += dimension.weight
+      hasZero ||= dimension.weight === 0
+    }
+    if (total !== 0 && hasZero) {
+      return `${label}包含 0 权重维度。只有所有维度权重都为 0 时才表示等权，否则每个维度都必须大于 0。`
+    }
+    if (total !== 0 && total !== 100) {
+      return `${label}的评分权重合计为 ${total}，必须等于 100。`
+    }
+  }
+  return undefined
+}
+
 async function save() {
   error.value = ''
   if (saving.value) {
@@ -109,11 +194,29 @@ async function save() {
     error.value = '流程至少需要一个阶段。'
     return
   }
+  const stageError = validateStages()
+  if (stageError) {
+    error.value = stageError
+    return
+  }
   saving.value = true
   try {
     const input: PipelinePayload = {
       name: form.name.trim(),
-      stages: form.stages.map((stage, position) => ({ ...stage, position })),
+      stages: form.stages.map((stage, position) => ({
+        ...stage,
+        position,
+        title: stage.title.trim(),
+        rubric: {
+          ...stage.rubric,
+          dimensions: stage.rubric.dimensions.map((dimension) => ({
+            ...dimension,
+            key: dimension.key.trim(),
+            label: dimension.label.trim(),
+            criteria: dimension.criteria.trim(),
+          })),
+        },
+      })),
     }
     if (props.pipeline) {
       await companiesApi.updatePipeline(props.companyId, props.pipeline.id, input)
@@ -217,9 +320,17 @@ async function save() {
             <div class="mt-4 border-t border-line pt-3">
               <div class="flex items-center justify-between">
                 <h5 class="text-[0.7rem] font-medium">评分维度</h5>
-                <button type="button" class="text-[0.64rem] text-vermilion" @click="addDimension(stage)">
-                  ＋ 添加维度
-                </button>
+                <div class="flex items-center gap-3">
+                  <span
+                    class="text-[0.62rem]"
+                    :class="stageWeightTotal(stage) === 0 || stageWeightTotal(stage) === 100 ? 'text-moss' : 'text-vermilion'"
+                  >
+                    权重合计 {{ stageWeightTotal(stage) }} / 100<span v-if="stageWeightTotal(stage) === 0">（等权）</span>
+                  </span>
+                  <button type="button" class="text-[0.64rem] text-vermilion" @click="addDimension(stage)">
+                    ＋ 添加维度
+                  </button>
+                </div>
               </div>
               <div class="mt-2 space-y-2">
                 <div
