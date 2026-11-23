@@ -13,7 +13,7 @@
 | 形态 | Rust workspace，单 crate `careersim`，lib + bin，`publish = false` |
 | 后端 | Rust 2024 / Tokio / `sqlx` / PostgreSQL；模型访问走 OpenAI 兼容协议 |
 | 核心 | `AgentLoop`：会话、回合、阶段、角色、上下文投影、工具循环 |
-| 存储 | PostgreSQL 事件日志（存储不变量见 `crates/careersim/AGENTS.md` §5） |
+| 存储 | PostgreSQL 事件日志（存储不变量见 `crates/careersim/src/store/AGENTS.md`） |
 | 前端 | Vue 3 + Vite + TypeScript + Pinia + Tailwind；认证已接入 HTTP Cookie 会话，其余模块仍以 mock 运行 |
 | 部署假设 | 单活部署（约束见 §5） |
 | 当前边界 | HTTP 层与账户模块已落地；`main` 经组合根 `app::run` 装配并等待退出信号 |
@@ -45,7 +45,7 @@
 
 | 你想做什么 | 去哪个层次 |
 | --- | --- |
-| 改 Rust 服务端：账户、HTTP 路由、回合循环、事件存储、模型适配、迁移 | `crates/careersim/AGENTS.md`；落点表见其 §9 |
+| 改 Rust 服务端：账户、HTTP 路由、回合循环、事件存储、模型适配、迁移 | `crates/careersim/AGENTS.md` 与 `crates/careersim/src/AGENTS.md`；具体模块规则见各子目录 `AGENTS.md` |
 | 改前端：页面、组件、契约、状态、样式 | `frontend/AGENTS.md`；目录职责见其 §2 |
 | 做代码复核 | 每次任务完成实现与验证后，按 `docs/review.md` 完成独立复核，再汇报结果 |
 | 改 CI、依赖与许可证策略 | `.github/workflows/`、`deny.toml` |
@@ -151,7 +151,7 @@
 
 ### 7.2 测试位置
 
-- Rust 测试位置、测试替身与覆盖重点见 `crates/careersim/AGENTS.md` §6。
+- Rust 测试位置、测试替身与覆盖重点见 `crates/careersim/src/AGENTS.md` §6 及各模块 `AGENTS.md`。
 - 前端当前没有测试脚本，见 `frontend/AGENTS.md` §8；新增测试能力前先与用户确认。
 
 ### 7.3 禁止写的测试
@@ -183,7 +183,7 @@
 - 门禁的权威定义在 `.github/workflows/`：`ci.yml` 覆盖格式、Clippy、PostgreSQL 17/18
   测试、Windows 编译、文档与 release 构建；`security.yml` 覆盖依赖漏洞、通配符/重复
   依赖、许可证与依赖来源。
-- Rust 命令见 `crates/careersim/AGENTS.md` §8；前端命令见 `frontend/AGENTS.md` §7。
+- Rust 命令以 `.github/workflows/` 和本文件为准；前端命令见 `frontend/AGENTS.md` §7。
 - 本地缺少 PostgreSQL 或 `cargo-deny` 时以对应 workflow 为准。
 
 ---
