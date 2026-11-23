@@ -46,10 +46,25 @@ export type StageKind =
   | 'hrbp_interview'
   | 'offer'
 
-export interface PipelineStage {
+export interface PipelineRubricDimension {
   key: string
+  label: string
+  weight: number
+  criteria: string
+}
+
+export interface PipelineRubric {
+  passScore: number
+  dimensions: PipelineRubricDimension[]
+}
+
+export interface PipelineStage {
+  position: number
   kind: StageKind
   title: string
+  minRounds: number
+  maxRounds: number
+  rubric: PipelineRubric
 }
 
 export interface PipelineInfo {
@@ -146,6 +161,7 @@ export type ApplicationStatus = 'active' | 'rejected' | 'offer' | 'withdrawn'
 export type StageState = 'done' | 'current' | 'pending' | 'failed'
 
 export interface ApplicationStage {
+  position: number
   key: StageKey
   state: StageState
   note?: string

@@ -17,16 +17,22 @@ src/
 ├── testing.rs         # crate 级测试装配：账户/catalog/resume 端口替身 + Router/oneshot（cfg(test)）
 ├── account.rs         # account 模块入口与公开类型聚合
 ├── account/
-│   ├── model.rs       # UserId/Username/Password/User/ProfilePatch 与字段边界
+│   ├── model.rs       # UserId/Username/Password/User/UpdateProfileInput 与字段边界
 │   ├── password.rs    # PasswordHasher trait 与 Argon2id 实现
 │   ├── session.rs     # 会话令牌、LoginSession 与空闲/绝对超时规则
 │   ├── service.rs     # AccountService：注册/登录/注销/资料/改密
 │   ├── store.rs       # UserStore / SessionStore trait 与 AccountError
 │   ├── postgres.rs    # PostgreSQL 适配器
 │   └── tests.rs       # 仅放该模块单测
+├── application.rs     # 投递持久化与 Application/Session 一对一关系
+├── application/
+│   ├── model.rs       # 投递 ID、状态、岗位/简历/会话引用与阶段位置
+│   ├── store.rs       # ApplicationStore 持久化端口
+│   ├── service.rs     # 投递记录持久化服务，不编排阶段推进
+│   └── postgres.rs    # PostgreSQL 适配器
 ├── pipeline.rs        # pipeline 模块入口（纯领域，无 IO）
 ├── pipeline/
-│   ├── model.rs       # StageKey/StageKind/StageDefinition/PipelineDefinition/Score、StageTransition/plan_transition、OfferTerms/build_offer_terms
+│   ├── model.rs       # StagePosition/StageKind/StageDefinition/PipelineDefinition/Score、StageTransition/plan_transition、OfferTerms/build_offer_terms
 │   ├── rubric.rs      # EvaluationRubric 与加权评估；StageEvaluation/DimensionScore/evaluate
 │   ├── validate.rs    # 纯校验函数与 PipelineError
 │   └── tests.rs
@@ -40,7 +46,7 @@ src/
 │   └── tests.rs       # 仅放该模块单测
 ├── resume.rs          # resume 模块入口与公开类型聚合
 ├── resume/
-│   ├── model.rs       # Resume/ResumeKind/ResumeAttachment/NewResume/ResumePatch 与限额
+│   ├── model.rs       # Resume/ResumeAttachment/ValidatedResumeInput/ValidatedResumeUpdateInput 与限额
 │   ├── content.rs     # ResumeContent 结构化简历与字段校验
 │   ├── parse.rs       # ResumeTextExtractor、附件类型检测与解析草稿构造
 │   ├── service.rs     # ResumeService：CRUD、上传解析、附件打开（≤3 份、默认提升）
@@ -103,6 +109,7 @@ llm::client     → agent::{Message, ToolCall, ToolSpec}（仅数据类型）
 llm::openai_compat → config::LlmConfig
 store           → 不依赖 agent 领域类型
 config          → error / llm::provider
+application     → account / agent::session（ID）/ catalog（JobId）/ resume（ResumeId）
 ```
 
 约束：
@@ -222,6 +229,16 @@ config          → error / llm::provider
   必须处理 `Option` / `Result`（`unwrap_or` / `unwrap_or_else` 等返回值写法不受限）。
 - 在没有用户要求时注册生产工具。
 
+### 4.10 层间输入输出命名
+
+- HTTP 层请求体、查询参数和路径参数使用 `CreateXRequest`、`UpdateXRequest` 等 `Request` 后缀，响应使用 `XResponse`、`XListResponse` 等 `Response` 后缀；HTTP DTO 默认只在对应路由模块内可见。
+- service 层接收业务输入统一使用 `CreateXInput`、`UpdateXInput` 等 `Input` 后缀，不使用 `Command`、泛化的 `Request` 或 `NewX` 表示业务输入。
+- 已完成领域校验、可直接交给持久化层的写入数据使用 `CreateXRecord`、`UpdateXRecord` 等 `Record` 后缀，与 service 输入区分。
+- store 层只接收 Record、实体和值对象，不依赖 HTTP 请求或响应类型。
+- 领域实体、值对象和领域错误保留业务名称，不使用 `Dto`、`Request`、`Response` 后缀。
+- 查询聚合结果使用 `XView` 或明确的 `XDetails` 命名，HTTP 响应在边界层完成转换。
+- 同一层级和同一操作只保留一套输入或输出类型；本轮范围内未被真实调用且没有外部契约、迁移兼容或测试替身职责的冗余定义必须清理。
+
 ---
 
 ## 5. 会话与存储不变量
@@ -236,13 +253,13 @@ config          → error / llm::provider
 - `create`：同一事务写入 `sessions` 行与 `seq = 0` 的 `session_meta`；UUID 冲突有限次
   重试；`append` 拒绝 `SessionMeta`。
 - `append`：空批次直接返回；事务内 `SELECT ... FOR UPDATE` 锁住会话行；用期望的
-  `stage` 与 `last_seq` 做 CAS，不匹配返回 `Conflict`；`seq` 从 `last_seq + 1` 连续
-  分配；批量插入事件后更新 `last_seq`、`last_turn_id`、`updated_at`（必要时 `stage`）。
+  `last_seq` 做 CAS，不匹配返回 `Conflict`；`seq` 从 `last_seq + 1` 连续分配；批量插入
+  事件后更新 `last_seq`、`last_turn_id`、`updated_at`。
 - 一个批次最多一个 `StageCompleted`，且必须是最后一个事件；`Stage::Review` 不允许
   `StageCompleted`。
 - `load`：只读 `REPEATABLE READ` 事务；校验首事件是 `session_meta`、`last_seq` 与最大
-  `seq` 一致、`last_turn_id` 与事件中的最大回合号一致、折叠阶段与 `sessions.stage`
-  一致；不满足返回 `Corrupt`。
+  `seq` 一致、`last_turn_id` 与事件中的最大回合号一致；不满足返回 `Corrupt`。当前
+  流程位置由 Application 持久化，Session 事件中的阶段字段只用于历史事件与上下文。
 - `list` 只查 `sessions` 表，按 `updated_at DESC, id DESC` 取前 `limit` 行。
 - `delete` 删除会话行，事件由外键级联删除；不存在返回 `NotFound`。
 
@@ -260,7 +277,8 @@ config          → error / llm::provider
 - `run_turn` 的 `max_steps` 是正常终态，返回 `Ok(TurnResult { reason: MaxSteps })`，
   不是 `Err`；取消返回 `Interrupted`；模型/工具错误写 `Error` 并保留已落盘事件。
 - 助手内容为空且没有工具调用时，写入 `Error` 终态。
-- 阶段由事件折叠推导，角色由阶段推导；不要新增可独立修改的角色字段。
+- Session 事件保留阶段历史，当前流程位置由 Application 的 `stage_position` 与岗位当前
+  关联的流程阶段位置读取；不要在 sessions 表中新增独立的当前阶段缓存字段。
 
 ---
 
@@ -319,6 +337,7 @@ cargo test store::memory
 | 想做什么 | 去哪里 |
 | --- | --- |
 | 新增账户能力或改会话语义 | `account/service.rs` + `account/store.rs` + 测试 |
+| 新增投递持久化或 Application/Session 关系 | `application/model.rs` + `application/store.rs` + `application/service.rs` + `application/postgres.rs` + 新迁移 |
 | 新增目录能力（公司/项目/流水线/岗位/模板） | `catalog/service.rs` + `catalog/store.rs` + `http/catalog_routes.rs` + 测试 |
 | 新增简历能力（在线内容/附件/解析） | `resume/service.rs` + `resume/store.rs` + `http/resume_routes.rs` + 测试 |
 | 新增 HTTP 路由 | `http/` 下新建路由文件 + `http/router.rs` 追加挂载行 |

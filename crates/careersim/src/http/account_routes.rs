@@ -16,8 +16,8 @@ use super::{
     router::AppState,
 };
 use crate::account::{
-    model::{AccountError, ProfilePatch, User},
-    service::SessionGrant,
+    model::{AccountError, UpdateProfileInput, User},
+    service::{ChangePasswordInput, LoginInput, RegisterInput, SessionGrant},
 };
 
 /// JSON 请求体上限：与全局一致（1 MiB）。
@@ -35,10 +35,10 @@ pub fn router() -> Router<AppState> {
         .layer(RequestBodyLimitLayer::new(BODY_LIMIT_BYTES))
 }
 
-/// 用户 DTO；`avatarText`/`avatarColor` 由展示名稳定派生，不持久化。
+/// 用户 HTTP 响应结构体；`avatarText`/`avatarColor` 由展示名稳定派生，不持久化。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserDto {
+struct UserResponse {
     pub id: String,
     pub username: String,
     pub display_name: String,
@@ -51,7 +51,7 @@ pub struct UserDto {
     pub avatar_color: String,
 }
 
-impl From<User> for UserDto {
+impl From<User> for UserResponse {
     fn from(user: User) -> Self {
         let User {
             id,
@@ -125,7 +125,7 @@ impl From<AccountError> for ApiError {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RegisterRequest {
+struct RegisterRequest {
     pub username: String,
     pub password: String,
     pub display_name: String,
@@ -133,15 +133,15 @@ pub struct RegisterRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LoginRequest {
+struct LoginRequest {
     pub username: String,
     pub password: String,
 }
 
-/// 资料补丁 DTO；双层 Option 表达 PATCH 语义。
+/// 资料更新 HTTP 请求结构体；双层 Option 表达 PATCH 语义。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProfilePatchRequest {
+struct UpdateProfileRequest {
     pub display_name: Option<String>,
     pub school: Option<Option<String>>,
     pub major: Option<Option<String>>,
@@ -150,34 +150,38 @@ pub struct ProfilePatchRequest {
     pub target_cities: Option<Vec<String>>,
 }
 
-impl From<ProfilePatchRequest> for ProfilePatch {
-    fn from(dto: ProfilePatchRequest) -> Self {
+impl From<UpdateProfileRequest> for UpdateProfileInput {
+    fn from(request: UpdateProfileRequest) -> Self {
         Self {
-            display_name: dto.display_name,
-            school: dto.school,
-            major: dto.major,
-            graduation_year: dto.graduation_year,
-            target_roles: dto.target_roles,
-            target_cities: dto.target_cities,
+            display_name: request.display_name,
+            school: request.school,
+            major: request.major,
+            graduation_year: request.graduation_year,
+            target_roles: request.target_roles,
+            target_cities: request.target_cities,
         }
     }
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ChangePasswordRequest {
+struct ChangePasswordRequest {
     pub current_password: String,
     pub new_password: String,
 }
 
 /// 201 + Set-Cookie：注册即登录。
-pub async fn register(
+async fn register(
     State(state): State<AppState>,
     Json(request): Json<RegisterRequest>,
 ) -> Result<Response, ApiError> {
     let grant = state
         .account
-        .register(&request.username, &request.password, &request.display_name)
+        .register(RegisterInput {
+            username: request.username,
+            password: request.password,
+            display_name: request.display_name,
+        })
         .await?;
     Ok(session_response(
         StatusCode::CREATED,
@@ -187,22 +191,22 @@ pub async fn register(
 }
 
 /// 200 + Set-Cookie；失败统一 401。
-pub async fn login(
+async fn login(
     State(state): State<AppState>,
     Json(request): Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
     let grant = state
         .account
-        .login(&request.username, &request.password)
+        .login(LoginInput {
+            username: request.username,
+            password: request.password,
+        })
         .await?;
     Ok(session_response(StatusCode::OK, grant, state.cookie_secure))
 }
 
 /// 204 + 清 Cookie。
-pub async fn logout(
-    State(state): State<AppState>,
-    auth: AuthContext,
-) -> Result<Response, ApiError> {
+async fn logout(State(state): State<AppState>, auth: AuthContext) -> Result<Response, ApiError> {
     state.account.logout(auth.session_id).await?;
     let response = StatusCode::NO_CONTENT.into_response();
     Ok(with_cookie(
@@ -212,25 +216,25 @@ pub async fn logout(
 }
 
 /// 200 当前用户。
-pub async fn me(auth: AuthContext) -> Result<Response, ApiError> {
-    Ok((StatusCode::OK, Json(UserDto::from(auth.user))).into_response())
+async fn me(auth: AuthContext) -> Result<Response, ApiError> {
+    Ok((StatusCode::OK, Json(UserResponse::from(auth.user))).into_response())
 }
 
 /// 200 修改后的用户。
-pub async fn update_profile(
+async fn update_profile(
     State(state): State<AppState>,
     auth: AuthContext,
-    Json(request): Json<ProfilePatchRequest>,
+    Json(request): Json<UpdateProfileRequest>,
 ) -> Result<Response, ApiError> {
     let user = state
         .account
         .update_profile(auth.user_id, request.into())
         .await?;
-    Ok((StatusCode::OK, Json(UserDto::from(user))).into_response())
+    Ok((StatusCode::OK, Json(UserResponse::from(user))).into_response())
 }
 
 /// 204 + 新 Cookie：撤销其他会话并轮换当前令牌。
-pub async fn change_password(
+async fn change_password(
     State(state): State<AppState>,
     auth: AuthContext,
     Json(request): Json<ChangePasswordRequest>,
@@ -240,8 +244,10 @@ pub async fn change_password(
         .change_password(
             auth.user_id,
             auth.session_id,
-            &request.current_password,
-            &request.new_password,
+            ChangePasswordInput {
+                current_password: request.current_password,
+                new_password: request.new_password,
+            },
         )
         .await?;
     let response = StatusCode::NO_CONTENT.into_response();
@@ -253,7 +259,7 @@ pub async fn change_password(
 
 /// 认证相关的处理器不直接依赖 `AccountService` 具体类型以外的端口。
 fn session_response(status: StatusCode, grant: SessionGrant, secure: bool) -> Response {
-    let body = Json(UserDto::from(grant.user));
+    let body = Json(UserResponse::from(grant.user));
     let response = (status, body).into_response();
     with_cookie(response, &session_cookie_header(&grant.token, secure))
 }

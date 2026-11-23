@@ -302,6 +302,8 @@ pub enum CatalogError {
     NotFound,
     #[error("`{0}` already exists")]
     Conflict(&'static str),
+    #[error("catalog resource is still referenced by `{0}`")]
+    Referenced(&'static str),
     #[error("catalog store backend error: {message}")]
     Backend {
         message: String,
@@ -438,89 +440,4 @@ pub(crate) fn validate_salary(
         });
     }
     Ok(())
-}
-
-/// 手工创建或修改公司时的字段集合；`is_private` 只影响可见性，不影响归属。
-#[derive(Debug, Clone, Default)]
-pub struct NewCompany {
-    pub name: String,
-    pub english_name: String,
-    pub industry: String,
-    pub city: String,
-    pub size: String,
-    pub tagline: String,
-    pub description: String,
-    pub highlights: Vec<String>,
-    pub logo_text: String,
-    pub accent: String,
-    pub is_private: bool,
-}
-
-/// 公司部分更新；`None` 表示不修改。
-#[derive(Debug, Clone, Default)]
-pub struct CompanyPatch {
-    pub name: Option<String>,
-    pub english_name: Option<String>,
-    pub industry: Option<String>,
-    pub city: Option<String>,
-    pub size: Option<String>,
-    pub tagline: Option<String>,
-    pub description: Option<String>,
-    pub highlights: Option<Vec<String>>,
-    pub logo_text: Option<String>,
-    pub accent: Option<String>,
-    pub is_private: Option<bool>,
-}
-
-#[derive(Debug, Clone)]
-pub struct NewProject {
-    pub name: String,
-    pub season: String,
-    pub status: ProjectStatus,
-    pub deadline: Option<NaiveDate>,
-    pub description: String,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ProjectPatch {
-    pub name: Option<String>,
-    pub season: Option<String>,
-    pub status: Option<ProjectStatus>,
-    /// 外层 `None` 不修改，内层 `None` 清空截止日期。
-    pub deadline: Option<Option<NaiveDate>>,
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct NewPipeline {
-    pub name: String,
-    pub definition: PipelineDefinition,
-}
-
-#[derive(Debug, Clone)]
-pub struct NewJob {
-    pub pipeline_id: PipelineId,
-    pub title: String,
-    pub city: String,
-    pub job_type: JobType,
-    pub salary_min: Option<u32>,
-    pub salary_max: Option<u32>,
-    pub salary_months: Option<u8>,
-    pub tags: Vec<String>,
-    pub description: String,
-    pub status: JobStatus,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct JobPatch {
-    pub pipeline_id: Option<PipelineId>,
-    pub title: Option<String>,
-    pub city: Option<String>,
-    pub job_type: Option<JobType>,
-    pub salary_min: Option<Option<u32>>,
-    pub salary_max: Option<Option<u32>>,
-    pub salary_months: Option<Option<u8>>,
-    pub tags: Option<Vec<String>>,
-    pub description: Option<String>,
-    pub status: Option<JobStatus>,
 }

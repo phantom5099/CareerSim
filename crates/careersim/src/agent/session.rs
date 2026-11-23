@@ -1,4 +1,4 @@
-//! 会话、事件信封与事件类型（事件 v2）。
+//! 会话、事件信封与事件类型（事件 v3）。
 
 use std::{fmt, str::FromStr, sync::Arc};
 
@@ -12,7 +12,7 @@ use super::{role::Role, tool::ToolCall};
 use crate::{
     llm::client::TokenUsage,
     pipeline::{
-        model::{StageKey, StageKind, StageOutcome},
+        model::{StageKind, StageOutcome, StagePosition},
         rubric::StageEvaluation,
     },
     store::{
@@ -27,6 +27,10 @@ use crate::{
 pub struct ApplicationId(Uuid);
 
 impl ApplicationId {
+    pub fn generate() -> Self {
+        Self(Uuid::new_v4())
+    }
+
     pub fn from_uuid(uuid: Uuid) -> Self {
         Self(uuid)
     }
@@ -103,11 +107,11 @@ impl SessionBinding {
     }
 }
 
-/// 阶段引用：稳定键 + 类型；类型决定角色与执行策略。
+/// 阶段引用：流程位置 + 类型；类型决定角色与执行策略。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StageRef {
-    pub key: StageKey,
+    pub position: StagePosition,
     pub kind: StageKind,
 }
 
@@ -159,8 +163,8 @@ pub enum SessionEventKind {
     },
     StageCompleted {
         turn_id: TurnId,
-        /// 完成的阶段键；必须等于会话当前阶段。
-        stage_key: StageKey,
+        /// 完成的阶段位置；必须等于会话当前阶段。
+        stage_position: StagePosition,
         /// 完成阶段的类型。
         stage_kind: StageKind,
         /// 服务端评估结论。
@@ -209,7 +213,7 @@ pub(crate) fn event_turn_id(kind: &SessionEventKind) -> Option<TurnId> {
 pub struct Session {
     pub id: SessionId,
     pub binding: SessionBinding,
-    /// 当前阶段；由 `initial_stage` 初始化，仅由 `StageCompleted` 更新。
+    /// 事件折叠出的最近阶段历史；当前流程位置由 Application 读取流程模板决定。
     pub current_stage: StageRef,
     pub events: Vec<SessionEvent>,
     pub created_at: DateTime<Utc>,
@@ -250,12 +254,12 @@ impl Session {
         for event in events {
             if let SessionEventKind::StageCompleted { outcome, .. } = &event.kind
                 && let StageOutcome::Advance {
-                    next_stage_key,
+                    next_stage_position,
                     next_stage_kind,
                 } = outcome
             {
                 self.current_stage = StageRef {
-                    key: next_stage_key.clone(),
+                    position: *next_stage_position,
                     kind: *next_stage_kind,
                 };
             }
@@ -271,8 +275,6 @@ impl Session {
 #[derive(Debug, Clone)]
 pub struct SessionSummary {
     pub id: SessionId,
-    /// 缓存的当前阶段键；类型在行缓存中不可得，按需加载会话。
-    pub stage_key: StageKey,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_seq: u64,
@@ -283,7 +285,7 @@ pub struct SessionSummary {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StageEvaluationRecord {
     pub turn_id: TurnId,
-    pub stage_key: StageKey,
+    pub stage_position: StagePosition,
     pub stage_kind: StageKind,
     pub evaluation: StageEvaluation,
 }
@@ -374,7 +376,7 @@ fn validate_batch(
                 ));
             }
             SessionEventKind::StageCompleted {
-                stage_key,
+                stage_position,
                 stage_kind,
                 outcome,
                 ..
@@ -384,10 +386,10 @@ fn validate_batch(
                         "stage_completed must be the last event".to_owned(),
                     ));
                 }
-                if stage_key != &current.key {
+                if stage_position != &current.position {
                     return Err(SessionError::InvalidEvent(format!(
-                        "stage_completed for {stage_key} but current stage is {}",
-                        current.key
+                        "stage_completed for {stage_position} but current stage is {}",
+                        current.position
                     )));
                 }
                 if stage_kind != &current.kind {
@@ -398,17 +400,17 @@ fn validate_batch(
                 }
                 match outcome {
                     StageOutcome::Advance {
-                        next_stage_key,
+                        next_stage_position,
                         next_stage_kind,
                     } => {
-                        if next_stage_key == &current.key {
+                        if next_stage_position == &current.position {
                             return Err(SessionError::InvalidEvent(
-                                "advance next_stage_key must differ from the current stage"
+                                "advance next_stage_position must differ from the current stage"
                                     .to_owned(),
                             ));
                         }
                         next = Some(StageRef {
-                            key: next_stage_key.clone(),
+                            position: *next_stage_position,
                             kind: *next_stage_kind,
                         });
                     }
@@ -449,11 +451,8 @@ fn decode_event(stored: StoredEvent) -> Result<SessionEvent, SessionError> {
 }
 
 fn summary_from_row(row: StoredSession) -> Result<SessionSummary, SessionError> {
-    let stage_key =
-        StageKey::parse(&row.stage).map_err(|err| SessionError::Corrupt(err.to_string()))?;
     Ok(SessionSummary {
         id: SessionId::from_uuid(row.id),
-        stage_key,
         created_at: row.created_at,
         updated_at: row.updated_at,
         last_seq: row.last_seq,
@@ -467,9 +466,6 @@ fn fold_session(
     stored_events: Vec<StoredEvent>,
 ) -> Result<Session, SessionError> {
     let id = SessionId::from_uuid(row.id);
-    let row_stage_key =
-        StageKey::parse(&row.stage).map_err(|err| SessionError::Corrupt(err.to_string()))?;
-
     let events = stored_events
         .into_iter()
         .map(decode_event)
@@ -520,25 +516,25 @@ fn fold_session(
         previous_seq = Some(event.seq);
 
         if let SessionEventKind::StageCompleted {
-            stage_key,
+            stage_position,
             stage_kind,
             outcome,
             ..
         } = &event.kind
         {
-            if *stage_key != current_stage.key || *stage_kind != current_stage.kind {
+            if *stage_position != current_stage.position || *stage_kind != current_stage.kind {
                 return Err(SessionError::Corrupt(format!(
-                    "stage_completed for {stage_key} while the log is at {}",
-                    current_stage.key
+                    "stage_completed for {stage_position} while the log is at {}",
+                    current_stage.position
                 )));
             }
             if let StageOutcome::Advance {
-                next_stage_key,
+                next_stage_position,
                 next_stage_kind,
             } = outcome
             {
                 current_stage = StageRef {
-                    key: next_stage_key.clone(),
+                    position: *next_stage_position,
                     kind: *next_stage_kind,
                 };
             }
@@ -562,13 +558,6 @@ fn fold_session(
             last_turn_id.0, max_turn.0
         )));
     }
-    if current_stage.key != row_stage_key {
-        return Err(SessionError::Corrupt(format!(
-            "row stage is {row_stage_key} but the event log folds to {}",
-            current_stage.key
-        )));
-    }
-
     Ok(Session {
         id,
         binding,
@@ -724,7 +713,7 @@ impl SessionService for StoreSessionService {
         name = "session.create",
         level = "debug",
         skip(self, binding, initial_stage),
-        fields(stage = %initial_stage.key)
+        fields(stage = %initial_stage.position)
     )]
     async fn create(
         &self,
@@ -733,7 +722,6 @@ impl SessionService for StoreSessionService {
     ) -> Result<Session, SessionError> {
         for _ in 0..SESSION_ID_RETRIES {
             let id = SessionId::generate();
-            let stage = initial_stage.key.clone();
             let meta = SessionEventKind::SessionMeta {
                 session_id: id,
                 binding,
@@ -742,11 +730,7 @@ impl SessionService for StoreSessionService {
             let payload = serde_json::to_value(&meta)
                 .map_err(|err| SessionError::backend_with_source("encode session_meta", err))?;
 
-            match self
-                .store
-                .create(id.into_uuid(), stage.as_str(), payload)
-                .await
-            {
+            match self.store.create(id.into_uuid(), payload).await {
                 Ok((row, event)) => return fold_session(row, vec![event]),
                 Err(StoreError::Conflict) => continue,
                 Err(err) => return Err(err.into()),
@@ -786,7 +770,7 @@ impl SessionService for StoreSessionService {
         fields(
             session_id = %session.id,
             event_count = events.len(),
-            stage = %session.current_stage.key,
+            stage = %session.current_stage.position,
             last_seq = session.last_seq
         )
     )]
@@ -799,7 +783,7 @@ impl SessionService for StoreSessionService {
             return Ok(());
         }
 
-        let next_stage = validate_batch(&session.current_stage, events)?;
+        validate_batch(&session.current_stage, events)?;
         let last_turn_id = max_turn_id(events).map_or(0, |turn_id| turn_id.0);
         let mut payloads = Vec::with_capacity(events.len());
         for event in events {
@@ -822,12 +806,10 @@ impl SessionService for StoreSessionService {
                 session.id.into_uuid(),
                 AppendBatch {
                     expected: ExpectedState {
-                        stage: session.current_stage.key.as_str(),
                         last_seq: session.last_seq,
                     },
                     events: &payloads,
                     last_turn_id,
-                    next_stage: next_stage.as_ref().map(|stage| stage.key.as_str()),
                 },
             )
             .await?;
@@ -993,7 +975,7 @@ impl SessionService for StoreSessionService {
                 },
                 SessionEventKind::StageCompleted {
                     turn_id: record.turn_id,
-                    stage_key: record.stage_key.clone(),
+                    stage_position: record.stage_position,
                     stage_kind: record.stage_kind,
                     evaluation: record.evaluation.clone(),
                     outcome: outcome.clone(),

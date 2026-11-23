@@ -5,8 +5,8 @@ use chrono::Utc;
 use super::{
     PipelineError,
     model::{
-        OfferError, OfferPolicy, OfferTermsInput, PipelineDefinition, StageDefinition, StageKey,
-        StageKind, StageOutcome, TransitionError, build_offer_terms, plan_transition,
+        OfferError, OfferPolicy, OfferTermsInput, PipelineDefinition, StageDefinition, StageKind,
+        StageOutcome, TransitionError, build_offer_terms, plan_transition,
     },
     rubric::{DimensionScore, EvaluationError, EvaluationRubric, RubricDimension, Score, evaluate},
 };
@@ -32,14 +32,14 @@ fn rubric(weights: &[u16]) -> EvaluationRubric {
 }
 
 fn stage(
-    key: &str,
+    position: u16,
     kind: StageKind,
     min_rounds: u8,
     max_rounds: u8,
     weights: &[u16],
 ) -> StageDefinition {
     StageDefinition {
-        key: StageKey::parse(key).expect("test key is valid"),
+        position,
         kind,
         title: "阶段标题".to_owned(),
         min_rounds,
@@ -50,37 +50,29 @@ fn stage(
 
 fn valid_stages() -> Vec<StageDefinition> {
     vec![
-        stage("hr", StageKind::HrScreen, 1, 2, &[0]),
-        stage("tech_1", StageKind::TechInterview, 2, 8, &[60, 40]),
-        stage("offer", StageKind::Offer, 1, 4, &[100]),
+        stage(0, StageKind::HrScreen, 1, 2, &[0]),
+        stage(1, StageKind::TechInterview, 2, 8, &[60, 40]),
+        stage(2, StageKind::Offer, 1, 4, &[100]),
     ]
 }
 
 #[test]
 fn parse_accepts_pipeline_with_repeated_kinds() {
-    // 规则 7：同类阶段允许重复，用不同 key 区分；顺序即执行顺序。
+    // 规则 7：同类阶段允许重复；position 决定执行顺序。
     let parsed = PipelineDefinition::parse(vec![
-        stage("tech_1", StageKind::TechInterview, 1, 2, &[0]),
-        stage("tech_2", StageKind::TechInterview, 1, 2, &[0]),
-        stage("offer", StageKind::Offer, 1, 2, &[0]),
+        stage(0, StageKind::TechInterview, 1, 2, &[0]),
+        stage(1, StageKind::TechInterview, 1, 2, &[0]),
+        stage(2, StageKind::Offer, 1, 2, &[0]),
     ]);
     assert!(parsed.is_ok());
 }
 
 #[test]
 fn parse_accepts_single_offer_stage() {
-    let parsed = PipelineDefinition::parse(vec![stage("offer", StageKind::Offer, 1, 1, &[0])]);
+    let parsed = PipelineDefinition::parse(vec![stage(0, StageKind::Offer, 1, 1, &[0])]);
     let parsed = parsed.expect("single offer is valid");
-    assert_eq!(parsed.first().key.as_str(), "offer");
-    assert_eq!(
-        parsed.position(&StageKey::parse("offer").expect("valid in test")),
-        Some(0)
-    );
-    assert!(
-        parsed
-            .get(&StageKey::parse("missing").expect("valid in test"))
-            .is_none()
-    );
+    assert_eq!(parsed.first().position, 0);
+    assert!(parsed.get(99).is_none());
 }
 
 #[test]
@@ -92,20 +84,22 @@ fn parse_rejects_empty_pipeline() {
 }
 
 #[test]
-fn parse_rejects_duplicate_stage_keys() {
-    let mut stages = valid_stages();
-    stages.insert(1, stage("hr", StageKind::Exam, 1, 2, &[0]));
-    assert_eq!(
+fn parse_rejects_non_contiguous_stage_positions() {
+    let stages = vec![
+        stage(0, StageKind::HrScreen, 1, 2, &[0]),
+        stage(2, StageKind::Offer, 1, 2, &[0]),
+    ];
+    assert!(matches!(
         PipelineDefinition::parse(stages),
-        Err(PipelineError::DuplicateStageKey("hr".to_owned()))
-    );
+        Err(PipelineError::InvalidStage { position: 2, .. })
+    ));
 }
 
 #[test]
 fn parse_rejects_missing_or_duplicated_offer() {
     let no_offer = vec![
-        stage("hr", StageKind::HrScreen, 1, 2, &[0]),
-        stage("tech_1", StageKind::TechInterview, 1, 2, &[0]),
+        stage(0, StageKind::HrScreen, 1, 2, &[0]),
+        stage(1, StageKind::TechInterview, 1, 2, &[0]),
     ];
     assert_eq!(
         PipelineDefinition::parse(no_offer),
@@ -113,8 +107,8 @@ fn parse_rejects_missing_or_duplicated_offer() {
     );
 
     let two_offers = vec![
-        stage("offer_1", StageKind::Offer, 1, 2, &[0]),
-        stage("offer_2", StageKind::Offer, 1, 2, &[0]),
+        stage(0, StageKind::Offer, 1, 2, &[0]),
+        stage(1, StageKind::Offer, 1, 2, &[0]),
     ];
     assert_eq!(
         PipelineDefinition::parse(two_offers),
@@ -125,8 +119,8 @@ fn parse_rejects_missing_or_duplicated_offer() {
 #[test]
 fn parse_rejects_offer_before_last() {
     let stages = vec![
-        stage("offer", StageKind::Offer, 1, 2, &[0]),
-        stage("tech_1", StageKind::TechInterview, 1, 2, &[0]),
+        stage(0, StageKind::Offer, 1, 2, &[0]),
+        stage(1, StageKind::TechInterview, 1, 2, &[0]),
     ];
     assert_eq!(
         PipelineDefinition::parse(stages),
@@ -137,13 +131,7 @@ fn parse_rejects_offer_before_last() {
 #[test]
 fn parse_rejects_invalid_round_bounds() {
     for (min_rounds, max_rounds) in [(0, 2), (3, 2), (1, 21)] {
-        let stages = vec![stage(
-            "offer",
-            StageKind::Offer,
-            min_rounds,
-            max_rounds,
-            &[0],
-        )];
+        let stages = vec![stage(0, StageKind::Offer, min_rounds, max_rounds, &[0])];
         assert!(
             matches!(
                 PipelineDefinition::parse(stages),
@@ -156,7 +144,7 @@ fn parse_rejects_invalid_round_bounds() {
 
 #[test]
 fn parse_rejects_invalid_dimension_sets() {
-    let stages = vec![stage("offer", StageKind::Offer, 1, 2, &[])];
+    let stages = vec![stage(0, StageKind::Offer, 1, 2, &[])];
 
     assert!(matches!(
         PipelineDefinition::parse(stages),
@@ -164,7 +152,7 @@ fn parse_rejects_invalid_dimension_sets() {
     ));
 
     let too_many: Vec<u16> = vec![0; 11];
-    let stages = vec![stage("offer", StageKind::Offer, 1, 2, &too_many)];
+    let stages = vec![stage(0, StageKind::Offer, 1, 2, &too_many)];
     assert!(matches!(
         PipelineDefinition::parse(stages),
         Err(PipelineError::InvalidRubric { .. })
@@ -173,9 +161,9 @@ fn parse_rejects_invalid_dimension_sets() {
 
 #[test]
 fn parse_rejects_duplicate_dimension_keys() {
-    let mut hr = stage("hr", StageKind::HrScreen, 1, 2, &[50, 50]);
+    let mut hr = stage(0, StageKind::HrScreen, 1, 2, &[50, 50]);
     hr.rubric.dimensions[1].key = hr.rubric.dimensions[0].key.clone();
-    let stages = vec![hr, stage("offer", StageKind::Offer, 1, 2, &[0])];
+    let stages = vec![hr, stage(1, StageKind::Offer, 1, 2, &[0])];
     assert!(matches!(
         PipelineDefinition::parse(stages),
         Err(PipelineError::InvalidRubric { .. })
@@ -184,14 +172,14 @@ fn parse_rejects_duplicate_dimension_keys() {
 
 #[test]
 fn parse_rejects_weights_not_summing_to_100() {
-    let stages = vec![stage("offer", StageKind::Offer, 1, 2, &[40, 40])];
+    let stages = vec![stage(0, StageKind::Offer, 1, 2, &[40, 40])];
     assert!(matches!(
         PipelineDefinition::parse(stages),
         Err(PipelineError::InvalidRubric { .. })
     ));
 
     // 全 0 表示等权，合法。
-    let stages = vec![stage("offer", StageKind::Offer, 1, 2, &[0, 0])];
+    let stages = vec![stage(0, StageKind::Offer, 1, 2, &[0, 0])];
     assert!(PipelineDefinition::parse(stages).is_ok());
 }
 
@@ -199,7 +187,7 @@ fn parse_rejects_weights_not_summing_to_100() {
 fn parse_rejects_zero_weight_in_weighted_rubric() {
     // 部分零权重（如 [100, 0]）总和为 100，但评估器会把 0 权重当作 1 参与
     // 计算，导致总分按 101 除算、翻转通过/拒绝判定；必须在校验期拒绝。
-    let stages = vec![stage("offer", StageKind::Offer, 1, 2, &[100, 0])];
+    let stages = vec![stage(0, StageKind::Offer, 1, 2, &[100, 0])];
     assert!(matches!(
         PipelineDefinition::parse(stages),
         Err(PipelineError::InvalidRubric { .. })
@@ -208,14 +196,14 @@ fn parse_rejects_zero_weight_in_weighted_rubric() {
 
 #[test]
 fn parse_rejects_empty_or_overlong_title() {
-    let mut stages = stage("offer", StageKind::Offer, 1, 2, &[0]);
+    let mut stages = stage(0, StageKind::Offer, 1, 2, &[0]);
     stages.title = String::new();
     assert!(matches!(
         PipelineDefinition::parse(vec![stages]),
         Err(PipelineError::InvalidStage { .. })
     ));
 
-    let mut stages = stage("offer", StageKind::Offer, 1, 2, &[0]);
+    let mut stages = stage(0, StageKind::Offer, 1, 2, &[0]);
     stages.title = "长".repeat(41);
     assert!(matches!(
         PipelineDefinition::parse(vec![stages]),
@@ -224,22 +212,11 @@ fn parse_rejects_empty_or_overlong_title() {
 }
 
 #[test]
-fn stage_key_enforces_format() {
-    for key in ["", "1abc", "Abc", "abc-", "a", &"a".repeat(33)] {
-        assert!(
-            matches!(
-                StageKey::parse(key),
-                Err(PipelineError::InvalidStageKey { .. })
-            ),
-            "key `{key}` must be rejected"
-        );
-    }
-    assert_eq!(
-        StageKey::parse("tech_round_1")
-            .expect("valid in test")
-            .as_str(),
-        "tech_round_1"
-    );
+fn stage_positions_are_zero_based_and_contiguous() {
+    let parsed = PipelineDefinition::parse(valid_stages()).expect("valid in test");
+    assert_eq!(parsed.get(0).expect("first stage").position, 0);
+    assert_eq!(parsed.get(1).expect("second stage").position, 1);
+    assert_eq!(parsed.get(2).expect("offer stage").position, 2);
 }
 
 #[test]
@@ -364,20 +341,14 @@ fn plan_transition_advances_when_passed() {
     let evaluation = evaluate(&rubric(&[0]), submitted(&[("d0", 80)]), "总评".to_owned())
         .expect("valid submission");
 
-    let transition = plan_transition(
-        &pipeline,
-        &StageKey::parse("hr").expect("valid in test"),
-        evaluation,
-        None,
-    )
-    .expect("advance is decidable");
+    let transition = plan_transition(&pipeline, 0, evaluation, None).expect("advance is decidable");
 
-    assert_eq!(transition.from.as_str(), "hr");
+    assert_eq!(transition.from, 0);
     assert!(transition.evaluation.passed);
     assert_eq!(
         transition.outcome,
         StageOutcome::Advance {
-            next_stage_key: StageKey::parse("tech_1").expect("valid in test"),
+            next_stage_position: 1,
             next_stage_kind: StageKind::TechInterview,
         }
     );
@@ -389,13 +360,8 @@ fn plan_transition_rejects_when_failed() {
     let evaluation = evaluate(&rubric(&[0]), submitted(&[("d0", 30)]), "未达标".to_owned())
         .expect("valid submission");
 
-    let transition = plan_transition(
-        &pipeline,
-        &StageKey::parse("hr").expect("valid in test"),
-        evaluation,
-        None,
-    )
-    .expect("rejection is decidable");
+    let transition =
+        plan_transition(&pipeline, 0, evaluation, None).expect("rejection is decidable");
 
     assert!(matches!(transition.outcome, StageOutcome::Rejected));
 }
@@ -409,16 +375,16 @@ fn plan_transition_requires_offer_terms_at_last_stage() {
         "谈薪完成".to_owned(),
     )
     .expect("valid submission");
-    let offer_stage = StageKey::parse("offer").expect("valid in test");
+    let offer_stage = 2;
 
     assert!(matches!(
-        plan_transition(&pipeline, &offer_stage, evaluation.clone(), None),
+        plan_transition(&pipeline, offer_stage, evaluation.clone(), None),
         Err(TransitionError::OfferTermsRequired)
     ));
 
     let offer = build_offer_terms(valid_offer_input(), &offer_policy(), Utc::now())
         .expect("valid offer input");
-    let transition = plan_transition(&pipeline, &offer_stage, evaluation, Some(offer))
+    let transition = plan_transition(&pipeline, offer_stage, evaluation, Some(offer))
         .expect("offer pending is decidable");
     assert!(matches!(
         transition.outcome,
@@ -435,11 +401,11 @@ fn plan_transition_reports_unknown_stage() {
     assert!(matches!(
         plan_transition(
             &pipeline,
-            &StageKey::parse("ghost").expect("valid in test"),
+            99,
             evaluation,
             None,
         ),
-        Err(TransitionError::UnknownStage(stage)) if stage == "ghost"
+        Err(TransitionError::UnknownStage(stage)) if stage == 99
     ));
 }
 

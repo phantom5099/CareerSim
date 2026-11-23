@@ -2,6 +2,18 @@
 
 use std::{sync::Arc, time::Duration};
 
+fn position_for_test(name: &str) -> u16 {
+    match name {
+        "hr" | "hr_screen" => 0,
+        "exam" | "tech_1" => 1,
+        "tech_2" | "offer_1" => 2,
+        "offer" => 1,
+        "tech_round_1" => 1,
+        "ghost" | "missing" => 99,
+        _ => 0,
+    }
+}
+
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -21,9 +33,7 @@ use crate::{
         mock::MockLlmClient,
     },
     pipeline::{
-        model::{
-            OfferPolicy, PipelineDefinition, StageDefinition, StageKey, StageKind, StageOutcome,
-        },
+        model::{OfferPolicy, PipelineDefinition, StageDefinition, StageKind, StageOutcome},
         rubric::{EvaluationRubric, RubricDimension, Score},
     },
     store::MemorySessionStore,
@@ -68,7 +78,7 @@ fn binding() -> SessionBinding {
 
 fn stage_ref(key: &str, kind: StageKind) -> StageRef {
     StageRef {
-        key: StageKey::parse(key).unwrap(),
+        position: position_for_test(key),
         kind,
     }
 }
@@ -103,7 +113,7 @@ fn rubric() -> EvaluationRubric {
 
 fn stage(key: &str, kind: StageKind, min_rounds: u8, max_rounds: u8) -> StageDefinition {
     StageDefinition {
-        key: StageKey::parse(key).unwrap(),
+        position: position_for_test(key),
         kind,
         title: "测试阶段".to_owned(),
         min_rounds,
@@ -132,8 +142,8 @@ fn offer_policy() -> OfferPolicy {
 }
 
 fn turn_ctx(pipeline: PipelineDefinition, key: &str) -> TurnContext {
-    let key = StageKey::parse(key).unwrap();
-    let stage = pipeline.get(&key).unwrap().clone();
+    let key = position_for_test(key);
+    let stage = pipeline.get(key).unwrap().clone();
     TurnContext {
         stage,
         pipeline,
@@ -259,11 +269,11 @@ async fn stage_mismatch_is_rejected_without_writing_events() {
 }
 
 #[tokio::test]
-async fn stage_kind_change_on_same_key_is_rejected() {
+async fn stage_kind_change_on_same_position_is_rejected() {
     let harness = harness(vec![reply("不应被调用")]);
     let session = harness.sessions.create(binding(), initial()).await.unwrap();
     // 流水线版本把同名阶段 hr_screen 从 hr_screen 改成 exam：
-    // key 相同但 kind 不同，事件 kind 必须与实际所用 rubric 一致，必须拒绝。
+    // position 相同但 kind 不同，事件 kind 必须与实际所用 rubric 一致，必须拒绝。
     let changed = PipelineDefinition::parse(vec![
         stage("hr_screen", StageKind::Exam, 1, 4),
         stage("offer", StageKind::Offer, 1, 2),
@@ -381,14 +391,14 @@ async fn evaluation_succeeds_and_appends_batch_in_order() {
     assert_eq!(result.reason, TurnEndReason::Done);
     let completion = result.stage_completion.expect("stage should complete");
     assert_eq!(completion.turn_id, TurnId(1));
-    assert_eq!(completion.record.stage_key, initial().key);
+    assert_eq!(completion.record.stage_position, initial().position);
     assert_eq!(completion.record.stage_kind, StageKind::HrScreen);
     assert_eq!(completion.record.evaluation.total.value(), 75);
     assert!(completion.record.evaluation.passed);
     assert_eq!(
         completion.outcome,
         StageOutcome::Advance {
-            next_stage_key: StageKey::parse("offer").unwrap(),
+            next_stage_position: position_for_test("offer"),
             next_stage_kind: StageKind::Offer,
         }
     );
@@ -428,11 +438,11 @@ async fn evaluation_succeeds_and_appends_batch_in_order() {
             },
             &SessionEventKind::StageCompleted {
                 turn_id: TurnId(1),
-                stage_key: StageKey::parse("hr_screen").unwrap(),
+                stage_position: position_for_test("hr_screen"),
                 stage_kind: StageKind::HrScreen,
                 evaluation: completion.record.evaluation.clone(),
                 outcome: StageOutcome::Advance {
-                    next_stage_key: StageKey::parse("offer").unwrap(),
+                    next_stage_position: position_for_test("offer"),
                     next_stage_kind: StageKind::Offer,
                 },
             },
@@ -737,10 +747,10 @@ async fn offer_stage_builds_terms_from_policy() {
     assert!(matches!(
         &session.events.last().unwrap().kind,
         SessionEventKind::StageCompleted {
-            stage_key,
+            stage_position,
             outcome: StageOutcome::OfferPending { .. },
             ..
-        } if stage_key.as_str() == "offer"
+        } if *stage_position == 1
     ));
 }
 

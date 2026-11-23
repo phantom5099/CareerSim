@@ -31,7 +31,6 @@ impl SessionStore for MemorySessionStore {
     async fn create(
         &self,
         id: Uuid,
-        stage: &str,
         meta: Value,
     ) -> Result<(StoredSession, StoredEvent), StoreError> {
         let now = Utc::now();
@@ -43,7 +42,6 @@ impl SessionStore for MemorySessionStore {
         };
         let session = StoredSession {
             id,
-            stage: stage.to_owned(),
             created_at: now,
             updated_at: now,
             last_seq: 0,
@@ -108,9 +106,7 @@ impl SessionStore for MemorySessionStore {
 
         let mut sessions = self.sessions.lock().await;
         let stored = sessions.get_mut(&id).ok_or(StoreError::NotFound)?;
-        if stored.session.stage != batch.expected.stage
-            || stored.session.last_seq != batch.expected.last_seq
-        {
+        if stored.session.last_seq != batch.expected.last_seq {
             return Err(StoreError::Conflict);
         }
 
@@ -130,9 +126,6 @@ impl SessionStore for MemorySessionStore {
 
         stored.session.last_seq = first_seq + events.len() as u64 - 1;
         stored.session.last_turn_id = stored.session.last_turn_id.max(batch.last_turn_id);
-        if let Some(next) = batch.next_stage {
-            stored.session.stage = next.to_owned();
-        }
         stored.session.updated_at = now;
         stored.events.extend(events.iter().cloned());
         Ok(events)

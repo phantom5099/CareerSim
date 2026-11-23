@@ -25,12 +25,11 @@ impl PostgresSessionStore {
         name = "store.postgres.insert_session",
         level = "debug",
         skip(self, meta),
-        fields(session_id = %id, stage = %stage)
+        fields(session_id = %id)
     )]
     async fn insert_session(
         &self,
         id: Uuid,
-        stage: &str,
         at: DateTime<Utc>,
         meta: Value,
     ) -> Result<(), StoreError> {
@@ -41,11 +40,10 @@ impl PostgresSessionStore {
             .map_err(|err| backend("create", err))?;
 
         sqlx::query(
-            "INSERT INTO sessions (id, stage, created_at, updated_at, last_seq, last_turn_id) \
-             VALUES ($1, $2, $3, $3, 0, 0)",
+            "INSERT INTO sessions (id, created_at, updated_at, last_seq, last_turn_id) \
+             VALUES ($1, $2, $2, 0, 0)",
         )
         .bind(id)
-        .bind(stage)
         .bind(at)
         .execute(&mut *tx)
         .await
@@ -79,20 +77,18 @@ impl SessionStore for PostgresSessionStore {
         name = "store.postgres.create",
         level = "debug",
         skip(self, meta),
-        fields(session_id = %id, stage = %stage)
+        fields(session_id = %id)
     )]
     async fn create(
         &self,
         id: Uuid,
-        stage: &str,
         meta: Value,
     ) -> Result<(StoredSession, StoredEvent), StoreError> {
         let at = Utc::now();
-        self.insert_session(id, stage, at, meta.clone()).await?;
+        self.insert_session(id, at, meta.clone()).await?;
 
         let session = StoredSession {
             id,
-            stage: stage.to_owned(),
             created_at: at,
             updated_at: at,
             last_seq: 0,
@@ -116,7 +112,7 @@ impl SessionStore for PostgresSessionStore {
             .map_err(|err| backend("load", err))?;
 
         let row = sqlx::query(
-            "SELECT id, stage, created_at, updated_at, last_seq, last_turn_id \
+            "SELECT id, created_at, updated_at, last_seq, last_turn_id \
              FROM sessions WHERE id = $1",
         )
         .bind(id)
@@ -129,7 +125,6 @@ impl SessionStore for PostgresSessionStore {
         };
 
         let row_id: Uuid = row.try_get("id").map_err(|err| backend("load", err))?;
-        let stage: String = row.try_get("stage").map_err(|err| backend("load", err))?;
         let created_at: DateTime<Utc> = row
             .try_get("created_at")
             .map_err(|err| backend("load", err))?;
@@ -151,7 +146,6 @@ impl SessionStore for PostgresSessionStore {
 
         let session = StoredSession {
             id,
-            stage,
             created_at,
             updated_at,
             last_seq: to_u64(last_seq, "last_seq")?,
@@ -201,7 +195,7 @@ impl SessionStore for PostgresSessionStore {
     async fn list(&self, limit: usize) -> Result<Vec<StoredSession>, StoreError> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let rows = sqlx::query(
-            "SELECT id, stage, created_at, updated_at, last_seq, last_turn_id \
+            "SELECT id, created_at, updated_at, last_seq, last_turn_id \
              FROM sessions ORDER BY updated_at DESC, id DESC LIMIT $1",
         )
         .bind(limit)
@@ -212,7 +206,6 @@ impl SessionStore for PostgresSessionStore {
         let mut sessions = Vec::with_capacity(rows.len());
         for row in rows {
             let id: Uuid = row.try_get("id").map_err(|err| backend("list", err))?;
-            let stage: String = row.try_get("stage").map_err(|err| backend("list", err))?;
             let last_seq: i64 = row
                 .try_get("last_seq")
                 .map_err(|err| backend("list", err))?;
@@ -222,7 +215,6 @@ impl SessionStore for PostgresSessionStore {
 
             sessions.push(StoredSession {
                 id,
-                stage,
                 created_at: row
                     .try_get("created_at")
                     .map_err(|err| backend("list", err))?,
@@ -259,7 +251,6 @@ impl SessionStore for PostgresSessionStore {
         fields(
             session_id = %id,
             event_count = batch.events.len(),
-            expected_stage = %batch.expected.stage,
             expected_last_seq = batch.expected.last_seq
         )
     )]
@@ -278,13 +269,12 @@ impl SessionStore for PostgresSessionStore {
             .await
             .map_err(|err| backend("append", err))?;
 
-        let row = sqlx::query(
-            "SELECT last_seq, last_turn_id, stage FROM sessions WHERE id = $1 FOR UPDATE",
-        )
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|err| backend("append", err))?;
+        let row =
+            sqlx::query("SELECT last_seq, last_turn_id FROM sessions WHERE id = $1 FOR UPDATE")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|err| backend("append", err))?;
 
         let Some(row) = row else {
             return Err(StoreError::NotFound);
@@ -296,10 +286,9 @@ impl SessionStore for PostgresSessionStore {
         let last_turn_id: i64 = row
             .try_get("last_turn_id")
             .map_err(|err| backend("append", err))?;
-        let stage: String = row.try_get("stage").map_err(|err| backend("append", err))?;
 
         let current_last_seq = to_u64(last_seq, "last_seq")?;
-        if stage != batch.expected.stage || current_last_seq != batch.expected.last_seq {
+        if current_last_seq != batch.expected.last_seq {
             metrics::counter!(
                 "careersim_session_store_conflicts_total",
                 "operation" => "append"
@@ -349,33 +338,17 @@ impl SessionStore for PostgresSessionStore {
             i64::try_from(to_u64(last_turn_id, "last_turn_id")?.max(batch.last_turn_id))
                 .unwrap_or(i64::MAX);
 
-        let update = if let Some(next) = batch.next_stage {
-            sqlx::query(
-                "UPDATE sessions SET last_seq = $2, \
-                 last_turn_id = $3, updated_at = $4, stage = $5 \
-                 WHERE id = $1",
-            )
-            .bind(id)
-            .bind(new_last_seq)
-            .bind(new_last_turn_id)
-            .bind(at)
-            .bind(next)
-        } else {
-            sqlx::query(
-                "UPDATE sessions SET last_seq = $2, \
-                 last_turn_id = $3, updated_at = $4 \
-                 WHERE id = $1",
-            )
-            .bind(id)
-            .bind(new_last_seq)
-            .bind(new_last_turn_id)
-            .bind(at)
-        };
-
-        update
-            .execute(&mut *tx)
-            .await
-            .map_err(|err| backend("append", err))?;
+        sqlx::query(
+            "UPDATE sessions SET last_seq = $2, last_turn_id = $3, updated_at = $4 \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(new_last_seq)
+        .bind(new_last_turn_id)
+        .bind(at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| backend("append", err))?;
 
         tx.commit().await.map_err(|err| backend("append", err))?;
         metrics::counter!(

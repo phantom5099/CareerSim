@@ -3,6 +3,8 @@
 //! 覆盖：份数上限（行锁路径）、默认简历唯一与删除后提升、附件上传解析失败
 //! 保留附件、下载流一致性、超限/空文件/格式不符拒绝。
 
+mod support;
+
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -10,17 +12,28 @@ use std::{
 };
 
 use careersim::{
-    account::{model::UserId, password::Argon2idHasher, postgres_account_service},
+    account::{
+        model::UserId, password::Argon2idHasher, postgres_account_service, service::RegisterInput,
+    },
     resume::{
         content::ResumeContent,
         model::{MAX_ATTACHMENT_BYTES, ParseStatus, ResumeError},
         postgres_resume_service,
+        service::{CreateResumeInput, UploadResumeInput},
         storage::{LocalFsAttachmentStore, read_attachment_bytes},
     },
 };
 use sqlx::postgres::PgPoolOptions;
+use support::CleanupGuard;
 
-async fn setup(tag: &str) -> Option<(UserId, careersim::resume::ResumeService, PathBuf)> {
+async fn setup(
+    tag: &str,
+) -> Option<(
+    UserId,
+    careersim::resume::ResumeService,
+    PathBuf,
+    CleanupGuard,
+)> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
         return None;
     };
@@ -42,21 +55,24 @@ async fn setup(tag: &str) -> Option<(UserId, careersim::resume::ResumeService, P
         .expect("clock")
         .as_nanos();
     let grant = account
-        .register(
-            &format!("b2{tag}{}", suffix % 1_000_000_000),
-            "password123",
-            "B2 集成测试",
-        )
+        .register(RegisterInput {
+            username: format!("b2{tag}{}", suffix % 1_000_000_000),
+            password: "password123".to_owned(),
+            display_name: "B2 集成测试".to_owned(),
+        })
         .await
         .expect("register user");
     let owner = grant.user.id;
+    let mut cleanup = CleanupGuard::new(&url);
+    cleanup.track_user(owner);
 
     let root = std::env::temp_dir().join(format!(
         "careersim-b2-resume-it-{tag}-{}",
         uuid::Uuid::new_v4()
     ));
+    cleanup.track_directory(root.clone());
     let service = postgres_resume_service(pool, Arc::new(LocalFsAttachmentStore::new(&root)));
-    Some((owner, service, root))
+    Some((owner, service, root, cleanup))
 }
 
 fn fake_pdf_bytes() -> Vec<u8> {
@@ -73,14 +89,20 @@ fn count_files(root: &Path) -> usize {
 
 #[tokio::test]
 async fn resume_limit_and_default_promotion() {
-    let Some((owner, service, root)) = setup("limit").await else {
+    let Some((owner, service, root, _cleanup)) = setup("limit").await else {
         return;
     };
 
     let mut created = Vec::new();
     for index in 1..=3 {
         let resume = service
-            .create_online(owner, &format!("简历{index}"), ResumeContent::default())
+            .create_online(
+                owner,
+                CreateResumeInput {
+                    title: format!("简历{index}"),
+                    content: ResumeContent::default(),
+                },
+            )
             .await
             .expect("create online resume");
         created.push(resume.id);
@@ -97,7 +119,13 @@ async fn resume_limit_and_default_promotion() {
     // 第 4 份触发上限。
     assert!(matches!(
         service
-            .create_online(owner, "第四份", ResumeContent::default())
+            .create_online(
+                owner,
+                CreateResumeInput {
+                    title: "第四份".to_owned(),
+                    content: ResumeContent::default(),
+                },
+            )
             .await,
         Err(ResumeError::LimitReached)
     ));
@@ -105,7 +133,14 @@ async fn resume_limit_and_default_promotion() {
     // 上限已满时上传附件：DB 写入失败 → 已落盘附件被清理。
     assert!(matches!(
         service
-            .upload_attachment(owner, "第五份", "resume.pdf", &fake_pdf_bytes())
+            .upload_attachment(
+                owner,
+                UploadResumeInput {
+                    title: "第五份".to_owned(),
+                    file_name: "resume.pdf".to_owned(),
+                    bytes: fake_pdf_bytes(),
+                },
+            )
             .await,
         Err(ResumeError::LimitReached)
     ));
@@ -135,14 +170,21 @@ async fn resume_limit_and_default_promotion() {
 
 #[tokio::test]
 async fn attachment_upload_parse_and_download() {
-    let Some((owner, service, root)) = setup("attachment").await else {
+    let Some((owner, service, root, _cleanup)) = setup("attachment").await else {
         return;
     };
 
     // 伪造 PDF：双重格式校验通过，但解析失败（corrupt）→ 附件保留、状态 failed。
     let fake_pdf = fake_pdf_bytes();
     let resume = service
-        .upload_attachment(owner, "附件简历", "我的简历.pdf", &fake_pdf)
+        .upload_attachment(
+            owner,
+            UploadResumeInput {
+                title: "附件简历".to_owned(),
+                file_name: "我的简历.pdf".to_owned(),
+                bytes: fake_pdf.clone(),
+            },
+        )
         .await
         .expect("upload attachment");
     assert!(resume.attachment.is_some());
@@ -164,7 +206,13 @@ async fn attachment_upload_parse_and_download() {
 
     // 在线简历没有附件可下载。
     let online = service
-        .create_online(owner, "在线", ResumeContent::default())
+        .create_online(
+            owner,
+            CreateResumeInput {
+                title: "在线".to_owned(),
+                content: ResumeContent::default(),
+            },
+        )
         .await
         .expect("create online");
     assert!(matches!(
@@ -176,19 +224,40 @@ async fn attachment_upload_parse_and_download() {
     let oversized = vec![0u8; MAX_ATTACHMENT_BYTES + 1];
     assert!(matches!(
         service
-            .upload_attachment(owner, "超限", "big.pdf", &oversized)
+            .upload_attachment(
+                owner,
+                UploadResumeInput {
+                    title: "超限".to_owned(),
+                    file_name: "big.pdf".to_owned(),
+                    bytes: oversized,
+                },
+            )
             .await,
         Err(ResumeError::AttachmentTooLarge)
     ));
     assert!(matches!(
         service
-            .upload_attachment(owner, "空文件", "empty.pdf", b"")
+            .upload_attachment(
+                owner,
+                UploadResumeInput {
+                    title: "空文件".to_owned(),
+                    file_name: "empty.pdf".to_owned(),
+                    bytes: Vec::new(),
+                },
+            )
             .await,
         Err(ResumeError::UnsupportedAttachment)
     ));
     assert!(matches!(
         service
-            .upload_attachment(owner, "伪装", "fake.docx", &fake_pdf)
+            .upload_attachment(
+                owner,
+                UploadResumeInput {
+                    title: "伪装".to_owned(),
+                    file_name: "fake.docx".to_owned(),
+                    bytes: fake_pdf,
+                },
+            )
             .await,
         Err(ResumeError::UnsupportedAttachment)
     ));

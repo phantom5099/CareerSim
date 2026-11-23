@@ -8,15 +8,18 @@ use tracing::instrument;
 use super::{
     content::ResumeContent,
     model::{
-        DOCX_MIME, MAX_ATTACHMENT_BYTES, NewResume, PDF_MIME, ParseStatus, Resume,
-        ResumeAttachment, ResumeError, ResumeId, ResumePatch,
+        DOCX_MIME, MAX_ATTACHMENT_BYTES, PDF_MIME, ParseStatus, Resume, ResumeAttachment,
+        ResumeError, ResumeId,
     },
     parse::{
         AttachmentKind, DocxTextExtractor, EXTRACT_TIMEOUT, ParseError, ResumeTextExtractor,
         truncate_utf8,
     },
     storage::{AttachmentStore, AttachmentStoreError},
-    store::{ResumeStore, ResumeStoreError},
+    store::{
+        CreateResumeAttachmentRecord, CreateResumeRecord, ResumeStore, ResumeStoreError,
+        UpdateResumeRecord,
+    },
     structurize::{merge_parsed, structurize},
 };
 use crate::account::model::UserId;
@@ -26,6 +29,27 @@ pub struct OpenedAttachment {
     pub file_name: String,
     pub mime: String,
     pub stream: Box<dyn AsyncRead + Send + Unpin>,
+}
+
+pub struct CreateResumeInput {
+    pub title: String,
+    pub content: ResumeContent,
+}
+
+pub struct UploadResumeInput {
+    pub title: String,
+    pub file_name: String,
+    pub bytes: Vec<u8>,
+}
+
+pub struct AttachResumeInput {
+    pub file_name: String,
+    pub bytes: Vec<u8>,
+}
+
+pub struct UpdateResumeInput {
+    pub title: Option<String>,
+    pub content: Option<ResumeContent>,
 }
 
 pub struct ResumeService {
@@ -58,18 +82,17 @@ impl ResumeService {
     }
 
     /// 创建在线手填简历。
-    #[instrument(name = "resume.create_online", level = "debug", skip(self, title, content), fields(owner_id = ?owner))]
+    #[instrument(name = "resume.create_online", level = "debug", skip(self, input), fields(owner_id = ?owner))]
     pub async fn create_online(
         &self,
         owner: UserId,
-        title: &str,
-        content: ResumeContent,
+        input: CreateResumeInput,
     ) -> Result<Resume, ResumeError> {
-        let title = super::model::validate_title(title)?;
+        let title = super::model::validate_title(&input.title)?;
         // 字段级边界与 DB 字节兜底分属两层；入库前必须先过字段校验。
-        content.validate()?;
-        let json = content.to_json()?;
-        let resume = NewResume {
+        input.content.validate()?;
+        let json = input.content.to_json()?;
+        let resume = CreateResumeRecord {
             id: ResumeId::generate(),
             title,
             content: json,
@@ -86,34 +109,34 @@ impl ResumeService {
     ///
     /// 解析失败时仍保留附件并落库 `failed` 状态与固定错误码；数据库写入失败时
     /// 尽力删除已落盘文件，避免孤儿文件。
-    #[instrument(name = "resume.upload_attachment", level = "debug", skip(self, title, raw_file_name, bytes), fields(owner_id = ?owner, bytes = bytes.len()))]
+    #[instrument(name = "resume.upload_attachment", level = "debug", skip(self, input), fields(owner_id = ?owner, bytes = input.bytes.len()))]
     pub async fn upload_attachment(
         &self,
         owner: UserId,
-        title: &str,
-        raw_file_name: &str,
-        bytes: &[u8],
+        input: UploadResumeInput,
     ) -> Result<Resume, ResumeError> {
-        let title = super::model::validate_title(title)?;
+        let title = super::model::validate_title(&input.title)?;
+        let raw_file_name = input.file_name;
+        let bytes = input.bytes;
         if bytes.is_empty() {
             return Err(ResumeError::UnsupportedAttachment);
         }
         if bytes.len() > MAX_ATTACHMENT_BYTES {
             return Err(ResumeError::AttachmentTooLarge);
         }
-        let kind = detect_attachment_kind(raw_file_name, bytes)?;
-        let file_name = sanitize_file_name(raw_file_name)?;
+        let kind = detect_attachment_kind(&raw_file_name, &bytes)?;
+        let file_name = sanitize_file_name(&raw_file_name)?;
 
         let storage_key = uuid::Uuid::new_v4().to_string();
         self.attachments
-            .put(&storage_key, bytes)
+            .put(&storage_key, &bytes)
             .await
             .map_err(map_attachment_error)?;
 
         // 文件已落盘：此后任何失败都必须清理附件并记录日志，避免孤儿文件
         // （plan/01 §8.1 第 11 步）。
         let outcome = self
-            .parse_and_insert(owner, title, file_name, kind, &storage_key, bytes.to_vec())
+            .parse_and_insert(owner, title, file_name, kind, &storage_key, bytes)
             .await;
         if let Err(err) = &outcome {
             tracing::error!(
@@ -130,18 +153,19 @@ impl ResumeService {
     ///
     /// 只填空字段、列表追加去重，用户已填内容不被覆盖；替换旧附件时旧文件
     /// 在数据库更新成功后清理。解析失败仍保留附件并落库 `failed` 状态。
-    #[instrument(name = "resume.attach_to_resume", level = "debug", skip(self, raw_file_name, bytes), fields(owner_id = ?owner, resume_id = ?id, bytes = bytes.len()))]
+    #[instrument(name = "resume.attach_to_resume", level = "debug", skip(self, input), fields(owner_id = ?owner, resume_id = ?id, bytes = input.bytes.len()))]
     pub async fn attach_to_resume(
         &self,
         owner: UserId,
         id: ResumeId,
-        raw_file_name: &str,
-        bytes: &[u8],
+        input: AttachResumeInput,
     ) -> Result<Resume, ResumeError> {
-        let (file_name, kind, storage_key) = self.validate_and_store(raw_file_name, bytes).await?;
+        let (file_name, kind, storage_key) = self
+            .validate_and_store(&input.file_name, &input.bytes)
+            .await?;
 
         let outcome = self
-            .parse_and_attach(owner, id, file_name, kind, &storage_key, bytes.to_vec())
+            .parse_and_attach(owner, id, file_name, kind, &storage_key, input.bytes)
             .await;
         if let Err(err) = &outcome {
             tracing::error!(
@@ -242,7 +266,7 @@ impl ResumeService {
             .attach(
                 owner,
                 id,
-                super::model::NewResumeAttachment {
+                CreateResumeAttachmentRecord {
                     storage_key: storage_key.to_owned(),
                     file_name: file_name.clone(),
                 },
@@ -331,11 +355,11 @@ impl ResumeService {
             None => ResumeContent::default().to_json()?,
         };
 
-        let resume = NewResume {
+        let resume = CreateResumeRecord {
             id: ResumeId::generate(),
             title,
             content,
-            attachment: Some(super::model::NewResumeAttachment {
+            attachment: Some(CreateResumeAttachmentRecord {
                 storage_key: storage_key.to_owned(),
                 file_name,
             }),
@@ -353,21 +377,20 @@ impl ResumeService {
         &self,
         owner: UserId,
         id: ResumeId,
-        title: Option<&str>,
-        content: Option<ResumeContent>,
+        input: UpdateResumeInput,
     ) -> Result<Resume, ResumeError> {
-        let title = match title {
+        let title = match input.title.as_deref() {
             Some(raw) => Some(super::model::validate_title(raw)?),
             None => None,
         };
-        let content_json = match content {
+        let content_json = match input.content {
             Some(value) => {
                 value.validate()?;
                 Some(value.to_json()?)
             }
             None => None,
         };
-        let patch = ResumePatch {
+        let patch = UpdateResumeRecord {
             title,
             content: content_json,
         };

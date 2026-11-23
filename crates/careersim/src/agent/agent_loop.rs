@@ -127,7 +127,7 @@ impl AgentLoop {
         skip(self, input, ctx, cancel),
         fields(
             session_id = %id,
-            stage = %ctx.stage.key,
+            stage = %ctx.stage.position,
             stage_kind = %ctx.stage.kind.as_str(),
             turn_id = field::Empty
         )
@@ -154,16 +154,16 @@ impl AgentLoop {
         })?;
         // §8.1：会话当前阶段必须与 TurnContext 一致（key 与 kind 都要一致）；
         // 同 key 改 kind 时事件 kind 必须反映实际所用 rubric 的阶段，不猜测。
-        if session.current_stage.key != ctx.stage.key
+        if session.current_stage.position != ctx.stage.position
             || session.current_stage.kind != ctx.stage.kind
-            || ctx.pipeline.get(&ctx.stage.key) != Some(&ctx.stage)
+            || ctx.pipeline.get(ctx.stage.position) != Some(&ctx.stage)
         {
             warn!(error_kind = "stage_mismatch", "turn context rejected");
             return Err(LoopError::StageMismatch {
-                context: format!("{}:{}", ctx.stage.key, ctx.stage.kind.as_str()),
+                context: format!("{}:{}", ctx.stage.position, ctx.stage.kind.as_str()),
                 session: format!(
                     "{}:{}",
-                    session.current_stage.key,
+                    session.current_stage.position,
                     session.current_stage.kind.as_str()
                 ),
             });
@@ -181,7 +181,7 @@ impl AgentLoop {
         info!(
             session_id = %id,
             turn_id = turn_id.0,
-            stage = %session.current_stage.key,
+            stage = %session.current_stage.position,
             role = %session.role(),
             "turn started"
         );
@@ -608,13 +608,17 @@ impl AgentLoop {
             _ => None,
         };
 
-        let transition =
-            plan_transition(&ctx.pipeline, &session.current_stage.key, evaluation, offer)
-                .map_err(|err| CompleteStageError::InvalidArguments(err.to_string()))?;
+        let transition = plan_transition(
+            &ctx.pipeline,
+            session.current_stage.position,
+            evaluation,
+            offer,
+        )
+        .map_err(|err| CompleteStageError::InvalidArguments(err.to_string()))?;
 
         let record = StageEvaluationRecord {
             turn_id,
-            stage_key: session.current_stage.key.clone(),
+            stage_position: session.current_stage.position,
             stage_kind: session.current_stage.kind,
             evaluation: transition.evaluation,
         };
@@ -651,7 +655,7 @@ impl AgentLoop {
         info!(
             session_id = %id,
             turn_id = completion.turn_id.0,
-            stage = %completion.record.stage_key,
+            stage = %completion.record.stage_position,
             "stage completed"
         );
         metrics::counter!(
