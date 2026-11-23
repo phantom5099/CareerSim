@@ -7,7 +7,7 @@ pub mod store;
 
 pub use model::{
     Application, ApplicationError, ApplicationId, ApplicationStageView, ApplicationStatus,
-    ApplicationView, CreateApplicationInput,
+    ApplicationView, CreateApplicationInput, OfferResponseStatus, OfferView,
 };
 pub use service::ApplicationService;
 pub use store::CreateApplicationRecord;
