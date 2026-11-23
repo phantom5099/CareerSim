@@ -18,10 +18,7 @@ mod tests;
 use std::sync::Arc;
 
 pub use content::ResumeContent;
-pub use model::{
-    ParseErrorCode, ParseStatus, Resume, ResumeAttachment, ResumeError, ResumeId,
-    ValidatedResumeAttachmentInput, ValidatedResumeInput, ValidatedResumeUpdateInput,
-};
+pub use model::{ParseErrorCode, ParseStatus, Resume, ResumeAttachment, ResumeError, ResumeId};
 pub use parse::{
     AttachmentKind, CompositeTextExtractor, DocxTextExtractor, ParseError, PdfTextExtractor,
     ResumeTextExtractor,
@@ -34,7 +31,10 @@ use sqlx::PgPool;
 pub use storage::{
     AttachmentStore, AttachmentStoreError, LocalFsAttachmentStore, S3AttachmentStore,
 };
-pub use store::{ResumeStore, ResumeStoreError};
+pub use store::{
+    CreateResumeAttachmentRecord, CreateResumeRecord, ResumeStore, ResumeStoreError,
+    UpdateResumeRecord,
+};
 pub use structurize::{merge_parsed, structurize};
 
 /// 附件格式统一提取器：PDF + DOCX。

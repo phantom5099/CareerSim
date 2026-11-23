@@ -9,11 +9,11 @@ use tracing::instrument;
 use super::{
     model::{
         AccountError, DISPLAY_NAME_MAX_CHARS, Password, PasswordHash, UpdateProfileInput, User,
-        UserId, Username, ValidatedUserInput,
+        UserId, Username,
     },
     password::PasswordHasher,
     session::{SessionId, SessionToken, new_login_session},
-    store::{SessionStore, SessionStoreError, UserStore, UserStoreError},
+    store::{CreateUserRecord, SessionStore, SessionStoreError, UserStore, UserStoreError},
 };
 
 /// 时钟端口；测试用 `FakeClock`，生产用 [`SystemClock`]。
@@ -120,7 +120,7 @@ impl AccountService {
         let now = self.clock.now();
         let user = self
             .users
-            .insert(ValidatedUserInput {
+            .insert(CreateUserRecord {
                 id: UserId::generate(),
                 username: username.trim().to_owned(),
                 username_key,

@@ -5,9 +5,9 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row, postgres::PgRow};
 
 use super::{
-    model::{CredentialUser, PasswordHash, UpdateProfileInput, User, UserId, ValidatedUserInput},
-    session::{CreateLoginSessionInput, LoginSession, SessionId, SessionTokenHash},
-    store::{SessionStore, SessionStoreError, UserStore, UserStoreError},
+    model::{CredentialUser, PasswordHash, UpdateProfileInput, User, UserId},
+    session::{CreateLoginSessionRecord, LoginSession, SessionId, SessionTokenHash},
+    store::{CreateUserRecord, SessionStore, SessionStoreError, UserStore, UserStoreError},
 };
 
 pub(crate) struct PgUserStore {
@@ -108,7 +108,7 @@ fn session_from_row(row: &PgRow) -> Result<LoginSession, SessionStoreError> {
 
 #[async_trait]
 impl UserStore for PgUserStore {
-    async fn insert(&self, new: ValidatedUserInput) -> Result<User, UserStoreError> {
+    async fn insert(&self, new: CreateUserRecord) -> Result<User, UserStoreError> {
         sqlx::query(
             "INSERT INTO users (id, username, username_key, password_hash, display_name, \
              created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $6) \
@@ -237,7 +237,7 @@ impl UserStore for PgUserStore {
 
 #[async_trait]
 impl SessionStore for PgSessionStore {
-    async fn insert(&self, session: CreateLoginSessionInput) -> Result<(), SessionStoreError> {
+    async fn insert(&self, session: CreateLoginSessionRecord) -> Result<(), SessionStoreError> {
         sqlx::query(
             "INSERT INTO login_sessions \
              (id, user_id, token_hash, created_at, last_seen_at, idle_expires_at, absolute_expires_at) \
@@ -338,7 +338,7 @@ impl SessionStore for PgSessionStore {
     async fn rotate(
         &self,
         old: SessionId,
-        new: CreateLoginSessionInput,
+        new: CreateLoginSessionRecord,
         now: DateTime<Utc>,
     ) -> Result<(), SessionStoreError> {
         let mut tx = self

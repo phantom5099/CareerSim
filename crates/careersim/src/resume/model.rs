@@ -116,13 +116,6 @@ pub struct ResumeAttachment {
     pub mime: String,
 }
 
-/// 待写入的附件元数据；MIME 由 `file_name` 后缀推导，不单独落库。
-#[derive(Debug, Clone)]
-pub struct ValidatedResumeAttachmentInput {
-    pub storage_key: String,
-    pub file_name: String,
-}
-
 /// 简历聚合：结构化在线内容（必有、可编辑）+ 可选附件（原始 PDF/DOCX）。
 #[derive(Debug, Clone)]
 pub struct Resume {
@@ -138,23 +131,6 @@ pub struct Resume {
     pub parse_status: ParseStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-/// 插入简历的存储输入；`content` 已完成边界校验并序列化。
-#[derive(Debug, Clone)]
-pub struct ValidatedResumeInput {
-    pub id: ResumeId,
-    pub title: String,
-    pub content: serde_json::Value,
-    pub attachment: Option<ValidatedResumeAttachmentInput>,
-    pub parse_status: ParseStatus,
-}
-
-/// 编辑输入；PATCH 语义，字段为空表示不修改。
-#[derive(Debug, Clone, Default)]
-pub struct ValidatedResumeUpdateInput {
-    pub title: Option<String>,
-    pub content: Option<serde_json::Value>,
 }
 
 /// 标题边界：trim 后 1..=80 字符（plan/01 §5.3 `resumes_title_len`）。

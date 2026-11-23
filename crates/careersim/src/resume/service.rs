@@ -9,14 +9,17 @@ use super::{
     content::ResumeContent,
     model::{
         DOCX_MIME, MAX_ATTACHMENT_BYTES, PDF_MIME, ParseStatus, Resume, ResumeAttachment,
-        ResumeError, ResumeId, ValidatedResumeInput, ValidatedResumeUpdateInput,
+        ResumeError, ResumeId,
     },
     parse::{
         AttachmentKind, DocxTextExtractor, EXTRACT_TIMEOUT, ParseError, ResumeTextExtractor,
         truncate_utf8,
     },
     storage::{AttachmentStore, AttachmentStoreError},
-    store::{ResumeStore, ResumeStoreError},
+    store::{
+        CreateResumeAttachmentRecord, CreateResumeRecord, ResumeStore, ResumeStoreError,
+        UpdateResumeRecord,
+    },
     structurize::{merge_parsed, structurize},
 };
 use crate::account::model::UserId;
@@ -89,7 +92,7 @@ impl ResumeService {
         // 字段级边界与 DB 字节兜底分属两层；入库前必须先过字段校验。
         input.content.validate()?;
         let json = input.content.to_json()?;
-        let resume = ValidatedResumeInput {
+        let resume = CreateResumeRecord {
             id: ResumeId::generate(),
             title,
             content: json,
@@ -263,7 +266,7 @@ impl ResumeService {
             .attach(
                 owner,
                 id,
-                super::model::ValidatedResumeAttachmentInput {
+                CreateResumeAttachmentRecord {
                     storage_key: storage_key.to_owned(),
                     file_name: file_name.clone(),
                 },
@@ -352,11 +355,11 @@ impl ResumeService {
             None => ResumeContent::default().to_json()?,
         };
 
-        let resume = ValidatedResumeInput {
+        let resume = CreateResumeRecord {
             id: ResumeId::generate(),
             title,
             content,
-            attachment: Some(super::model::ValidatedResumeAttachmentInput {
+            attachment: Some(CreateResumeAttachmentRecord {
                 storage_key: storage_key.to_owned(),
                 file_name,
             }),
@@ -387,7 +390,7 @@ impl ResumeService {
             }
             None => None,
         };
-        let patch = ValidatedResumeUpdateInput {
+        let patch = UpdateResumeRecord {
             title,
             content: content_json,
         };

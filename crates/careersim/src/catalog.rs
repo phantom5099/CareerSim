@@ -10,16 +10,17 @@ pub mod template;
 pub use model::{
     CatalogError, Company, CompanyDetail, CompanyId, CompanySource, CompanySummary, Job, JobId,
     JobStatus, JobType, ListCursor, Pipeline, PipelineId, ProjectId, ProjectStatus,
-    RecruitmentProject, ValidatedCompanyInput, ValidatedCompanyUpdateInput, ValidatedJobInput,
-    ValidatedJobUpdateInput, ValidatedPipelineInput, ValidatedProjectInput,
-    ValidatedProjectUpdateInput,
+    RecruitmentProject,
 };
 pub use service::{
     CatalogService, CreateCompanyInput, CreateJobInput, CreatePipelineInput, CreateProjectInput,
     ReplacePipelineInput, UpdateCompanyInput, UpdateJobInput, UpdatePipelineInput,
     UpdateProjectInput,
 };
-pub use store::CatalogScope;
+pub use store::{
+    CatalogScope, CreateCompanyRecord, CreateJobRecord, CreatePipelineRecord, CreateProjectRecord,
+    UpdateCompanyRecord, UpdateJobRecord, UpdateProjectRecord,
+};
 pub use template::{TemplateError, ValidatedTemplate};
 
 /// 组装 PostgreSQL 实现的 catalog 服务；组合根（app.rs）调用。

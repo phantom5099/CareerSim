@@ -10,12 +10,12 @@ use super::{
     model::{
         CatalogError, Company, CompanyDetail, CompanyId, CompanySummary, JOB_TAGS_MAX_ITEMS, Job,
         JobId, JobStatus, JobType, ListCursor, Pipeline, PipelineId, ProjectId, ProjectStatus,
-        RecruitmentProject, ValidatedCompanyInput, ValidatedCompanyUpdateInput, ValidatedJobInput,
-        ValidatedJobUpdateInput, ValidatedPipelineInput, ValidatedProjectInput,
-        ValidatedProjectUpdateInput, validate_company_fields, validate_project_name,
-        validate_salary,
+        RecruitmentProject, validate_company_fields, validate_project_name, validate_salary,
     },
-    store::{CatalogScope, CatalogStore},
+    store::{
+        CatalogScope, CatalogStore, CreateCompanyRecord, CreateJobRecord, CreatePipelineRecord,
+        CreateProjectRecord, UpdateCompanyRecord, UpdateJobRecord, UpdateProjectRecord,
+    },
     template::{self, ValidatedTemplate},
 };
 use crate::{
@@ -225,7 +225,7 @@ pub struct CreateCompanyInput {
 }
 
 impl CreateCompanyInput {
-    fn validate(self) -> Result<ValidatedCompanyInput, CatalogError> {
+    fn validate(self) -> Result<CreateCompanyRecord, CatalogError> {
         validate_company_fields(&self.name, &self.highlights, &self.logo_text, &self.accent)?;
         if self.industry.trim().is_empty() {
             return Err(CatalogError::InvalidInput {
@@ -233,7 +233,7 @@ impl CreateCompanyInput {
                 reason: "must be a non-empty string".to_owned(),
             });
         }
-        Ok(ValidatedCompanyInput {
+        Ok(CreateCompanyRecord {
             name: self.name.trim().to_owned(),
             english_name: self.english_name.trim().to_owned(),
             industry: self.industry.trim().to_owned(),
@@ -270,7 +270,7 @@ pub struct UpdateCompanyInput {
 }
 
 impl UpdateCompanyInput {
-    fn validate(self) -> Result<ValidatedCompanyUpdateInput, CatalogError> {
+    fn validate(self) -> Result<UpdateCompanyRecord, CatalogError> {
         if let Some(name) = &self.name {
             validate_company_fields(name, &[], "", "")?;
         }
@@ -291,7 +291,7 @@ impl UpdateCompanyInput {
                 reason: "must be a non-empty string".to_owned(),
             });
         }
-        Ok(ValidatedCompanyUpdateInput {
+        Ok(UpdateCompanyRecord {
             name: self.name.map(|value| value.trim().to_owned()),
             english_name: self.english_name.map(|value| value.trim().to_owned()),
             industry: self.industry.map(|value| value.trim().to_owned()),
@@ -322,9 +322,9 @@ pub struct CreateProjectInput {
 }
 
 impl CreateProjectInput {
-    fn validate(self) -> Result<ValidatedProjectInput, CatalogError> {
+    fn validate(self) -> Result<CreateProjectRecord, CatalogError> {
         validate_project_name(&self.name)?;
-        Ok(ValidatedProjectInput {
+        Ok(CreateProjectRecord {
             name: self.name.trim().to_owned(),
             season: self.season.trim().to_owned(),
             status: self.status.unwrap_or(ProjectStatus::Open),
@@ -344,11 +344,11 @@ pub struct UpdateProjectInput {
 }
 
 impl UpdateProjectInput {
-    fn validate(self) -> Result<ValidatedProjectUpdateInput, CatalogError> {
+    fn validate(self) -> Result<UpdateProjectRecord, CatalogError> {
         if let Some(name) = &self.name {
             validate_project_name(name)?;
         }
-        Ok(ValidatedProjectUpdateInput {
+        Ok(UpdateProjectRecord {
             name: self.name.map(|value| value.trim().to_owned()),
             season: self.season.map(|value| value.trim().to_owned()),
             status: self.status,
@@ -365,7 +365,7 @@ pub struct CreatePipelineInput {
 }
 
 impl CreatePipelineInput {
-    fn validate(self) -> Result<ValidatedPipelineInput, CatalogError> {
+    fn validate(self) -> Result<CreatePipelineRecord, CatalogError> {
         let name = Self::validate_name(&self.name)?;
         let stages = self.stages.unwrap_or_default();
         let definition =
@@ -373,7 +373,7 @@ impl CreatePipelineInput {
                 field: "stages",
                 reason: error.to_string(),
             })?;
-        Ok(ValidatedPipelineInput { name, definition })
+        Ok(CreatePipelineRecord { name, definition })
     }
 
     fn validate_name(name: &str) -> Result<String, CatalogError> {
@@ -400,7 +400,7 @@ pub struct ReplacePipelineInput {
 }
 
 impl ReplacePipelineInput {
-    fn validate(self) -> Result<ValidatedPipelineInput, CatalogError> {
+    fn validate(self) -> Result<CreatePipelineRecord, CatalogError> {
         CreatePipelineInput {
             name: self.name,
             stages: Some(self.stages),
@@ -424,7 +424,7 @@ pub struct CreateJobInput {
 }
 
 impl CreateJobInput {
-    fn validate(self) -> Result<ValidatedJobInput, CatalogError> {
+    fn validate(self) -> Result<CreateJobRecord, CatalogError> {
         let pipeline_id = self.pipeline_id.ok_or(CatalogError::InvalidInput {
             field: "pipelineId",
             reason: "is required".to_owned(),
@@ -442,7 +442,7 @@ impl CreateJobInput {
             });
         }
         validate_salary(self.salary_min, self.salary_max, self.salary_months)?;
-        Ok(ValidatedJobInput {
+        Ok(CreateJobRecord {
             pipeline_id,
             title: self.title.trim().to_owned(),
             city: self.city.trim().to_owned(),
@@ -476,7 +476,7 @@ pub struct UpdateJobInput {
 }
 
 impl UpdateJobInput {
-    fn validate(self) -> Result<ValidatedJobUpdateInput, CatalogError> {
+    fn validate(self) -> Result<UpdateJobRecord, CatalogError> {
         if let Some(title) = &self.title
             && title.trim().is_empty()
         {
@@ -505,7 +505,7 @@ impl UpdateJobInput {
                 (min, max, months)
             }
         };
-        Ok(ValidatedJobUpdateInput {
+        Ok(UpdateJobRecord {
             pipeline_id: self.pipeline_id,
             title: self.title.map(|value| value.trim().to_owned()),
             city: self.city.map(|value| value.trim().to_owned()),

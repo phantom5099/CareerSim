@@ -5,9 +5,16 @@ use chrono::DateTime;
 
 use super::model::{
     Application, ApplicationError, ApplicationId, ApplicationStatus, ApplicationView,
-    CreateApplicationInput,
 };
 use crate::{account::model::UserId, agent::session::StageRef};
+
+#[derive(Debug, Clone)]
+pub struct CreateApplicationRecord {
+    pub id: ApplicationId,
+    pub job_id: crate::catalog::model::JobId,
+    pub resume_id: crate::resume::model::ResumeId,
+    pub session_id: crate::agent::session::SessionId,
+}
 
 #[async_trait]
 pub trait ApplicationStore: Send + Sync {
@@ -28,7 +35,7 @@ pub trait ApplicationStore: Send + Sync {
     async fn create(
         &self,
         owner: UserId,
-        new: CreateApplicationInput,
+        new: CreateApplicationRecord,
         initial_stage: StageRef,
         now: DateTime<chrono::Utc>,
     ) -> Result<Application, ApplicationError>;

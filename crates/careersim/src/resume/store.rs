@@ -3,11 +3,29 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
-use super::model::{
-    ParseStatus, Resume, ResumeId, ValidatedResumeAttachmentInput, ValidatedResumeInput,
-    ValidatedResumeUpdateInput,
-};
+use super::model::{ParseStatus, Resume, ResumeId};
 use crate::account::model::UserId;
+
+#[derive(Debug, Clone)]
+pub struct CreateResumeAttachmentRecord {
+    pub storage_key: String,
+    pub file_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateResumeRecord {
+    pub id: ResumeId,
+    pub title: String,
+    pub content: serde_json::Value,
+    pub attachment: Option<CreateResumeAttachmentRecord>,
+    pub parse_status: ParseStatus,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct UpdateResumeRecord {
+    pub title: Option<String>,
+    pub content: Option<serde_json::Value>,
+}
 
 /// Errors raised by resume persistence backends.
 #[derive(Debug, Error)]
@@ -50,7 +68,7 @@ pub trait ResumeStore: Send + Sync {
     async fn insert(
         &self,
         owner: UserId,
-        resume: ValidatedResumeInput,
+        resume: CreateResumeRecord,
     ) -> Result<Resume, ResumeStoreError>;
 
     /// Applies a partial update (title/content) and returns the fresh row.
@@ -58,7 +76,7 @@ pub trait ResumeStore: Send + Sync {
         &self,
         owner: UserId,
         id: ResumeId,
-        patch: ValidatedResumeUpdateInput,
+        patch: UpdateResumeRecord,
     ) -> Result<Resume, ResumeStoreError>;
 
     /// Makes `id` the owner's single default resume.
@@ -75,7 +93,7 @@ pub trait ResumeStore: Send + Sync {
         &self,
         owner: UserId,
         id: ResumeId,
-        attachment: ValidatedResumeAttachmentInput,
+        attachment: CreateResumeAttachmentRecord,
         parse_status: ParseStatus,
         content: serde_json::Value,
     ) -> Result<Resume, ResumeStoreError>;

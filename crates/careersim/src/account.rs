@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 pub use model::{
     AccountError, CredentialUser, Password, PasswordHash, UpdateProfileInput, User, UserId,
-    Username, ValidatedUserInput,
+    Username,
 };
 pub use password::{Argon2idHasher, PasswordError, PasswordHasher};
 pub use service::{
@@ -25,11 +25,11 @@ pub use service::{
     SessionGrant, SystemClock,
 };
 pub use session::{
-    CreateLoginSessionInput, IDLE_TIMEOUT, LoginSession, SESSION_COOKIE, SessionId, SessionToken,
+    CreateLoginSessionRecord, IDLE_TIMEOUT, LoginSession, SESSION_COOKIE, SessionId, SessionToken,
     SessionTokenHash, TOUCH_THROTTLE,
 };
 use sqlx::PgPool;
-pub use store::{SessionStore, SessionStoreError, UserStore, UserStoreError};
+pub use store::{CreateUserRecord, SessionStore, SessionStoreError, UserStore, UserStoreError};
 
 /// 构造基于 PostgreSQL 的账户服务；存储实现只通过这里对外暴露。
 pub fn postgres_account_service(pool: PgPool, hasher: Arc<dyn PasswordHasher>) -> AccountService {

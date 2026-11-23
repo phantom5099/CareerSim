@@ -9,7 +9,7 @@ use super::{
         Application, ApplicationError, ApplicationId, ApplicationStatus, ApplicationView,
         CreateApplicationInput,
     },
-    store::ApplicationStore,
+    store::{ApplicationStore, CreateApplicationRecord},
 };
 use crate::{account::model::UserId, agent::session::StageRef};
 
@@ -52,7 +52,13 @@ impl ApplicationService {
         initial_stage: StageRef,
         now: DateTime<Utc>,
     ) -> Result<Application, ApplicationError> {
-        self.store.create(owner, new, initial_stage, now).await
+        let record = CreateApplicationRecord {
+            id: new.id,
+            job_id: new.job_id,
+            resume_id: new.resume_id,
+            session_id: new.session_id,
+        };
+        self.store.create(owner, record, initial_stage, now).await
     }
 
     pub async fn update_progress(

@@ -104,18 +104,6 @@ impl fmt::Debug for PasswordHash {
     }
 }
 
-/// 注册用的用户行输入；时间戳由服务层的 Clock 提供。
-pub struct ValidatedUserInput {
-    pub id: UserId,
-    /// 登录名展示原文（trim 后，保留大小写）。
-    pub username: String,
-    /// 归一化登录名键；数据库唯一约束对象。
-    pub username_key: Username,
-    pub password_hash: PasswordHash,
-    pub display_name: String,
-    pub registered_at: DateTime<Utc>,
-}
-
 /// 登录凭据查询结果；只包含验证所需字段。
 pub struct CredentialUser {
     pub id: UserId,

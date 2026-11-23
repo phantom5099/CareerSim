@@ -10,6 +10,7 @@ pub use model::{
     ApplicationView, CreateApplicationInput,
 };
 pub use service::ApplicationService;
+pub use store::CreateApplicationRecord;
 
 /// 组装 PostgreSQL 投递服务；组合根负责注入数据库连接池。
 pub fn postgres_application_service(pool: sqlx::PgPool) -> ApplicationService {

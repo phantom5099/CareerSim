@@ -11,9 +11,9 @@ use tracing::instrument;
 use super::{
     model::{
         Application, ApplicationError, ApplicationId, ApplicationStageView, ApplicationStatus,
-        ApplicationView, CreateApplicationInput,
+        ApplicationView,
     },
-    store::ApplicationStore,
+    store::{ApplicationStore, CreateApplicationRecord},
 };
 use crate::{
     account::model::UserId,
@@ -250,7 +250,7 @@ impl ApplicationStore for PgApplicationStore {
     async fn create(
         &self,
         owner: UserId,
-        new: CreateApplicationInput,
+        new: CreateApplicationRecord,
         initial_stage: StageRef,
         now: DateTime<Utc>,
     ) -> Result<Application, ApplicationError> {

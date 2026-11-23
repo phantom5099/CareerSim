@@ -21,43 +21,42 @@ use tower::ServiceExt;
 
 use crate::{
     account::{
-        model::{
-            CredentialUser, Password, PasswordHash, UpdateProfileInput, User, UserId,
-            ValidatedUserInput,
-        },
+        model::{CredentialUser, Password, PasswordHash, UpdateProfileInput, User, UserId},
         password::{PasswordError, PasswordHasher},
         service::{AccountService, Clock},
-        session::{CreateLoginSessionInput, LoginSession, SessionId, SessionTokenHash},
-        store::{SessionStore, SessionStoreError, UserStore, UserStoreError},
+        session::{CreateLoginSessionRecord, LoginSession, SessionId, SessionTokenHash},
+        store::{CreateUserRecord, SessionStore, SessionStoreError, UserStore, UserStoreError},
     },
     agent::session::{StageRef, StoreSessionService},
     application::{
         Application, ApplicationError, ApplicationId, ApplicationService, ApplicationStatus,
-        ApplicationView, CreateApplicationInput, store::ApplicationStore,
+        ApplicationView,
+        store::{ApplicationStore, CreateApplicationRecord},
     },
     catalog::{
         model::{
             CatalogError, Company, CompanyDetail, CompanyId, CompanySource, CompanySummary, Job,
             JobId, JobStatus, ListCursor, Pipeline, PipelineId, ProjectId, RecruitmentProject,
-            ValidatedCompanyInput, ValidatedCompanyUpdateInput, ValidatedJobInput,
-            ValidatedJobUpdateInput, ValidatedPipelineInput, ValidatedProjectInput,
-            ValidatedProjectUpdateInput, normalize_key,
+            normalize_key,
         },
         service::CatalogService,
-        store::{CatalogScope, CatalogStore},
+        store::{
+            CatalogScope, CatalogStore, CreateCompanyRecord, CreateJobRecord, CreatePipelineRecord,
+            CreateProjectRecord, UpdateCompanyRecord, UpdateJobRecord, UpdateProjectRecord,
+        },
         template::ValidatedTemplate,
     },
     http::router::{AppState, router},
     resume::{
         content::ResumeContent,
-        model::{
-            ParseStatus, RESUME_LIMIT, Resume, ResumeAttachment, ResumeId,
-            ValidatedResumeAttachmentInput, ValidatedResumeInput, ValidatedResumeUpdateInput,
-        },
+        model::{ParseStatus, RESUME_LIMIT, Resume, ResumeAttachment, ResumeId},
         parse::{AttachmentKind, ParseError, ResumeTextExtractor},
         service::ResumeService,
         storage::{AttachmentStore, AttachmentStoreError},
-        store::{ResumeStore, ResumeStoreError},
+        store::{
+            CreateResumeAttachmentRecord, CreateResumeRecord, ResumeStore, ResumeStoreError,
+            UpdateResumeRecord,
+        },
     },
     store::memory::MemorySessionStore,
 };
@@ -85,7 +84,7 @@ impl InMemoryUserStore {
 
 #[async_trait]
 impl UserStore for InMemoryUserStore {
-    async fn insert(&self, new: ValidatedUserInput) -> Result<User, UserStoreError> {
+    async fn insert(&self, new: CreateUserRecord) -> Result<User, UserStoreError> {
         let mut users = self.users.lock().unwrap();
         if users
             .values()
@@ -204,7 +203,7 @@ impl InMemorySessionStore {
         }
     }
 
-    fn login_session(new: CreateLoginSessionInput) -> LoginSession {
+    fn login_session(new: CreateLoginSessionRecord) -> LoginSession {
         LoginSession {
             id: new.id,
             user_id: new.user_id,
@@ -219,7 +218,7 @@ impl InMemorySessionStore {
 
 #[async_trait]
 impl SessionStore for InMemorySessionStore {
-    async fn insert(&self, session: CreateLoginSessionInput) -> Result<(), SessionStoreError> {
+    async fn insert(&self, session: CreateLoginSessionRecord) -> Result<(), SessionStoreError> {
         self.by_hash
             .lock()
             .unwrap()
@@ -279,7 +278,7 @@ impl SessionStore for InMemorySessionStore {
     async fn rotate(
         &self,
         old: SessionId,
-        new: CreateLoginSessionInput,
+        new: CreateLoginSessionRecord,
         now: DateTime<Utc>,
     ) -> Result<(), SessionStoreError> {
         let mut sessions = self.sessions.lock().unwrap();
@@ -532,7 +531,7 @@ impl CatalogStore for InMemoryCatalogStore {
     async fn create_company(
         &self,
         owner: UserId,
-        new: ValidatedCompanyInput,
+        new: CreateCompanyRecord,
         now: DateTime<Utc>,
     ) -> Result<Company, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -570,7 +569,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         id: CompanyId,
-        patch: &ValidatedCompanyUpdateInput,
+        patch: &UpdateCompanyRecord,
         now: DateTime<Utc>,
     ) -> Result<Company, CatalogError> {
         // 先做只读校验（存在、归属、改名冲突），再可变更新。
@@ -669,7 +668,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         company_id: CompanyId,
-        new: ValidatedProjectInput,
+        new: CreateProjectRecord,
         now: DateTime<Utc>,
     ) -> Result<RecruitmentProject, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -702,7 +701,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         id: ProjectId,
-        patch: &ValidatedProjectUpdateInput,
+        patch: &UpdateProjectRecord,
         now: DateTime<Utc>,
     ) -> Result<RecruitmentProject, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -763,7 +762,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         project_id: ProjectId,
-        new: ValidatedPipelineInput,
+        new: CreatePipelineRecord,
         now: DateTime<Utc>,
     ) -> Result<Pipeline, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -838,7 +837,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         id: PipelineId,
-        new: ValidatedPipelineInput,
+        new: CreatePipelineRecord,
         now: DateTime<Utc>,
     ) -> Result<Pipeline, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -907,7 +906,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         project_id: ProjectId,
-        new: ValidatedJobInput,
+        new: CreateJobRecord,
         now: DateTime<Utc>,
     ) -> Result<Job, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -947,7 +946,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         id: JobId,
-        patch: &ValidatedJobUpdateInput,
+        patch: &UpdateJobRecord,
         now: DateTime<Utc>,
     ) -> Result<Job, CatalogError> {
         // 先做只读校验（存在、归属链、流水线引用），再可变更新。
@@ -1183,7 +1182,7 @@ impl ResumeStore for InMemoryResumeStore {
     async fn insert(
         &self,
         owner: UserId,
-        resume: ValidatedResumeInput,
+        resume: CreateResumeRecord,
     ) -> Result<Resume, ResumeStoreError> {
         let mut data = self.data.lock().unwrap();
         let live_count = data
@@ -1231,7 +1230,7 @@ impl ResumeStore for InMemoryResumeStore {
         &self,
         owner: UserId,
         id: ResumeId,
-        patch: ValidatedResumeUpdateInput,
+        patch: UpdateResumeRecord,
     ) -> Result<Resume, ResumeStoreError> {
         let mut data = self.data.lock().unwrap();
         let Some(row) = data
@@ -1303,7 +1302,7 @@ impl ResumeStore for InMemoryResumeStore {
         &self,
         owner: UserId,
         id: ResumeId,
-        attachment: ValidatedResumeAttachmentInput,
+        attachment: CreateResumeAttachmentRecord,
         parse_status: ParseStatus,
         content: serde_json::Value,
     ) -> Result<Resume, ResumeStoreError> {
@@ -1427,7 +1426,7 @@ impl ApplicationStore for NoopApplicationStore {
     async fn create(
         &self,
         _owner: UserId,
-        _new: CreateApplicationInput,
+        _new: CreateApplicationRecord,
         _initial_stage: StageRef,
         _now: DateTime<Utc>,
     ) -> Result<Application, ApplicationError> {

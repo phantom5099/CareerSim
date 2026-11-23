@@ -233,8 +233,8 @@ application     → account / agent::session（ID）/ catalog（JobId）/ resume
 
 - HTTP 层请求体、查询参数和路径参数使用 `CreateXRequest`、`UpdateXRequest` 等 `Request` 后缀，响应使用 `XResponse`、`XListResponse` 等 `Response` 后缀；HTTP DTO 默认只在对应路由模块内可见。
 - service 层接收业务输入统一使用 `CreateXInput`、`UpdateXInput` 等 `Input` 后缀，不使用 `Command`、泛化的 `Request` 或 `NewX` 表示业务输入。
-- 已完成领域校验、可直接交给持久化层的输入使用 `ValidatedXInput` 或 `ValidatedXUpdateInput`，与未校验的 service 输入区分。
-- store 层只接收已校验输入、实体和值对象，不依赖 HTTP 请求或响应类型。
+- 已完成领域校验、可直接交给持久化层的写入数据使用 `CreateXRecord`、`UpdateXRecord` 等 `Record` 后缀，与 service 输入区分。
+- store 层只接收 Record、实体和值对象，不依赖 HTTP 请求或响应类型。
 - 领域实体、值对象和领域错误保留业务名称，不使用 `Dto`、`Request`、`Response` 后缀。
 - 查询聚合结果使用 `XView` 或明确的 `XDetails` 命名，HTTP 响应在边界层完成转换。
 - 同一层级和同一操作只保留一套输入或输出类型；本轮范围内未被真实调用且没有外部契约、迁移兼容或测试替身职责的冗余定义必须清理。
