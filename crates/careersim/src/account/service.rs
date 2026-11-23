@@ -8,12 +8,12 @@ use tracing::instrument;
 
 use super::{
     model::{
-        AccountError, DISPLAY_NAME_MAX_CHARS, NewUser, Password, PasswordHash, ProfilePatch, User,
+        AccountError, DISPLAY_NAME_MAX_CHARS, Password, PasswordHash, UpdateProfileInput, User,
         UserId, Username,
     },
     password::PasswordHasher,
     session::{SessionId, SessionToken, new_login_session},
-    store::{SessionStore, SessionStoreError, UserStore, UserStoreError},
+    store::{CreateUserRecord, SessionStore, SessionStoreError, UserStore, UserStoreError},
 };
 
 /// 时钟端口；测试用 `FakeClock`，生产用 [`SystemClock`]。
@@ -27,6 +27,22 @@ impl Clock for SystemClock {
     fn now(&self) -> DateTime<Utc> {
         Utc::now()
     }
+}
+
+pub struct RegisterInput {
+    pub username: String,
+    pub password: String,
+    pub display_name: String,
+}
+
+pub struct LoginInput {
+    pub username: String,
+    pub password: String,
+}
+
+pub struct ChangePasswordInput {
+    pub current_password: String,
+    pub new_password: String,
 }
 
 /// 注册或登录成功的返回：用户与会话令牌原文（仅此一次返回）。
@@ -82,19 +98,15 @@ impl AccountService {
     }
 
     /// 注册即登录：创建用户并签发会话。
-    #[instrument(
-        name = "account.register",
-        level = "debug",
-        skip(self, username, password, display_name)
-    )]
-    pub async fn register(
-        &self,
-        username: &str,
-        password: &str,
-        display_name: &str,
-    ) -> Result<SessionGrant, AccountError> {
-        let username_key = Username::parse(username)?;
-        let password = Password::parse(password)?;
+    #[instrument(name = "account.register", level = "debug", skip(self, input))]
+    pub async fn register(&self, input: RegisterInput) -> Result<SessionGrant, AccountError> {
+        let RegisterInput {
+            username,
+            password,
+            display_name,
+        } = input;
+        let username_key = Username::parse(&username)?;
+        let password = Password::parse(&password)?;
         let display_name = display_name.trim();
         let display_chars = display_name.chars().count();
         if !(1..=DISPLAY_NAME_MAX_CHARS).contains(&display_chars) {
@@ -108,7 +120,7 @@ impl AccountService {
         let now = self.clock.now();
         let user = self
             .users
-            .insert(NewUser {
+            .insert(CreateUserRecord {
                 id: UserId::generate(),
                 username: username.trim().to_owned(),
                 username_key,
@@ -133,19 +145,12 @@ impl AccountService {
     }
 
     /// 登录失败统一返回 `InvalidCredentials`；未知用户执行假验证拉平耗时。
-    #[instrument(
-        name = "account.login",
-        level = "debug",
-        skip(self, username, password)
-    )]
-    pub async fn login(
-        &self,
-        username: &str,
-        password: &str,
-    ) -> Result<SessionGrant, AccountError> {
+    #[instrument(name = "account.login", level = "debug", skip(self, input))]
+    pub async fn login(&self, input: LoginInput) -> Result<SessionGrant, AccountError> {
+        let LoginInput { username, password } = input;
         let username_key =
-            Username::parse(username).map_err(|_| AccountError::InvalidCredentials)?;
-        let password = Password::parse(password).map_err(|_| AccountError::InvalidCredentials)?;
+            Username::parse(&username).map_err(|_| AccountError::InvalidCredentials)?;
+        let password = Password::parse(&password).map_err(|_| AccountError::InvalidCredentials)?;
 
         let credential = self
             .users
@@ -187,12 +192,12 @@ impl AccountService {
         Ok(())
     }
 
-    /// 只更新当前用户资料；字段边界见 `ProfilePatch::validate`。
+    /// 只更新当前用户资料；字段边界见 `UpdateProfileInput::validate`。
     #[instrument(name = "account.update_profile", level = "debug", skip(self, patch), fields(user_id = ?user_id))]
     pub async fn update_profile(
         &self,
         user_id: UserId,
-        patch: ProfilePatch,
+        patch: UpdateProfileInput,
     ) -> Result<User, AccountError> {
         patch.validate()?;
         self.users
@@ -209,19 +214,22 @@ impl AccountService {
     #[instrument(
         name = "account.change_password",
         level = "debug",
-        skip(self, current_password, new_password),
+        skip(self, input),
         fields(user_id = ?user_id, session_id = %session_id)
     )]
     pub async fn change_password(
         &self,
         user_id: UserId,
         session_id: SessionId,
-        current_password: &str,
-        new_password: &str,
+        input: ChangePasswordInput,
     ) -> Result<String, AccountError> {
-        let current =
-            Password::parse(current_password).map_err(|_| AccountError::CurrentPasswordMismatch)?;
-        let new_password = Password::parse(new_password)?;
+        let ChangePasswordInput {
+            current_password,
+            new_password,
+        } = input;
+        let current = Password::parse(&current_password)
+            .map_err(|_| AccountError::CurrentPasswordMismatch)?;
+        let new_password = Password::parse(&new_password)?;
 
         // 用户已不存在视为会话失效；取用户名以推导凭证查询键。
         let user = self

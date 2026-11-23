@@ -7,6 +7,8 @@ import { companiesApi } from '@/api/endpoints/companies'
 import CompanyMark from '@/components/CompanyMark.vue'
 import JobEditDialog from '@/components/JobEditDialog.vue'
 import MultiSelect from '@/components/MultiSelect.vue'
+import PipelineEditDialog from '@/components/PipelineEditDialog.vue'
+import PipelineManagerDialog from '@/components/PipelineManagerDialog.vue'
 import ProjectEditDialog from '@/components/ProjectEditDialog.vue'
 import StageRail from '@/components/StageRail.vue'
 import {
@@ -17,7 +19,13 @@ import {
   effectiveProjectStatus,
   formatDate,
 } from '@/domain/types'
-import type { ApplicationStatus, Job, ProjectStatus, RecruitmentProject } from '@/domain/types'
+import type {
+  ApplicationStatus,
+  Job,
+  PipelineInfo,
+  ProjectStatus,
+  RecruitmentProject,
+} from '@/domain/types'
 import { useApplicationsStore } from '@/stores/applications'
 import { useCompanyCatalogStore } from '@/stores/companyCatalog'
 import { useResumesStore } from '@/stores/resumes'
@@ -48,16 +56,50 @@ function showFlash(message: string) {
 const projectDialog = ref<
   { mode: 'create' } | { mode: 'edit'; project: RecruitmentProject } | null
 >(null)
+const pipelineDialog = ref<
+  { mode: 'create'; projectId: string } | { mode: 'edit'; pipeline: PipelineInfo } | null
+>(null)
+const pipelineManagerProjectId = ref<string | null>(null)
 const jobDialog = ref<{ mode: 'create' } | { mode: 'edit'; job: Job } | null>(null)
 
 async function handleSaved() {
   projectDialog.value = null
+  pipelineDialog.value = null
+  pipelineManagerProjectId.value = null
   jobDialog.value = null
   try {
     await catalog.refresh()
     showFlash('修改已保存。')
   } catch (error) {
     showFlash(error instanceof Error ? error.message : '已保存，但刷新列表失败。')
+  }
+}
+
+function pipelinesForProject(projectId: string): PipelineInfo[] {
+  return company.value?.pipelines?.filter((pipeline) => pipeline.projectId === projectId) ?? []
+}
+
+function openPipelineCreate() {
+  if (!pipelineManagerProjectId.value) return
+  pipelineDialog.value = { mode: 'create', projectId: pipelineManagerProjectId.value }
+  pipelineManagerProjectId.value = null
+}
+
+function openPipelineEdit(pipeline: PipelineInfo) {
+  pipelineDialog.value = { mode: 'edit', pipeline }
+  pipelineManagerProjectId.value = null
+}
+
+async function deletePipeline(pipeline: PipelineInfo) {
+  if (!window.confirm(`确定删除流程「${pipeline.name}」？`)) {
+    return
+  }
+  try {
+    await companiesApi.deletePipeline(companyId.value, pipeline.id)
+    await catalog.refresh()
+    showFlash('流程已删除。')
+  } catch (error) {
+    showFlash(error instanceof Error ? error.message : '删除失败，请稍后重试。')
   }
 }
 
@@ -443,6 +485,18 @@ onBeforeUnmount(() => {
                     </button>
                   </span>
                 </div>
+                <div class="mt-3 flex items-center justify-between border-t border-line/70 pt-2">
+                  <span class="text-[0.62rem] text-ink-faint">流程模板</span>
+                  <button
+                    v-if="company.isOwner"
+                    type="button"
+                    class="btn-line px-2 py-0.5 text-[0.62rem]"
+                    @click="pipelineManagerProjectId = project.id"
+                  >
+                    流程管理
+                  </button>
+                  <span v-else class="text-[0.62rem] text-ink-faint">{{ pipelinesForProject(project.id).length }} 个模板</span>
+                </div>
               </div>
               <button
                 type="button"
@@ -817,6 +871,26 @@ onBeforeUnmount(() => {
         :company-id="companyId"
         :project="projectDialog.mode === 'edit' ? projectDialog.project : null"
         @close="projectDialog = null"
+        @saved="handleSaved"
+      />
+
+      <PipelineManagerDialog
+        v-if="pipelineManagerProjectId"
+        :project-name="company.projects.find((project) => project.id === pipelineManagerProjectId)?.name ?? '项目流程'"
+        :pipelines="pipelinesForProject(pipelineManagerProjectId)"
+        @close="pipelineManagerProjectId = null"
+        @create="openPipelineCreate"
+        @edit="openPipelineEdit"
+        @delete="deletePipeline"
+      />
+
+      <PipelineEditDialog
+        v-if="pipelineDialog"
+        :key="pipelineDialog.mode === 'edit' ? pipelineDialog.pipeline.id : 'pipeline-create'"
+        :company-id="companyId"
+        :project-id="pipelineDialog.mode === 'create' ? pipelineDialog.projectId : pipelineDialog.pipeline.projectId"
+        :pipeline="pipelineDialog.mode === 'edit' ? pipelineDialog.pipeline : null"
+        @close="pipelineDialog = null"
         @saved="handleSaved"
       />
 

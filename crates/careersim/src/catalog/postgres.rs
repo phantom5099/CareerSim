@@ -13,12 +13,14 @@ use sqlx::{Executor, PgPool, Postgres, Row, postgres::PgRow};
 
 use super::{
     model::{
-        CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySource,
-        CompanySummary, Job, JobId, JobPatch, JobStatus, JobType, ListCursor, NewCompany, NewJob,
-        NewPipeline, NewProject, Pipeline, PipelineId, ProjectId, ProjectPatch, ProjectStatus,
+        CatalogError, Company, CompanyDetail, CompanyId, CompanySource, CompanySummary, Job, JobId,
+        JobStatus, JobType, ListCursor, Pipeline, PipelineId, ProjectId, ProjectStatus,
         RecruitmentProject, normalize_key,
     },
-    store::{CatalogScope, CatalogStore},
+    store::{
+        CatalogScope, CatalogStore, CreateCompanyRecord, CreateJobRecord, CreatePipelineRecord,
+        CreateProjectRecord, UpdateCompanyRecord, UpdateJobRecord, UpdateProjectRecord,
+    },
     template::ValidatedTemplate,
 };
 use crate::{
@@ -153,20 +155,19 @@ const UPDATE_PIPELINE_SQL: &str = "UPDATE pipelines pl SET name = $3, name_key =
 const UPDATE_JOB_SQL: &str = "UPDATE jobs j SET \
      pipeline_id = COALESCE($3, j.pipeline_id), \
      title = COALESCE($4, j.title), \
-     title_key = COALESCE($5, j.title_key), \
-     city = COALESCE($6, j.city), \
-     job_type = COALESCE($7::text, j.job_type), \
-     salary_min = CASE WHEN $8::bool THEN NULL ELSE COALESCE($9, j.salary_min) END, \
-     salary_max = CASE WHEN $10::bool THEN NULL ELSE COALESCE($11, j.salary_max) END, \
-     salary_months = CASE WHEN $12::bool THEN NULL ELSE COALESCE($13, j.salary_months) END, \
-     tags = COALESCE($14, j.tags), \
-     description = COALESCE($15, j.description), \
-     status = COALESCE($16::text, j.status), \
+     city = COALESCE($5, j.city), \
+     job_type = COALESCE($6::text, j.job_type), \
+     salary_min = CASE WHEN $7::bool THEN NULL ELSE COALESCE($8, j.salary_min) END, \
+     salary_max = CASE WHEN $9::bool THEN NULL ELSE COALESCE($10, j.salary_max) END, \
+     salary_months = CASE WHEN $11::bool THEN NULL ELSE COALESCE($12, j.salary_months) END, \
+     tags = COALESCE($13, j.tags), \
+     description = COALESCE($14, j.description), \
+     status = COALESCE($15::text, j.status), \
      updated_at = $2 \
      FROM recruitment_projects p \
      JOIN companies c ON c.id = p.company_id AND c.deleted_at IS NULL \
      WHERE j.id = $1 AND j.deleted_at IS NULL AND j.project_id = p.id \
-       AND c.owner_user_id = $17 \
+       AND c.owner_user_id = $16 \
      RETURNING j.id, j.project_id, j.pipeline_id, j.title, j.city, j.job_type, j.salary_min, \
      j.salary_max, j.salary_months, j.tags, j.description, j.status, j.created_at, j.updated_at";
 
@@ -210,11 +211,8 @@ fn write_error(err: sqlx::Error, conflict: Option<&'static str>, operation: &str
     }
 }
 
-/// 岗位写入错误映射：标题唯一冲突与流水线复合外键单独识别。
+/// 岗位写入错误映射：流水线复合外键单独识别。
 fn job_write_error(err: sqlx::Error, operation: &str) -> CatalogError {
-    if is_unique_violation(&err) {
-        return CatalogError::Conflict("title");
-    }
     if is_foreign_key_violation(&err) {
         return CatalogError::InvalidReference {
             field: "pipelineId",
@@ -346,14 +344,14 @@ fn job_from_row(row: &PgRow) -> Result<Job, CatalogError> {
 
 /// 从阶段行重建 [`StageDefinition`]：kind/rubric 的 serde 映射是唯一事实来源。
 fn stage_from_row(row: &PgRow) -> Result<StageDefinition, CatalogError> {
-    let stage_key: String = column(row, "stage_key")?;
+    let position: i16 = column(row, "position")?;
     let kind: String = column(row, "kind")?;
     let title: String = column(row, "title")?;
     let rubric: serde_json::Value = column(row, "rubric")?;
     let min_rounds: i16 = column(row, "min_rounds")?;
     let max_rounds: i16 = column(row, "max_rounds")?;
     let value = serde_json::json!({
-        "key": stage_key,
+        "position": position,
         "kind": kind,
         "title": title,
         "minRounds": min_rounds,
@@ -485,16 +483,14 @@ where
     E: Executor<'e, Database = Postgres>,
 {
     let stages = definition.stages();
-    let mut keys = Vec::with_capacity(stages.len());
     let mut positions = Vec::with_capacity(stages.len());
     let mut kinds = Vec::with_capacity(stages.len());
     let mut titles = Vec::with_capacity(stages.len());
     let mut rubrics = Vec::with_capacity(stages.len());
     let mut min_rounds = Vec::with_capacity(stages.len());
     let mut max_rounds = Vec::with_capacity(stages.len());
-    for (index, stage) in stages.iter().enumerate() {
-        keys.push(stage.key.as_str().to_owned());
-        positions.push(i16::try_from(index).map_err(|_| corrupted_row("stage position"))?);
+    for stage in stages {
+        positions.push(i16::try_from(stage.position).map_err(|_| corrupted_row("stage position"))?);
         kinds.push(stage.kind.as_str().to_owned());
         titles.push(stage.title.clone());
         rubrics.push(
@@ -508,14 +504,13 @@ where
     }
     sqlx::query(
         "INSERT INTO pipeline_stages \
-         (pipeline_id, stage_key, position, kind, title, rubric, min_rounds, max_rounds) \
-         SELECT $1, key, position, kind, title, rubric, min_rounds, max_rounds \
-         FROM UNNEST($2::text[], $3::int2[], $4::text[], $5::text[], $6::jsonb[], $7::int2[], \
-                      $8::int2[]) \
-              AS t(key, position, kind, title, rubric, min_rounds, max_rounds)",
+         (pipeline_id, position, kind, title, rubric, min_rounds, max_rounds) \
+         SELECT $1, position, kind, title, rubric, min_rounds, max_rounds \
+         FROM UNNEST($2::int2[], $3::text[], $4::text[], $5::jsonb[], $6::int2[], \
+                      $7::int2[]) \
+              AS t(position, kind, title, rubric, min_rounds, max_rounds)",
     )
     .bind(pipeline_id.into_uuid())
-    .bind(&keys)
     .bind(&positions)
     .bind(&kinds)
     .bind(&titles)
@@ -527,7 +522,6 @@ where
     .map_err(|err| backend_error("insert stages", err))?;
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn insert_job_row<'e, E>(
     executor: E,
@@ -550,15 +544,14 @@ where
 {
     sqlx::query(
         "INSERT INTO jobs \
-         (id, project_id, pipeline_id, title, title_key, city, job_type, salary_min, \
-         salary_max, salary_months, tags, description, status, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)",
+         (id, project_id, pipeline_id, title, city, job_type, salary_min, salary_max, \
+         salary_months, tags, description, status, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)",
     )
     .bind(id.into_uuid())
     .bind(project_id.into_uuid())
     .bind(pipeline_id.into_uuid())
     .bind(title)
-    .bind(normalize_key(title))
     .bind(city)
     .bind(job_type.as_str())
     .bind(salary_i32(salary_min)?)
@@ -581,7 +574,7 @@ impl PgCatalogStore {
         pipeline_id: PipelineId,
     ) -> Result<PipelineDefinition, CatalogError> {
         let rows = sqlx::query(
-            "SELECT stage_key, position, kind, title, rubric, min_rounds, max_rounds \
+            "SELECT position, kind, title, rubric, min_rounds, max_rounds \
              FROM pipeline_stages WHERE pipeline_id = $1 ORDER BY position",
         )
         .bind(pipeline_id.into_uuid())
@@ -788,7 +781,7 @@ impl CatalogStore for PgCatalogStore {
     async fn create_company(
         &self,
         owner: UserId,
-        new: NewCompany,
+        new: CreateCompanyRecord,
         now: DateTime<Utc>,
     ) -> Result<Company, CatalogError> {
         let id = CompanyId::generate();
@@ -834,7 +827,7 @@ impl CatalogStore for PgCatalogStore {
         &self,
         owner: UserId,
         id: CompanyId,
-        patch: &CompanyPatch,
+        patch: &UpdateCompanyRecord,
         now: DateTime<Utc>,
     ) -> Result<Company, CatalogError> {
         let name_key = patch.name.as_deref().map(normalize_key);
@@ -889,7 +882,7 @@ impl CatalogStore for PgCatalogStore {
         &self,
         owner: UserId,
         company_id: CompanyId,
-        new: NewProject,
+        new: CreateProjectRecord,
         now: DateTime<Utc>,
     ) -> Result<RecruitmentProject, CatalogError> {
         self.ensure_company_owned(owner, company_id).await?;
@@ -923,7 +916,7 @@ impl CatalogStore for PgCatalogStore {
         &self,
         owner: UserId,
         id: ProjectId,
-        patch: &ProjectPatch,
+        patch: &UpdateProjectRecord,
         now: DateTime<Utc>,
     ) -> Result<RecruitmentProject, CatalogError> {
         let name_key = patch.name.as_deref().map(normalize_key);
@@ -977,7 +970,7 @@ impl CatalogStore for PgCatalogStore {
         &self,
         owner: UserId,
         project_id: ProjectId,
-        new: NewPipeline,
+        new: CreatePipelineRecord,
         now: DateTime<Utc>,
     ) -> Result<Pipeline, CatalogError> {
         self.ensure_project_owned(owner, project_id).await?;
@@ -1035,6 +1028,49 @@ impl CatalogStore for PgCatalogStore {
         })
     }
 
+    async fn replace_pipeline(
+        &self,
+        owner: UserId,
+        id: PipelineId,
+        new: CreatePipelineRecord,
+        now: DateTime<Utc>,
+    ) -> Result<Pipeline, CatalogError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|err| backend_error("begin replace pipeline", err))?;
+        let row = sqlx::query(UPDATE_PIPELINE_SQL)
+            .bind(id.into_uuid())
+            .bind(now)
+            .bind(&new.name)
+            .bind(normalize_key(&new.name))
+            .bind(owner.into_uuid())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|err| write_error(err, Some("name"), "update pipeline"))?;
+        let Some(row) = row else {
+            return Err(CatalogError::NotFound);
+        };
+        sqlx::query("DELETE FROM pipeline_stages WHERE pipeline_id = $1")
+            .bind(id.into_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| backend_error("replace pipeline stages", err))?;
+        insert_stages(&mut *tx, id, &new.definition).await?;
+        tx.commit()
+            .await
+            .map_err(|err| backend_error("commit replace pipeline", err))?;
+        Ok(Pipeline {
+            id,
+            project_id: ProjectId::from_uuid(column(&row, "project_id")?),
+            name: column(&row, "name")?,
+            definition: new.definition,
+            created_at: column(&row, "created_at")?,
+            updated_at: column(&row, "updated_at")?,
+        })
+    }
+
     async fn soft_delete_pipeline(
         &self,
         owner: UserId,
@@ -1064,7 +1100,7 @@ impl CatalogStore for PgCatalogStore {
         &self,
         owner: UserId,
         project_id: ProjectId,
-        new: NewJob,
+        new: CreateJobRecord,
         now: DateTime<Utc>,
     ) -> Result<Job, CatalogError> {
         self.ensure_project_owned(owner, project_id).await?;
@@ -1110,7 +1146,7 @@ impl CatalogStore for PgCatalogStore {
         &self,
         owner: UserId,
         id: JobId,
-        patch: &JobPatch,
+        patch: &UpdateJobRecord,
         now: DateTime<Utc>,
     ) -> Result<Job, CatalogError> {
         let project_row = sqlx::query(
@@ -1133,7 +1169,6 @@ impl CatalogStore for PgCatalogStore {
                 .await?;
         }
 
-        let title_key = patch.title.as_deref().map(normalize_key);
         let salary_min_clear = matches!(patch.salary_min, Some(None));
         let salary_min_value = salary_i32(patch.salary_min.unwrap_or(None))?;
         let salary_max_clear = matches!(patch.salary_max, Some(None));
@@ -1145,7 +1180,6 @@ impl CatalogStore for PgCatalogStore {
             .bind(now)
             .bind(patch.pipeline_id.map(PipelineId::into_uuid))
             .bind(patch.title.clone())
-            .bind(title_key)
             .bind(patch.city.clone())
             .bind(patch.job_type.map(JobType::as_str))
             .bind(salary_min_clear)

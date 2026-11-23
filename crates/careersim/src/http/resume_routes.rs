@@ -11,19 +11,22 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
-use chrono::SecondsFormat;
 use serde::{Deserialize, Serialize};
 use tower_http::limit::RequestBodyLimitLayer;
 
 use super::{
     auth::AuthContext,
     error::{ApiError, render_backend_chain},
+    format_timestamp,
     router::AppState,
 };
 use crate::resume::{
     content::ResumeContent,
     model::{ParseStatus, Resume, ResumeError, ResumeId},
-    service::OpenedAttachment,
+    service::{
+        AttachResumeInput, CreateResumeInput, OpenedAttachment, UpdateResumeInput,
+        UploadResumeInput,
+    },
 };
 
 /// JSON 请求体上限：与全局一致（1 MiB）。
@@ -31,18 +34,18 @@ const JSON_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 /// 上传请求体上限：10 MiB 附件 + multipart 开销余量（plan/01 §8.1）。
 const UPLOAD_BODY_LIMIT_BYTES: usize = 12 * 1024 * 1024;
 
-// ---------- DTO ----------
+// ---------- HTTP 响应结构体 ----------
 
 /// 附件展示信息；大小与 MIME 均不对外暴露（plan/01 §6.3）。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AttachmentDto {
+struct AttachmentResponse {
     pub file_name: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ResumeDto {
+struct ResumeResponse {
     pub id: String,
     pub title: String,
     pub is_default: bool,
@@ -53,12 +56,12 @@ pub struct ResumeDto {
     #[serde(rename = "payload")]
     pub content: ResumeContent,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub attachment: Option<AttachmentDto>,
+    pub attachment: Option<AttachmentResponse>,
     pub created_at: String,
     pub updated_at: String,
 }
 
-impl From<Resume> for ResumeDto {
+impl From<Resume> for ResumeResponse {
     fn from(resume: Resume) -> Self {
         let Resume {
             id,
@@ -82,18 +85,18 @@ impl From<Resume> for ResumeDto {
             parse_status: parse_status.as_str(),
             parse_error_code,
             content,
-            attachment: attachment.map(|att| AttachmentDto {
+            attachment: attachment.map(|att| AttachmentResponse {
                 file_name: att.file_name,
             }),
-            created_at: created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
-            updated_at: updated_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+            created_at: format_timestamp(created_at),
+            updated_at: format_timestamp(updated_at),
         }
     }
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CreateResumeRequest {
+struct CreateResumeRequest {
     pub title: String,
     pub payload: ResumeContent,
 }
@@ -101,7 +104,7 @@ pub struct CreateResumeRequest {
 /// PATCH 语义：字段缺省表示不修改。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UpdateResumeRequest {
+struct UpdateResumeRequest {
     pub title: Option<String>,
     pub payload: Option<ResumeContent>,
 }
@@ -163,27 +166,35 @@ pub fn router() -> Router<AppState> {
 
 // ---------- 处理器 ----------
 
-pub async fn list_resumes(
+async fn list_resumes(
     State(state): State<AppState>,
     auth: AuthContext,
-) -> Result<Json<Vec<ResumeDto>>, ApiError> {
+) -> Result<Json<Vec<ResumeResponse>>, ApiError> {
     let resumes = state.resume.list(auth.user_id).await?;
-    Ok(Json(resumes.into_iter().map(ResumeDto::from).collect()))
+    Ok(Json(
+        resumes.into_iter().map(ResumeResponse::from).collect(),
+    ))
 }
 
-pub async fn create_resume(
+async fn create_resume(
     State(state): State<AppState>,
     auth: AuthContext,
     Json(request): Json<CreateResumeRequest>,
 ) -> Result<Response, ApiError> {
     let resume = state
         .resume
-        .create_online(auth.user_id, &request.title, request.payload)
+        .create_online(
+            auth.user_id,
+            CreateResumeInput {
+                title: request.title,
+                content: request.payload,
+            },
+        )
         .await?;
-    Ok((StatusCode::CREATED, Json(ResumeDto::from(resume))).into_response())
+    Ok((StatusCode::CREATED, Json(ResumeResponse::from(resume))).into_response())
 }
 
-pub async fn upload_attachment(
+async fn upload_attachment(
     State(state): State<AppState>,
     auth: AuthContext,
     request: Request,
@@ -195,18 +206,25 @@ pub async fn upload_attachment(
     let (title, file_name, file_bytes) = parse_multipart_upload(&headers, &body)?;
     let resume = state
         .resume
-        .upload_attachment(auth.user_id, &title, &file_name, &file_bytes)
+        .upload_attachment(
+            auth.user_id,
+            UploadResumeInput {
+                title,
+                file_name,
+                bytes: file_bytes,
+            },
+        )
         .await?;
-    Ok((StatusCode::CREATED, Json(ResumeDto::from(resume))).into_response())
+    Ok((StatusCode::CREATED, Json(ResumeResponse::from(resume))).into_response())
 }
 
 /// 给已有简历上传附件：解析结构化后回填字段（只补空字段、列表追加去重）。
-pub async fn attach_to_resume(
+async fn attach_to_resume(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(raw_id): Path<String>,
     request: Request,
-) -> Result<Json<ResumeDto>, ApiError> {
+) -> Result<Json<ResumeResponse>, ApiError> {
     let id = parse_resume_id(&raw_id)?;
     let headers = request.headers().clone();
     let body = axum::body::to_bytes(request.into_body(), UPLOAD_BODY_LIMIT_BYTES)
@@ -215,57 +233,71 @@ pub async fn attach_to_resume(
     let (file_name, file_bytes) = parse_multipart_file(&headers, &body)?;
     let resume = state
         .resume
-        .attach_to_resume(auth.user_id, id, &file_name, &file_bytes)
+        .attach_to_resume(
+            auth.user_id,
+            id,
+            AttachResumeInput {
+                file_name,
+                bytes: file_bytes,
+            },
+        )
         .await?;
-    Ok(Json(ResumeDto::from(resume)))
+    Ok(Json(ResumeResponse::from(resume)))
 }
 
 /// 移除简历附件；内容保持不变。
-pub async fn remove_attachment(
+async fn remove_attachment(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(raw_id): Path<String>,
-) -> Result<Json<ResumeDto>, ApiError> {
+) -> Result<Json<ResumeResponse>, ApiError> {
     let id = parse_resume_id(&raw_id)?;
     let resume = state.resume.remove_attachment(auth.user_id, id).await?;
-    Ok(Json(ResumeDto::from(resume)))
+    Ok(Json(ResumeResponse::from(resume)))
 }
 
-pub async fn get_resume(
+async fn get_resume(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(raw_id): Path<String>,
-) -> Result<Json<ResumeDto>, ApiError> {
+) -> Result<Json<ResumeResponse>, ApiError> {
     let id = parse_resume_id(&raw_id)?;
     let resume = state.resume.get(auth.user_id, id).await?;
-    Ok(Json(ResumeDto::from(resume)))
+    Ok(Json(ResumeResponse::from(resume)))
 }
 
-pub async fn update_resume(
+async fn update_resume(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(raw_id): Path<String>,
     Json(request): Json<UpdateResumeRequest>,
-) -> Result<Json<ResumeDto>, ApiError> {
+) -> Result<Json<ResumeResponse>, ApiError> {
     let id = parse_resume_id(&raw_id)?;
     let resume = state
         .resume
-        .update(auth.user_id, id, request.title.as_deref(), request.payload)
+        .update(
+            auth.user_id,
+            id,
+            UpdateResumeInput {
+                title: request.title,
+                content: request.payload,
+            },
+        )
         .await?;
-    Ok(Json(ResumeDto::from(resume)))
+    Ok(Json(ResumeResponse::from(resume)))
 }
 
-pub async fn set_default_resume(
+async fn set_default_resume(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(raw_id): Path<String>,
-) -> Result<Json<ResumeDto>, ApiError> {
+) -> Result<Json<ResumeResponse>, ApiError> {
     let id = parse_resume_id(&raw_id)?;
     let resume = state.resume.set_default(auth.user_id, id).await?;
-    Ok(Json(ResumeDto::from(resume)))
+    Ok(Json(ResumeResponse::from(resume)))
 }
 
-pub async fn delete_resume(
+async fn delete_resume(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(raw_id): Path<String>,
@@ -275,7 +307,7 @@ pub async fn delete_resume(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn download_attachment(
+async fn download_attachment(
     State(state): State<AppState>,
     auth: AuthContext,
     Path(raw_id): Path<String>,

@@ -18,9 +18,9 @@ fn rubric(pass_score: u8) -> Value {
     })
 }
 
-fn stage(key: &str, kind: &str, title: &str) -> Value {
+fn stage(position: u16, kind: &str, title: &str) -> Value {
     json!({
-        "key": key,
+        "position": position,
         "kind": kind,
         "title": title,
         "minRounds": 1,
@@ -35,8 +35,8 @@ fn two_stage_pipeline(key: &str, project_key: &str, name: &str) -> Value {
         "projectKey": project_key,
         "name": name,
         "stages": [
-            stage("hr_screen", "hr_screen", "HR 初筛"),
-            stage("offer", "offer", "Offer 沟通"),
+            stage(0, "hr_screen", "HR 初筛"),
+            stage(1, "offer", "Offer 沟通"),
         ],
     })
 }
@@ -151,12 +151,12 @@ fn duplicate_keys_rejected() {
     );
     assert!(find(&errors, "jobs[1].key").is_some(), "errors: {errors:?}");
 
-    // 流水线内重复阶段键。
+    // 流水线阶段位置必须连续。
     let mut raw = valid_template();
-    raw["pipelines"][0]["stages"][1] = stage("hr_screen", "hr_screen", "重复键");
+    raw["pipelines"][0]["stages"][1] = stage(0, "offer", "重复位置");
     let errors = errors_of(&raw);
     assert!(
-        find(&errors, "pipelines[0].stages[1].key").is_some(),
+        find(&errors, "pipelines[0].stages[0]").is_some(),
         "errors: {errors:?}"
     );
 }
@@ -241,12 +241,12 @@ fn cross_project_pipeline_reference_rejected() {
 fn offer_not_last_rejected() {
     let mut raw = valid_template();
     raw["pipelines"][0]["stages"] = json!([
-        stage("offer", "offer", "Offer 沟通"),
-        stage("hr_screen", "hr_screen", "HR 初筛"),
+        stage(0, "offer", "Offer 沟通"),
+        stage(1, "hr_screen", "HR 初筛"),
     ]);
     let errors = errors_of(&raw);
     assert!(
-        find(&errors, "pipelines[0].stages[1].kind").is_some(),
+        find(&errors, "pipelines[0].stages[*].kind").is_some(),
         "errors: {errors:?}"
     );
 }

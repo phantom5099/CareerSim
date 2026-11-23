@@ -4,11 +4,11 @@ use async_trait::async_trait;
 use sqlx::{PgPool, Row, postgres::PgRow};
 
 use super::{
-    model::{
-        NewResume, NewResumeAttachment, ParseErrorCode, ParseStatus, RESUME_LIMIT, Resume,
-        ResumeAttachment, ResumeId, ResumePatch,
+    model::{ParseErrorCode, ParseStatus, RESUME_LIMIT, Resume, ResumeAttachment, ResumeId},
+    store::{
+        CreateResumeAttachmentRecord, CreateResumeRecord, ResumeStore, ResumeStoreError,
+        UpdateResumeRecord,
     },
-    store::{ResumeStore, ResumeStoreError},
 };
 use crate::account::model::UserId;
 
@@ -155,7 +155,11 @@ impl ResumeStore for PgResumeStore {
         .ok_or(ResumeStoreError::NotFound)
     }
 
-    async fn insert(&self, owner: UserId, resume: NewResume) -> Result<Resume, ResumeStoreError> {
+    async fn insert(
+        &self,
+        owner: UserId,
+        resume: CreateResumeRecord,
+    ) -> Result<Resume, ResumeStoreError> {
         let mut tx = self
             .pool
             .begin()
@@ -243,7 +247,7 @@ impl ResumeStore for PgResumeStore {
         &self,
         owner: UserId,
         id: ResumeId,
-        patch: ResumePatch,
+        patch: UpdateResumeRecord,
     ) -> Result<Resume, ResumeStoreError> {
         // COALESCE 表达 PATCH 语义；未传字段保持原值。
         let row = sqlx::query(resume_update_sql!(
@@ -347,7 +351,7 @@ impl ResumeStore for PgResumeStore {
         &self,
         owner: UserId,
         id: ResumeId,
-        attachment: NewResumeAttachment,
+        attachment: CreateResumeAttachmentRecord,
         parse_status: ParseStatus,
         content: serde_json::Value,
     ) -> Result<Resume, ResumeStoreError> {

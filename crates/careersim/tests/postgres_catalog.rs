@@ -4,6 +4,8 @@
 //! 覆盖：种子只读、可见性（他人公开可读不可写、他人私有不可见）、
 //! 跨用户写拒绝、命名冲突、软删后重建、流水线跨项目引用。
 
+mod support;
+
 use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -11,7 +13,10 @@ use std::{
 
 use careersim::{
     account::{
-        model::UserId, password::Argon2idHasher, postgres_account_service, service::AccountService,
+        model::UserId,
+        password::Argon2idHasher,
+        postgres_account_service,
+        service::{AccountService, RegisterInput},
     },
     catalog::{
         model::{
@@ -19,8 +24,9 @@ use careersim::{
         },
         postgres_catalog_service,
         service::{
-            CatalogService, CompanyInput, CompanyPatchInput, JobInput, JobPatchInput,
-            PipelineInput, ProjectInput, ProjectPatchInput,
+            CatalogService, CreateCompanyInput, CreateJobInput, CreatePipelineInput,
+            CreateProjectInput, UpdateCompanyInput, UpdateJobInput, UpdatePipelineInput,
+            UpdateProjectInput,
         },
         store::CatalogScope,
     },
@@ -28,8 +34,9 @@ use careersim::{
 };
 use serde_json::{Value, json};
 use sqlx::postgres::PgPoolOptions;
+use support::CleanupGuard;
 
-async fn setup() -> Option<(AccountService, CatalogService)> {
+async fn setup() -> Option<(AccountService, CatalogService, CleanupGuard)> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
         return None;
     };
@@ -43,9 +50,11 @@ async fn setup() -> Option<(AccountService, CatalogService)> {
         .await
         .expect("run migrations");
     let hasher = Arc::new(Argon2idHasher::new().expect("argon2 hasher"));
+    let cleanup = CleanupGuard::new(&url);
     Some((
         postgres_account_service(pool.clone(), hasher),
         postgres_catalog_service(pool),
+        cleanup,
     ))
 }
 
@@ -56,22 +65,22 @@ fn unique_suffix() -> u128 {
         .as_millis()
 }
 
-async fn new_user(service: &AccountService, tag: &str) -> UserId {
-    service
-        .register(
-            &format!("b1_{}_{}", tag, unique_suffix()),
-            "password123",
-            "B1 测试",
-        )
+async fn new_user(service: &AccountService, cleanup: &mut CleanupGuard, tag: &str) -> UserId {
+    let user = service
+        .register(RegisterInput {
+            username: format!("b1_{}_{}", tag, unique_suffix()),
+            password: "password123".to_owned(),
+            display_name: "B1 测试".to_owned(),
+        })
         .await
         .expect("register")
-        .user
-        .id
+        .user;
+    cleanup.track_user(user.id)
 }
 
-fn stage(key: &str, kind: &str, title: &str) -> StageDefinition {
+fn stage(position: u16, kind: &str, title: &str) -> StageDefinition {
     serde_json::from_value(json!({
-        "key": key,
+        "position": position,
         "kind": kind,
         "title": title,
         "minRounds": 1,
@@ -88,8 +97,8 @@ fn stage(key: &str, kind: &str, title: &str) -> StageDefinition {
 
 fn two_stage_input() -> Vec<StageDefinition> {
     vec![
-        stage("hr_screen", "hr_screen", "HR 初筛"),
-        stage("offer", "offer", "Offer 沟通"),
+        stage(0, "hr_screen", "HR 初筛"),
+        stage(1, "offer", "Offer 沟通"),
     ]
 }
 
@@ -102,7 +111,7 @@ async fn create_company(
     catalog
         .create_company(
             owner,
-            CompanyInput {
+            CreateCompanyInput {
                 name: name.to_owned(),
                 english_name: String::new(),
                 industry: "测试行业".to_owned(),
@@ -134,7 +143,7 @@ async fn create_full_company(
         .create_project(
             owner,
             company.id,
-            ProjectInput {
+            CreateProjectInput {
                 name: "2027 校招".to_owned(),
                 season: "2027".to_owned(),
                 status: None,
@@ -149,7 +158,7 @@ async fn create_full_company(
         .create_pipeline(
             owner,
             project.id,
-            PipelineInput {
+            CreatePipelineInput {
                 name: "校招主流程".to_owned(),
                 stages: Some(two_stage_input()),
             },
@@ -165,7 +174,7 @@ async fn create_full_company(
             .create_job(
                 owner,
                 project.id,
-                JobInput {
+                CreateJobInput {
                     pipeline_id: Some(pipeline.id),
                     title: title.to_owned(),
                     city: "上海".to_owned(),
@@ -187,10 +196,10 @@ async fn create_full_company(
 
 #[tokio::test]
 async fn seed_templates_are_read_only() {
-    let Some((account, catalog)) = setup().await else {
+    let Some((account, catalog, mut cleanup)) = setup().await else {
         return;
     };
-    let viewer = new_user(&account, "seed_ro").await;
+    let viewer = new_user(&account, &mut cleanup, "seed_ro").await;
 
     // 种子模板对任意登录用户可见。
     let (items, _) = catalog
@@ -210,9 +219,9 @@ async fn seed_templates_are_read_only() {
             .update_company(
                 viewer,
                 seed_id,
-                CompanyPatchInput {
+                UpdateCompanyInput {
                     name: Some("篡改".to_owned()),
-                    ..CompanyPatchInput::default()
+                    ..UpdateCompanyInput::default()
                 },
                 chrono::Utc::now(),
             )
@@ -230,7 +239,7 @@ async fn seed_templates_are_read_only() {
             .create_project(
                 viewer,
                 seed_id,
-                ProjectInput {
+                CreateProjectInput {
                     name: "植入项目".to_owned(),
                     season: String::new(),
                     status: None,
@@ -254,11 +263,11 @@ async fn seed_templates_are_read_only() {
 
 #[tokio::test]
 async fn others_public_templates_readable_not_writable() {
-    let Some((account, catalog)) = setup().await else {
+    let Some((account, catalog, mut cleanup)) = setup().await else {
         return;
     };
-    let alice = new_user(&account, "pub_a").await;
-    let bob = new_user(&account, "pub_b").await;
+    let alice = new_user(&account, &mut cleanup, "pub_a").await;
+    let bob = new_user(&account, &mut cleanup, "pub_b").await;
 
     let company_id = create_full_company(
         &catalog,
@@ -291,9 +300,9 @@ async fn others_public_templates_readable_not_writable() {
             .update_company(
                 bob,
                 company_id,
-                CompanyPatchInput {
+                UpdateCompanyInput {
                     name: Some("抢改".to_owned()),
-                    ..CompanyPatchInput::default()
+                    ..UpdateCompanyInput::default()
                 },
                 chrono::Utc::now(),
             )
@@ -311,7 +320,7 @@ async fn others_public_templates_readable_not_writable() {
             .create_project(
                 bob,
                 company_id,
-                ProjectInput {
+                CreateProjectInput {
                     name: "越权项目".to_owned(),
                     season: String::new(),
                     status: None,
@@ -335,11 +344,11 @@ async fn others_public_templates_readable_not_writable() {
 
 #[tokio::test]
 async fn others_private_templates_are_invisible() {
-    let Some((account, catalog)) = setup().await else {
+    let Some((account, catalog, mut cleanup)) = setup().await else {
         return;
     };
-    let alice = new_user(&account, "priv_a").await;
-    let bob = new_user(&account, "priv_b").await;
+    let alice = new_user(&account, &mut cleanup, "priv_a").await;
+    let bob = new_user(&account, &mut cleanup, "priv_b").await;
 
     let company_id = create_full_company(
         &catalog,
@@ -386,11 +395,11 @@ async fn others_private_templates_are_invisible() {
 
 #[tokio::test]
 async fn company_name_conflicts_within_owner() {
-    let Some((account, catalog)) = setup().await else {
+    let Some((account, catalog, mut cleanup)) = setup().await else {
         return;
     };
-    let alice = new_user(&account, "conf_a").await;
-    let bob = new_user(&account, "conf_b").await;
+    let alice = new_user(&account, &mut cleanup, "conf_a").await;
+    let bob = new_user(&account, &mut cleanup, "conf_b").await;
 
     let name = format!("冲突公司{}", unique_suffix());
     create_company(&catalog, alice, &name, false).await;
@@ -399,10 +408,10 @@ async fn company_name_conflicts_within_owner() {
     let err = catalog
         .create_company(
             alice,
-            CompanyInput {
+            CreateCompanyInput {
                 name: format!("{name} "),
                 industry: "测试行业".to_owned(),
-                ..CompanyInput::default()
+                ..CreateCompanyInput::default()
             },
             chrono::Utc::now(),
         )
@@ -416,10 +425,10 @@ async fn company_name_conflicts_within_owner() {
 
 #[tokio::test]
 async fn soft_delete_then_recreate() {
-    let Some((account, catalog)) = setup().await else {
+    let Some((account, catalog, mut cleanup)) = setup().await else {
         return;
     };
-    let alice = new_user(&account, "del_a").await;
+    let alice = new_user(&account, &mut cleanup, "del_a").await;
 
     let name = format!("重建公司{}", unique_suffix());
     let company_id = create_full_company(&catalog, alice, &name, false).await;
@@ -454,10 +463,10 @@ async fn soft_delete_then_recreate() {
 
 #[tokio::test]
 async fn pipeline_must_belong_to_same_project() {
-    let Some((account, catalog)) = setup().await else {
+    let Some((account, catalog, mut cleanup)) = setup().await else {
         return;
     };
-    let alice = new_user(&account, "fk_a").await;
+    let alice = new_user(&account, &mut cleanup, "fk_a").await;
     let now = chrono::Utc::now();
 
     let company = create_company(
@@ -471,7 +480,7 @@ async fn pipeline_must_belong_to_same_project() {
         .create_project(
             alice,
             company.id,
-            ProjectInput {
+            CreateProjectInput {
                 name: "项目甲".to_owned(),
                 season: String::new(),
                 status: None,
@@ -486,7 +495,7 @@ async fn pipeline_must_belong_to_same_project() {
         .create_project(
             alice,
             company.id,
-            ProjectInput {
+            CreateProjectInput {
                 name: "项目乙".to_owned(),
                 season: String::new(),
                 status: None,
@@ -501,7 +510,7 @@ async fn pipeline_must_belong_to_same_project() {
         .create_pipeline(
             alice,
             project_a.id,
-            PipelineInput {
+            CreatePipelineInput {
                 name: "甲流程".to_owned(),
                 stages: Some(two_stage_input()),
             },
@@ -515,7 +524,7 @@ async fn pipeline_must_belong_to_same_project() {
         .create_job(
             alice,
             project_b.id,
-            JobInput {
+            CreateJobInput {
                 pipeline_id: Some(pipeline.id),
                 title: "跨项目岗位".to_owned(),
                 city: String::new(),
@@ -546,7 +555,7 @@ async fn pipeline_must_belong_to_same_project() {
         .create_job(
             alice,
             project_a.id,
-            JobInput {
+            CreateJobInput {
                 pipeline_id: Some(pipeline.id),
                 title: "合法岗位".to_owned(),
                 city: String::new(),
@@ -566,13 +575,13 @@ async fn pipeline_must_belong_to_same_project() {
         .update_job(
             alice,
             job.id,
-            careersim::catalog::service::JobPatchInput {
+            careersim::catalog::service::UpdateJobInput {
                 pipeline_id: Some(
                     catalog
                         .create_pipeline(
                             alice,
                             project_b.id,
-                            PipelineInput {
+                            CreatePipelineInput {
                                 name: "乙流程".to_owned(),
                                 stages: Some(two_stage_input()),
                             },
@@ -582,7 +591,7 @@ async fn pipeline_must_belong_to_same_project() {
                         .expect("pipeline b")
                         .id,
                 ),
-                ..JobPatchInput::default()
+                ..UpdateJobInput::default()
             },
             now,
         )
@@ -601,11 +610,11 @@ async fn pipeline_must_belong_to_same_project() {
 
 #[tokio::test]
 async fn import_template_roundtrip() {
-    let Some((account, catalog)) = setup().await else {
+    let Some((account, catalog, mut cleanup)) = setup().await else {
         return;
     };
-    let alice = new_user(&account, "imp_a").await;
-    let bob = new_user(&account, "imp_b").await;
+    let alice = new_user(&account, &mut cleanup, "imp_a").await;
+    let bob = new_user(&account, &mut cleanup, "imp_b").await;
 
     let name = format!("导入公司{}", unique_suffix());
     let template: Value = json!({
@@ -627,10 +636,10 @@ async fn import_template_roundtrip() {
             "projectKey": "p1",
             "name": "校招主流程",
             "stages": [
-                {"key": "hr_screen", "kind": "hr_screen", "title": "HR 初筛", "minRounds": 1, "maxRounds": 3,
+                {"position": 0, "kind": "hr_screen", "title": "HR 初筛", "minRounds": 1, "maxRounds": 3,
                  "rubric": {"passScore": 60, "dimensions": [
                      {"key": "communication", "label": "沟通表达", "weight": 100, "criteria": "表达清晰"}]}},
-                {"key": "offer", "kind": "offer", "title": "Offer 沟通", "minRounds": 1, "maxRounds": 2,
+                {"position": 1, "kind": "offer", "title": "Offer 沟通", "minRounds": 1, "maxRounds": 2,
                  "rubric": {"passScore": 70, "dimensions": [
                      {"key": "motivation", "label": "求职动机", "weight": 100, "criteria": "动机明确"}]}}
             ],
@@ -695,11 +704,11 @@ async fn import_template_roundtrip() {
 
 #[tokio::test]
 async fn project_and_pipeline_updates_and_deletes() {
-    let Some((account, catalog)) = setup().await else {
+    let Some((account, catalog, mut cleanup)) = setup().await else {
         return;
     };
-    let alice = new_user(&account, "upd_a").await;
-    let bob = new_user(&account, "upd_b").await;
+    let alice = new_user(&account, &mut cleanup, "upd_a").await;
+    let bob = new_user(&account, &mut cleanup, "upd_b").await;
     let now = chrono::Utc::now();
 
     let company = create_full_company(
@@ -722,11 +731,11 @@ async fn project_and_pipeline_updates_and_deletes() {
         .update_project(
             alice,
             project_id,
-            ProjectPatchInput {
+            UpdateProjectInput {
                 name: Some("改名项目".to_owned()),
                 status: Some(ProjectStatus::Closed),
                 deadline: Some(None),
-                ..ProjectPatchInput::default()
+                ..UpdateProjectInput::default()
             },
             now,
         )
@@ -741,10 +750,10 @@ async fn project_and_pipeline_updates_and_deletes() {
         .update_project(
             alice,
             project_id,
-            ProjectPatchInput {
+            UpdateProjectInput {
                 status: Some(ProjectStatus::Open),
                 deadline: Some(Some(now.date_naive() - chrono::Duration::days(1))),
-                ..ProjectPatchInput::default()
+                ..UpdateProjectInput::default()
             },
             now,
         )
@@ -755,9 +764,9 @@ async fn project_and_pipeline_updates_and_deletes() {
         .update_project(
             alice,
             project_id,
-            ProjectPatchInput {
+            UpdateProjectInput {
                 deadline: Some(Some(now.date_naive() + chrono::Duration::days(30))),
-                ..ProjectPatchInput::default()
+                ..UpdateProjectInput::default()
             },
             now,
         )
@@ -767,13 +776,27 @@ async fn project_and_pipeline_updates_and_deletes() {
 
     // 流水线改名；Bob 越权拒绝。
     let renamed = catalog
-        .update_pipeline(alice, pipeline_id, "新流程名", now)
+        .update_pipeline(
+            alice,
+            pipeline_id,
+            UpdatePipelineInput {
+                name: "新流程名".to_owned(),
+            },
+            now,
+        )
         .await
         .expect("rename pipeline");
     assert_eq!(renamed.name, "新流程名");
     assert!(matches!(
         catalog
-            .update_pipeline(bob, pipeline_id, "越权名", now)
+            .update_pipeline(
+                bob,
+                pipeline_id,
+                UpdatePipelineInput {
+                    name: "越权名".to_owned(),
+                },
+                now,
+            )
             .await,
         Err(CatalogError::NotFound)
     ));

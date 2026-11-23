@@ -2,16 +2,20 @@
 //!
 //! 运行前需可用的 PostgreSQL（compose.yaml）并执行全部迁移。
 
+mod support;
+
 use std::sync::Arc;
 
 use careersim::account::{
-    model::{AccountError, ProfilePatch},
+    model::{AccountError, UpdateProfileInput},
     password::Argon2idHasher,
     postgres_account_service,
+    service::{ChangePasswordInput, LoginInput, RegisterInput},
 };
 use sqlx::postgres::PgPoolOptions;
+use support::CleanupGuard;
 
-async fn service() -> Option<careersim::account::service::AccountService> {
+async fn service() -> Option<(careersim::account::service::AccountService, CleanupGuard)> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
         return None;
     };
@@ -25,7 +29,8 @@ async fn service() -> Option<careersim::account::service::AccountService> {
         .await
         .expect("run migrations");
     let hasher = Arc::new(Argon2idHasher::new().expect("argon2 hasher"));
-    Some(postgres_account_service(pool, hasher))
+    let cleanup = CleanupGuard::new(&url);
+    Some((postgres_account_service(pool, hasher), cleanup))
 }
 
 fn unique_username() -> String {
@@ -39,16 +44,21 @@ fn unique_username() -> String {
 
 #[tokio::test]
 async fn account_roundtrip_against_postgres() {
-    let Some(service) = service().await else {
+    let Some((service, mut cleanup)) = service().await else {
         return;
     };
     let username = unique_username();
 
     // 注册即登录。
     let grant = service
-        .register(&username, "password123", "A0 测试")
+        .register(RegisterInput {
+            username: username.clone(),
+            password: "password123".to_owned(),
+            display_name: "A0 测试".to_owned(),
+        })
         .await
         .expect("register");
+    cleanup.track_user(grant.user.id);
     assert_eq!(grant.user.username, username);
 
     // 认证当前会话。
@@ -60,7 +70,10 @@ async fn account_roundtrip_against_postgres() {
 
     // 登录。
     let login_grant = service
-        .login(&username, "password123")
+        .login(LoginInput {
+            username: username.clone(),
+            password: "password123".to_owned(),
+        })
         .await
         .expect("login");
 
@@ -68,10 +81,10 @@ async fn account_roundtrip_against_postgres() {
     let updated = service
         .update_profile(
             user_id,
-            ProfilePatch {
+            UpdateProfileInput {
                 school: Some(Some("示例大学".to_owned())),
                 graduation_year: Some(Some(2027)),
-                ..ProfilePatch::default()
+                ..UpdateProfileInput::default()
             },
         )
         .await
@@ -84,8 +97,10 @@ async fn account_roundtrip_against_postgres() {
         .change_password(
             user_id,
             authenticated.session_id,
-            "password123",
-            "newpassword1",
+            ChangePasswordInput {
+                current_password: "password123".to_owned(),
+                new_password: "newpassword1".to_owned(),
+            },
         )
         .await
         .expect("change password");
@@ -106,32 +121,53 @@ async fn account_roundtrip_against_postgres() {
 
 #[tokio::test]
 async fn duplicate_username_conflicts() {
-    let Some(service) = service().await else {
+    let Some((service, mut cleanup)) = service().await else {
         return;
     };
     let username = unique_username();
-    service
-        .register(&username, "password123", "第一次")
+    let grant = service
+        .register(RegisterInput {
+            username: username.clone(),
+            password: "password123".to_owned(),
+            display_name: "第一次".to_owned(),
+        })
         .await
         .expect("first register");
+    cleanup.track_user(grant.user.id);
     assert!(matches!(
-        service.register(&username, "password123", "第二次").await,
+        service
+            .register(RegisterInput {
+                username: username.clone(),
+                password: "password123".to_owned(),
+                display_name: "第二次".to_owned(),
+            })
+            .await,
         Err(AccountError::UsernameTaken)
     ));
 }
 
 #[tokio::test]
 async fn wrong_password_rejected() {
-    let Some(service) = service().await else {
+    let Some((service, mut cleanup)) = service().await else {
         return;
     };
     let username = unique_username();
-    service
-        .register(&username, "password123", "A0 测试")
+    let grant = service
+        .register(RegisterInput {
+            username: username.clone(),
+            password: "password123".to_owned(),
+            display_name: "A0 测试".to_owned(),
+        })
         .await
         .expect("register");
+    cleanup.track_user(grant.user.id);
     assert!(matches!(
-        service.login(&username, "wrong-pass-1").await,
+        service
+            .login(LoginInput {
+                username,
+                password: "wrong-pass-1".to_owned(),
+            })
+            .await,
         Err(AccountError::InvalidCredentials)
     ));
 }

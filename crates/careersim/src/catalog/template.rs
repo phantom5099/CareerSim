@@ -4,7 +4,7 @@
 //! [`validate_template`]。跨阶段规则复用 [`PipelineDefinition::parse`]。
 
 use chrono::NaiveDate;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::model::{
     ACCENT_MAX_CHARS, CITY_MAX_CHARS, COMPANY_ACCENTS, COMPANY_DESCRIPTION_MAX_CHARS,
@@ -506,11 +506,7 @@ fn validate_projects(
     projects
 }
 
-fn stage_key_of(stage: &Value) -> Option<&str> {
-    stage.get("key").and_then(Value::as_str)
-}
-
-/// 把 [`PipelineError`] 映射回阶段数组内的精确路径。
+/// 把流水线校验错误映射回阶段数组路径。
 fn push_pipeline_error(
     pipeline_index: usize,
     stages: &[Value],
@@ -518,78 +514,39 @@ fn push_pipeline_error(
     errors: &mut Vec<TemplateError>,
 ) {
     let base = format!("pipelines[{pipeline_index}].stages");
-    let index_of = |key: &str| {
-        stages
-            .iter()
-            .position(|stage| stage_key_of(stage) == Some(key))
-    };
-    let second_index_of = |key: &str| {
-        let mut seen = 0;
-        stages.iter().position(|stage| {
-            if stage_key_of(stage) == Some(key) {
-                seen += 1;
-                seen == 2
-            } else {
-                false
-            }
-        })
+    let stage_path = |position: u16, suffix: &str| {
+        let index = stages.iter().position(|stage| {
+            stage.get("position").and_then(Value::as_u64) == Some(u64::from(position))
+        });
+        match index {
+            Some(index) => format!("{base}[{index}]{suffix}"),
+            None => format!("{base}[*]{suffix}"),
+        }
     };
     match error {
         PipelineError::Empty => {
             errors.push(TemplateError::new(base, "must contain at least one stage"))
         }
-        PipelineError::DuplicateStageKey(key) => {
-            let index = second_index_of(&key)
-                .map(|index| index.to_string())
-                .unwrap_or_else(|| "*".to_owned());
-            errors.push(TemplateError::new(
-                format!("{base}[{index}].key"),
-                format!("duplicate stage key `{key}`"),
-            ));
-        }
-        PipelineError::OfferCount(count) => {
-            errors.push(TemplateError::new(
-                base,
-                format!("pipeline must contain exactly one offer stage, found {count}"),
-            ));
-        }
-        PipelineError::OfferNotLast => {
-            let last = stages.len().saturating_sub(1);
-            errors.push(TemplateError::new(
-                format!("{base}[{last}].kind"),
-                "the offer stage must be the last stage",
-            ));
-        }
-        PipelineError::InvalidStageKey { key, reason } => {
-            let index = index_of(&key)
-                .map(|index| index.to_string())
-                .unwrap_or_else(|| "*".to_owned());
-            errors.push(TemplateError::new(format!("{base}[{index}].key"), reason));
-        }
-        PipelineError::InvalidStage { key, reason } => {
-            let index = index_of(&key)
-                .map(|index| index.to_string())
-                .unwrap_or_else(|| "*".to_owned());
-            errors.push(TemplateError::new(
-                format!("{base}[{index}]"),
-                format!("invalid stage `{key}`: {reason}"),
-            ));
-        }
-        PipelineError::InvalidRubric { key, reason } => {
-            let index = index_of(&key)
-                .map(|index| index.to_string())
-                .unwrap_or_else(|| "*".to_owned());
-            errors.push(TemplateError::new(
-                format!("{base}[{index}].rubric"),
-                format!("invalid rubric for stage `{key}`: {reason}"),
-            ));
-        }
-        PipelineError::ScoreOutOfRange(value) => {
-            errors.push(TemplateError::new(
-                base,
-                format!("score must be within 0..=100, got {value}"),
-            ));
-        }
+        PipelineError::OfferCount(count) => errors.push(TemplateError::new(
+            base,
+            format!("pipeline must contain exactly one offer stage, found {count}"),
+        )),
+        PipelineError::OfferNotLast => errors.push(TemplateError::new(
+            format!("{base}[*].kind"),
+            "the offer stage must be the last stage",
+        )),
+        PipelineError::InvalidStage { position, reason } => errors.push(TemplateError::new(
+            stage_path(position, ""),
+            format!("invalid stage at position {position}: {reason}"),
+        )),
+        PipelineError::InvalidRubric { position, reason } => errors.push(TemplateError::new(
+            stage_path(position, ".rubric"),
+            format!("invalid rubric for stage at position {position}: {reason}"),
+        )),
+        PipelineError::ScoreOutOfRange(value) => errors.push(TemplateError::new(
+            base,
+            format!("score must be within 0..=100, got {value}"),
+        )),
     }
 }
 
@@ -679,7 +636,14 @@ fn validate_stages(
 ) -> Option<PipelineDefinition> {
     let mut definitions = Vec::with_capacity(stages.len());
     for (stage_index, stage) in stages.iter().enumerate() {
-        match serde_json::from_value::<StageDefinition>(stage.clone()) {
+        let mut stage = stage.clone();
+        if let Some(object) = stage.as_object_mut() {
+            object
+                .entry("position")
+                .or_insert_with(|| json!(stage_index));
+            object.remove("key");
+        }
+        match serde_json::from_value::<StageDefinition>(stage) {
             Ok(definition) => definitions.push(definition),
             Err(error) => errors.push(TemplateError::new(
                 format!("pipelines[{pipeline_index}].stages[{stage_index}]"),
@@ -728,7 +692,6 @@ fn validate_jobs(
     };
     let mut jobs = Vec::new();
     let mut seen_keys = Vec::new();
-    let mut seen_titles = Vec::new();
     for (index, item) in items.iter().enumerate() {
         let path = format!("jobs[{index}]");
         let Some(obj) = object_of(Some(item), &path, errors) else {
@@ -830,18 +793,6 @@ fn validate_jobs(
                 seen_keys.push(key.clone());
             }
         }
-        if let (Some(project_key), Some(title)) = (&project_key, &title) {
-            let title_key = (project_key.clone(), normalize_key(title));
-            if seen_titles.contains(&title_key) {
-                errors.push(TemplateError::new(
-                    format!("{path}.title"),
-                    format!("duplicate job title `{title}` in project `{project_key}`"),
-                ));
-            } else {
-                seen_titles.push(title_key);
-            }
-        }
-
         let salary_min = read_salary(obj, "salaryMin", &format!("{path}.salaryMin"), errors);
         let salary_max = read_salary(obj, "salaryMax", &format!("{path}.salaryMax"), errors);
         if let (Some(Some(min)), Some(Some(max))) = (salary_min, salary_max)

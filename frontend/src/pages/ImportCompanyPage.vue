@@ -3,17 +3,13 @@ import { ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
 import { companiesApi } from '@/api/endpoints/companies'
-import { defaultTemplateStages } from '@/mock/data/companyTemplates'
 import { useCompanyCatalogStore } from '@/stores/companyCatalog'
 import {
   ACCENT_OPTIONS,
   COMPANY_SIZE_OPTIONS,
   DEFAULT_ACCENT,
-  JOB_TYPE_LABELS,
-  PROJECT_STATUS_LABELS,
   TEMPLATE_LIMITS,
 } from '@/domain/types'
-import type { JobType, ProjectStatus } from '@/domain/types'
 
 const router = useRouter()
 const catalog = useCompanyCatalogStore()
@@ -28,28 +24,6 @@ const showAiCard = ref(false)
 const prompt = ref('')
 const generating = ref(false)
 const generateError = ref('')
-
-interface ProjectRow {
-  key: string
-  name: string
-  season: string
-  status: ProjectStatus
-  deadline: string
-  description: string
-}
-
-interface JobRow {
-  key: string
-  projectKey: string
-  title: string
-  city: string
-  jobType: JobType
-  salaryMin: string
-  salaryMax: string
-  salaryMonths: string
-  tags: string
-  description: string
-}
 
 const form = ref({
   name: '',
@@ -80,64 +54,13 @@ function removeHighlight(index: number) {
   form.value.highlights.splice(index, 1)
 }
 
-let projectSeq = 0
-let jobSeq = 0
-const projects = ref<ProjectRow[]>([])
-const jobs = ref<JobRow[]>([])
-
-const jobTypeOptions = Object.entries(JOB_TYPE_LABELS) as [JobType, string][]
-const projectStatusOptions = Object.entries(PROJECT_STATUS_LABELS) as [ProjectStatus, string][]
-
 function resetResult() {
   preview.value = false
   errors.value = []
   notice.value = ''
 }
 
-function addProject() {
-  projectSeq += 1
-  projects.value.push({
-    key: `p${projectSeq}`,
-    name: '',
-    season: '',
-    status: 'open',
-    deadline: '',
-    description: '',
-  })
-}
-
-function removeProject(key: string) {
-  projects.value = projects.value.filter((row) => row.key !== key)
-  // 项目删掉后，挂在其上的岗位失去归属，一并移除。
-  jobs.value = jobs.value.filter((row) => row.projectKey !== key)
-}
-
-function addJob() {
-  jobSeq += 1
-  jobs.value.push({
-    key: `j${jobSeq}`,
-    projectKey: projects.value[0]?.key ?? '',
-    title: '',
-    city: '',
-    jobType: 'campus',
-    salaryMin: '',
-    salaryMax: '',
-    salaryMonths: '',
-    tags: '',
-    description: '',
-  })
-}
-
-function removeJob(key: string) {
-  jobs.value = jobs.value.filter((row) => row.key !== key)
-}
-
-function optionalNumber(value: string): number | undefined {
-  const parsed = Number(value)
-  return value.trim() !== '' && Number.isFinite(parsed) ? parsed : undefined
-}
-
-// 表单 → CompanyTemplateV1；pipeline 每个项目自动配一套标准面试流程。
+// 表单 → CompanyTemplateV1；招聘项目、流程和岗位在公司保存后再单独维护。
 function buildTemplate() {
   return {
     schemaVersion: 1,
@@ -153,36 +76,9 @@ function buildTemplate() {
       logoText: form.value.logoText.trim(),
       accent: form.value.accent.trim(),
     },
-    projects: projects.value.map((row) => ({
-      key: row.key,
-      name: row.name.trim(),
-      season: row.season.trim(),
-      status: row.status,
-      deadline: row.deadline || null,
-      description: row.description.trim(),
-    })),
-    pipelines: projects.value.map((row) => ({
-      key: `pl${row.key.slice(1)}`,
-      projectKey: row.key,
-      name: '标准面试流程',
-      stages: defaultTemplateStages(),
-    })),
-    jobs: jobs.value.map((row) => ({
-      key: row.key,
-      projectKey: row.projectKey,
-      pipelineKey: `pl${row.projectKey.slice(1)}`,
-      title: row.title.trim(),
-      city: row.city.trim(),
-      jobType: row.jobType,
-      salaryMin: optionalNumber(row.salaryMin),
-      salaryMax: optionalNumber(row.salaryMax),
-      salaryMonths: optionalNumber(row.salaryMonths),
-      tags: row.tags
-        .split(/[,，、]/)
-        .map((tag) => tag.trim())
-        .filter(Boolean),
-      description: row.description.trim(),
-    })),
+    projects: [],
+    pipelines: [],
+    jobs: [],
   }
 }
 
@@ -213,47 +109,6 @@ function loadIntoForm(template: Record<string, unknown>) {
       ? accent
       : (DEFAULT_ACCENT as string),
   }
-  projectSeq = 0
-  const keyMap = new Map<string, string>()
-  const rawProjects = Array.isArray(template.projects) ? template.projects : []
-  projects.value = rawProjects.map((raw) => {
-    const project = raw as Record<string, unknown>
-    projectSeq += 1
-    const key = `p${projectSeq}`
-    keyMap.set(String(project.key ?? ''), key)
-    return {
-      key,
-      name: clampText(project.name, TEMPLATE_LIMITS.projectName),
-      season: clampText(project.season, TEMPLATE_LIMITS.season),
-      status: (['open', 'closed'].includes(String(project.status))
-        ? project.status
-        : 'open') as ProjectStatus,
-      deadline: String(project.deadline ?? ''),
-      description: clampText(project.description, TEMPLATE_LIMITS.projectDescription),
-    }
-  })
-  jobSeq = 0
-  const rawJobs = Array.isArray(template.jobs) ? template.jobs : []
-  jobs.value = rawJobs.map((raw) => {
-    const job = raw as Record<string, unknown>
-    jobSeq += 1
-    return {
-      key: `j${jobSeq}`,
-      projectKey: keyMap.get(String(job.projectKey ?? '')) ?? projects.value[0]?.key ?? '',
-      title: clampText(job.title, TEMPLATE_LIMITS.jobTitle),
-      city: clampText(job.city, TEMPLATE_LIMITS.city),
-      jobType: (['campus', 'internship', 'experienced'].includes(String(job.jobType))
-        ? job.jobType
-        : 'campus') as JobType,
-      salaryMin: job.salaryMin != null ? String(job.salaryMin) : '',
-      salaryMax: job.salaryMax != null ? String(job.salaryMax) : '',
-      salaryMonths: job.salaryMonths != null ? String(job.salaryMonths) : '',
-      tags: Array.isArray(job.tags)
-        ? (job.tags as unknown[]).slice(0, 12).map(String).join(', ')
-        : '',
-      description: clampText(job.description, TEMPLATE_LIMITS.jobDescription),
-    }
-  })
 }
 
 async function validate() {
@@ -433,142 +288,7 @@ async function save() {
             </div>
           </div>
 
-          <!-- 招聘项目 -->
-          <div class="mt-7">
-            <div class="flex items-center justify-between">
-              <h3 class="text-[0.7rem] font-medium text-ink">招聘项目 *（至少 1 个）</h3>
-              <button type="button" class="btn-line py-1 text-[0.64rem]" @click="addProject">
-                ＋ 添加项目
-              </button>
-            </div>
-            <p v-if="!projects.length" class="mt-3 border border-dashed border-line-strong px-4 py-6 text-center text-[0.68rem] text-ink-faint">
-              还没有招聘项目，点右上角「添加项目」开始。
-            </p>
-            <div
-              v-for="(project, index) in projects"
-              :key="project.key"
-              class="mt-3 border border-line bg-paper-light p-4"
-            >
-              <div class="flex items-center justify-between">
-                <span class="font-mono text-[0.58rem] text-ink-faint">项目 {{ index + 1 }}</span>
-                <button
-                  type="button"
-                  class="text-[0.64rem] text-ink-soft transition hover:text-vermilion"
-                  @click="removeProject(project.key)"
-                >
-                  删除
-                </button>
-              </div>
-              <div class="mt-2 grid gap-3 sm:grid-cols-2">
-                <label class="block">
-                  <span class="text-[0.62rem] text-ink-faint">项目名称 *</span>
-                  <input v-model="project.name" type="text" :maxlength="TEMPLATE_LIMITS.projectName" class="field mt-1 w-full text-[0.78rem]" placeholder="如：2026 秋季校园招聘" @input="resetResult" />
-                </label>
-                <label class="block">
-                  <span class="text-[0.62rem] text-ink-faint">季节标注</span>
-                  <input v-model="project.season" type="text" :maxlength="TEMPLATE_LIMITS.season" class="field mt-1 w-full text-[0.78rem]" placeholder="如：2026 秋招" @input="resetResult" />
-                </label>
-                <label class="block">
-                  <span class="text-[0.62rem] text-ink-faint">状态</span>
-                  <select v-model="project.status" class="field mt-1 w-full text-[0.78rem]" @change="resetResult">
-                    <option v-for="[value, label] in projectStatusOptions" :key="value" :value="value">
-                      {{ label }}
-                    </option>
-                  </select>
-                </label>
-                <label class="block">
-                  <span class="text-[0.62rem] text-ink-faint">截止日期</span>
-                  <input v-model="project.deadline" type="date" class="field mt-1 w-full text-[0.78rem]" @change="resetResult" />
-                </label>
-                <label class="block sm:col-span-2">
-                  <span class="text-[0.62rem] text-ink-faint">项目描述</span>
-                  <textarea v-model="project.description" rows="2" :maxlength="TEMPLATE_LIMITS.projectDescription" class="field mt-1 w-full text-[0.78rem] leading-6" @input="resetResult" />
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <!-- 开放岗位 -->
-          <div class="mt-7">
-            <div class="flex items-center justify-between">
-              <h3 class="text-[0.7rem] font-medium text-ink">开放岗位 *（至少 1 个）</h3>
-              <button
-                type="button"
-                class="btn-line py-1 text-[0.64rem]"
-                :disabled="!projects.length"
-                @click="addJob"
-              >
-                ＋ 添加岗位
-              </button>
-            </div>
-            <p v-if="!jobs.length" class="mt-3 border border-dashed border-line-strong px-4 py-6 text-center text-[0.68rem] text-ink-faint">
-              {{ projects.length ? '还没有岗位，点右上角「添加岗位」开始。' : '先添加招聘项目，再添加岗位。' }}
-            </p>
-            <div
-              v-for="(job, index) in jobs"
-              :key="job.key"
-              class="mt-3 border border-line bg-paper-light p-4"
-            >
-              <div class="flex items-center justify-between">
-                <span class="font-mono text-[0.58rem] text-ink-faint">岗位 {{ index + 1 }}</span>
-                <button
-                  type="button"
-                  class="text-[0.64rem] text-ink-soft transition hover:text-vermilion"
-                  @click="removeJob(job.key)"
-                >
-                  删除
-                </button>
-              </div>
-              <div class="mt-2 grid gap-3 sm:grid-cols-2">
-                <label class="block">
-                  <span class="text-[0.62rem] text-ink-faint">所属项目 *</span>
-                  <select v-model="job.projectKey" class="field mt-1 w-full text-[0.78rem]" @change="resetResult">
-                    <option v-for="project in projects" :key="project.key" :value="project.key">
-                      {{ project.name || `项目 ${projects.indexOf(project) + 1}` }}
-                    </option>
-                  </select>
-                </label>
-                <label class="block">
-                  <span class="text-[0.62rem] text-ink-faint">岗位名称 *</span>
-                  <input v-model="job.title" type="text" :maxlength="TEMPLATE_LIMITS.jobTitle" class="field mt-1 w-full text-[0.78rem]" @input="resetResult" />
-                </label>
-                <label class="block">
-                  <span class="text-[0.62rem] text-ink-faint">工作城市</span>
-                  <input v-model="job.city" type="text" :maxlength="TEMPLATE_LIMITS.city" class="field mt-1 w-full text-[0.78rem]" @input="resetResult" />
-                </label>
-                <label class="block">
-                  <span class="text-[0.62rem] text-ink-faint">岗位类型</span>
-                  <select v-model="job.jobType" class="field mt-1 w-full text-[0.78rem]" @change="resetResult">
-                    <option v-for="[value, label] in jobTypeOptions" :key="value" :value="value">
-                      {{ label }}
-                    </option>
-                  </select>
-                </label>
-                <div class="grid grid-cols-3 gap-2 sm:col-span-2">
-                  <label class="block">
-                    <span class="text-[0.62rem] text-ink-faint">月薪下限</span>
-                    <input v-model="job.salaryMin" type="number" min="0" class="field mt-1 w-full text-[0.78rem]" @input="resetResult" />
-                  </label>
-                  <label class="block">
-                    <span class="text-[0.62rem] text-ink-faint">月薪上限</span>
-                    <input v-model="job.salaryMax" type="number" min="0" class="field mt-1 w-full text-[0.78rem]" @input="resetResult" />
-                  </label>
-                  <label class="block">
-                    <span class="text-[0.62rem] text-ink-faint">薪资月数</span>
-                    <input v-model="job.salaryMonths" type="number" min="1" max="24" class="field mt-1 w-full text-[0.78rem]" @input="resetResult" />
-                  </label>
-                </div>
-                <label class="block sm:col-span-2">
-                  <span class="text-[0.62rem] text-ink-faint">技能标签（用逗号分隔）</span>
-                  <input v-model="job.tags" type="text" class="field mt-1 w-full text-[0.78rem]" placeholder="如：SQL, BI, 零售" @input="resetResult" />
-                </label>
-                <label class="block sm:col-span-2">
-                  <span class="text-[0.62rem] text-ink-faint">岗位描述</span>
-                  <textarea v-model="job.description" rows="2" :maxlength="TEMPLATE_LIMITS.jobDescription" class="field mt-1 w-full text-[0.78rem] leading-6" @input="resetResult" />
-                </label>
-              </div>
-            </div>
-          </div>
+          <!-- 保存公司模板后，再从公司详情页添加招聘项目和岗位。 -->
 
           <!-- 表单底部操作 -->
           <div class="mt-6 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-4">

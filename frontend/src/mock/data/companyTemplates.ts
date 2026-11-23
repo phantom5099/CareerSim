@@ -471,7 +471,7 @@ export const workStyles = ['双休 · 弹性工作', '导师制 · 每周复盘'
 export function defaultTemplateStages() {
   return [
     {
-      key: 'screen',
+      position: 0,
       kind: 'hr_screen',
       title: '简历初筛',
       minRounds: 1,
@@ -484,7 +484,7 @@ export function defaultTemplateStages() {
       },
     },
     {
-      key: 'tech',
+      position: 1,
       kind: 'tech_interview',
       title: '技术面试',
       minRounds: 2,
@@ -498,7 +498,7 @@ export function defaultTemplateStages() {
       },
     },
     {
-      key: 'offer',
+      position: 2,
       kind: 'offer',
       title: 'Offer 沟通',
       minRounds: 1,

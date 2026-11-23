@@ -21,35 +21,44 @@ use tower::ServiceExt;
 
 use crate::{
     account::{
-        model::{CredentialUser, NewUser, Password, PasswordHash, ProfilePatch, User, UserId},
+        model::{CredentialUser, Password, PasswordHash, UpdateProfileInput, User, UserId},
         password::{PasswordError, PasswordHasher},
         service::{AccountService, Clock},
-        session::{LoginSession, NewLoginSession, SessionId, SessionTokenHash},
-        store::{SessionStore, SessionStoreError, UserStore, UserStoreError},
+        session::{CreateLoginSessionRecord, LoginSession, SessionId, SessionTokenHash},
+        store::{CreateUserRecord, SessionStore, SessionStoreError, UserStore, UserStoreError},
+    },
+    agent::session::{StageRef, StoreSessionService},
+    application::{
+        Application, ApplicationError, ApplicationId, ApplicationService, ApplicationStatus,
+        ApplicationView,
+        store::{ApplicationStore, CreateApplicationRecord},
     },
     catalog::{
         model::{
-            CatalogError, Company, CompanyDetail, CompanyId, CompanyPatch, CompanySource,
-            CompanySummary, Job, JobId, JobPatch, JobStatus, ListCursor, NewCompany, NewJob,
-            NewPipeline, NewProject, Pipeline, PipelineId, ProjectId, ProjectPatch,
-            RecruitmentProject, normalize_key,
+            CatalogError, Company, CompanyDetail, CompanyId, CompanySource, CompanySummary, Job,
+            JobId, JobStatus, ListCursor, Pipeline, PipelineId, ProjectId, RecruitmentProject,
+            normalize_key,
         },
         service::CatalogService,
-        store::{CatalogScope, CatalogStore},
+        store::{
+            CatalogScope, CatalogStore, CreateCompanyRecord, CreateJobRecord, CreatePipelineRecord,
+            CreateProjectRecord, UpdateCompanyRecord, UpdateJobRecord, UpdateProjectRecord,
+        },
         template::ValidatedTemplate,
     },
     http::router::{AppState, router},
     resume::{
         content::ResumeContent,
-        model::{
-            NewResume, NewResumeAttachment, ParseStatus, RESUME_LIMIT, Resume, ResumeAttachment,
-            ResumeId, ResumePatch,
-        },
+        model::{ParseStatus, RESUME_LIMIT, Resume, ResumeAttachment, ResumeId},
         parse::{AttachmentKind, ParseError, ResumeTextExtractor},
         service::ResumeService,
         storage::{AttachmentStore, AttachmentStoreError},
-        store::{ResumeStore, ResumeStoreError},
+        store::{
+            CreateResumeAttachmentRecord, CreateResumeRecord, ResumeStore, ResumeStoreError,
+            UpdateResumeRecord,
+        },
     },
+    store::memory::MemorySessionStore,
 };
 
 // ---------- 账户端口替身 ----------
@@ -75,7 +84,7 @@ impl InMemoryUserStore {
 
 #[async_trait]
 impl UserStore for InMemoryUserStore {
-    async fn insert(&self, new: NewUser) -> Result<User, UserStoreError> {
+    async fn insert(&self, new: CreateUserRecord) -> Result<User, UserStoreError> {
         let mut users = self.users.lock().unwrap();
         if users
             .values()
@@ -130,7 +139,7 @@ impl UserStore for InMemoryUserStore {
     async fn update_profile(
         &self,
         id: UserId,
-        patch: &ProfilePatch,
+        patch: &UpdateProfileInput,
         now: DateTime<Utc>,
     ) -> Result<User, UserStoreError> {
         let mut users = self.users.lock().unwrap();
@@ -158,7 +167,7 @@ impl UserStore for InMemoryUserStore {
 }
 
 /// PATCH 双层 Option 语义的参考实现；PG 适配器行为须与其一致。
-fn apply_patch(user: &mut User, patch: &ProfilePatch, now: DateTime<Utc>) {
+fn apply_patch(user: &mut User, patch: &UpdateProfileInput, now: DateTime<Utc>) {
     if let Some(name) = &patch.display_name {
         user.display_name = name.clone();
     }
@@ -194,7 +203,7 @@ impl InMemorySessionStore {
         }
     }
 
-    fn login_session(new: NewLoginSession) -> LoginSession {
+    fn login_session(new: CreateLoginSessionRecord) -> LoginSession {
         LoginSession {
             id: new.id,
             user_id: new.user_id,
@@ -209,7 +218,7 @@ impl InMemorySessionStore {
 
 #[async_trait]
 impl SessionStore for InMemorySessionStore {
-    async fn insert(&self, session: NewLoginSession) -> Result<(), SessionStoreError> {
+    async fn insert(&self, session: CreateLoginSessionRecord) -> Result<(), SessionStoreError> {
         self.by_hash
             .lock()
             .unwrap()
@@ -269,7 +278,7 @@ impl SessionStore for InMemorySessionStore {
     async fn rotate(
         &self,
         old: SessionId,
-        new: NewLoginSession,
+        new: CreateLoginSessionRecord,
         now: DateTime<Utc>,
     ) -> Result<(), SessionStoreError> {
         let mut sessions = self.sessions.lock().unwrap();
@@ -522,7 +531,7 @@ impl CatalogStore for InMemoryCatalogStore {
     async fn create_company(
         &self,
         owner: UserId,
-        new: NewCompany,
+        new: CreateCompanyRecord,
         now: DateTime<Utc>,
     ) -> Result<Company, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -560,7 +569,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         id: CompanyId,
-        patch: &CompanyPatch,
+        patch: &UpdateCompanyRecord,
         now: DateTime<Utc>,
     ) -> Result<Company, CatalogError> {
         // 先做只读校验（存在、归属、改名冲突），再可变更新。
@@ -659,7 +668,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         company_id: CompanyId,
-        new: NewProject,
+        new: CreateProjectRecord,
         now: DateTime<Utc>,
     ) -> Result<RecruitmentProject, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -692,7 +701,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         id: ProjectId,
-        patch: &ProjectPatch,
+        patch: &UpdateProjectRecord,
         now: DateTime<Utc>,
     ) -> Result<RecruitmentProject, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -753,7 +762,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         project_id: ProjectId,
-        new: NewPipeline,
+        new: CreatePipelineRecord,
         now: DateTime<Utc>,
     ) -> Result<Pipeline, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -824,6 +833,46 @@ impl CatalogStore for InMemoryCatalogStore {
         Ok(row.value.clone())
     }
 
+    async fn replace_pipeline(
+        &self,
+        owner: UserId,
+        id: PipelineId,
+        new: CreatePipelineRecord,
+        now: DateTime<Utc>,
+    ) -> Result<Pipeline, CatalogError> {
+        let mut data = self.data.lock().unwrap();
+        let Some(project_id) = data
+            .pipelines
+            .iter_mut()
+            .find(|row| row.deleted_at.is_none() && row.value.id == id)
+            .map(|row| row.value.project_id)
+        else {
+            return Err(CatalogError::NotFound);
+        };
+        if company_of_project(&data, owner, project_id).is_none() {
+            return Err(CatalogError::NotFound);
+        }
+        if data.pipelines.iter().any(|other| {
+            other.value.id != id
+                && other.deleted_at.is_none()
+                && other.value.project_id == project_id
+                && normalize_key(&other.value.name) == normalize_key(&new.name)
+        }) {
+            return Err(CatalogError::Conflict("name"));
+        }
+        let Some(row) = data
+            .pipelines
+            .iter_mut()
+            .find(|row| row.deleted_at.is_none() && row.value.id == id)
+        else {
+            return Err(CatalogError::NotFound);
+        };
+        row.value.name = new.name;
+        row.value.definition = new.definition;
+        row.value.updated_at = now;
+        Ok(row.value.clone())
+    }
+
     async fn soft_delete_pipeline(
         &self,
         owner: UserId,
@@ -857,7 +906,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         project_id: ProjectId,
-        new: NewJob,
+        new: CreateJobRecord,
         now: DateTime<Utc>,
     ) -> Result<Job, CatalogError> {
         let mut data = self.data.lock().unwrap();
@@ -872,14 +921,6 @@ impl CatalogStore for InMemoryCatalogStore {
             return Err(CatalogError::InvalidReference {
                 field: "pipelineId",
             });
-        }
-        let key = normalize_key(&new.title);
-        if data.jobs.iter().any(|row| {
-            row.deleted_at.is_none()
-                && row.value.project_id == project_id
-                && normalize_key(&row.value.title) == key
-        }) {
-            return Err(CatalogError::Conflict("title"));
         }
         let job = Job {
             id: JobId::generate(),
@@ -905,7 +946,7 @@ impl CatalogStore for InMemoryCatalogStore {
         &self,
         owner: UserId,
         id: JobId,
-        patch: &JobPatch,
+        patch: &UpdateJobRecord,
         now: DateTime<Utc>,
     ) -> Result<Job, CatalogError> {
         // 先做只读校验（存在、归属链、流水线引用），再可变更新。
@@ -1138,7 +1179,11 @@ impl ResumeStore for InMemoryResumeStore {
             .ok_or(ResumeStoreError::NotFound)
     }
 
-    async fn insert(&self, owner: UserId, resume: NewResume) -> Result<Resume, ResumeStoreError> {
+    async fn insert(
+        &self,
+        owner: UserId,
+        resume: CreateResumeRecord,
+    ) -> Result<Resume, ResumeStoreError> {
         let mut data = self.data.lock().unwrap();
         let live_count = data
             .iter()
@@ -1185,7 +1230,7 @@ impl ResumeStore for InMemoryResumeStore {
         &self,
         owner: UserId,
         id: ResumeId,
-        patch: ResumePatch,
+        patch: UpdateResumeRecord,
     ) -> Result<Resume, ResumeStoreError> {
         let mut data = self.data.lock().unwrap();
         let Some(row) = data
@@ -1257,7 +1302,7 @@ impl ResumeStore for InMemoryResumeStore {
         &self,
         owner: UserId,
         id: ResumeId,
-        attachment: NewResumeAttachment,
+        attachment: CreateResumeAttachmentRecord,
         parse_status: ParseStatus,
         content: serde_json::Value,
     ) -> Result<Resume, ResumeStoreError> {
@@ -1354,6 +1399,52 @@ impl ResumeTextExtractor for StaticTextExtractor {
     }
 }
 
+struct NoopApplicationStore;
+
+#[async_trait]
+impl ApplicationStore for NoopApplicationStore {
+    async fn list_views(&self, _owner: UserId) -> Result<Vec<ApplicationView>, ApplicationError> {
+        Err(ApplicationError::NotFound)
+    }
+
+    async fn get_view(
+        &self,
+        _owner: UserId,
+        _id: ApplicationId,
+    ) -> Result<ApplicationView, ApplicationError> {
+        Err(ApplicationError::NotFound)
+    }
+
+    async fn initial_stage(
+        &self,
+        _owner: UserId,
+        _job_id: JobId,
+    ) -> Result<StageRef, ApplicationError> {
+        Err(ApplicationError::NotFound)
+    }
+
+    async fn create(
+        &self,
+        _owner: UserId,
+        _new: CreateApplicationRecord,
+        _initial_stage: StageRef,
+        _now: DateTime<Utc>,
+    ) -> Result<Application, ApplicationError> {
+        Err(ApplicationError::NotFound)
+    }
+
+    async fn update_progress(
+        &self,
+        _owner: UserId,
+        _id: ApplicationId,
+        _status: ApplicationStatus,
+        _stage_position: u32,
+        _now: DateTime<Utc>,
+    ) -> Result<Application, ApplicationError> {
+        Err(ApplicationError::NotFound)
+    }
+}
+
 /// 组装带内存账户服务的完整应用路由。
 pub(crate) fn app() -> Router {
     let service = AccountService::new(
@@ -1368,10 +1459,14 @@ pub(crate) fn app() -> Router {
         Arc::new(InMemoryAttachmentStore::new()),
         Arc::new(StaticTextExtractor),
     );
+    let application = ApplicationService::new(Arc::new(NoopApplicationStore));
+    let sessions = StoreSessionService::new(Arc::new(MemorySessionStore::new()));
     let state = AppState {
         account: Arc::new(service),
         resume: Arc::new(resume),
         catalog: Arc::new(catalog),
+        application: Arc::new(application),
+        sessions: Arc::new(sessions),
         allowed_origins: Arc::from([ALLOWED_ORIGIN.to_owned()]),
         cookie_secure: false,
     };

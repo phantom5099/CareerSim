@@ -2,6 +2,18 @@
 
 use std::sync::Arc;
 
+fn position_for_test(name: &str) -> u16 {
+    match name {
+        "hr" | "hr_screen" => 0,
+        "exam" | "tech_1" => 1,
+        "tech_2" | "offer_1" => 2,
+        "offer" => 1,
+        "tech_round_1" => 1,
+        "ghost" | "missing" => 99,
+        _ => 0,
+    }
+}
+
 use super::{BuildOptions, ContextBuilder, DefaultContextBuilder, StageBrief, TurnContext};
 use crate::{
     agent::{
@@ -12,9 +24,7 @@ use crate::{
         tool::ToolCall,
     },
     pipeline::{
-        model::{
-            OfferPolicy, PipelineDefinition, StageDefinition, StageKey, StageKind, StageOutcome,
-        },
+        model::{OfferPolicy, PipelineDefinition, StageDefinition, StageKind, StageOutcome},
         rubric::{EvaluationRubric, RubricDimension, Score, StageEvaluation},
     },
     store::MemorySessionStore,
@@ -30,7 +40,7 @@ fn binding() -> SessionBinding {
 
 fn stage_ref(key: &str, kind: StageKind) -> StageRef {
     StageRef {
-        key: StageKey::parse(key).unwrap(),
+        position: position_for_test(key),
         kind,
     }
 }
@@ -57,7 +67,7 @@ fn rubric() -> EvaluationRubric {
 
 fn stage(key: &str, kind: StageKind, min_rounds: u8, max_rounds: u8) -> StageDefinition {
     StageDefinition {
-        key: StageKey::parse(key).unwrap(),
+        position: position_for_test(key),
         kind,
         title: "测试阶段".to_owned(),
         min_rounds,
@@ -87,9 +97,9 @@ fn offer_policy() -> OfferPolicy {
 
 fn turn_ctx(key: &str, brief: StageBrief) -> TurnContext {
     let pipeline = pipeline();
-    let key = StageKey::parse(key).unwrap();
+    let key = position_for_test(key);
     TurnContext {
-        stage: pipeline.get(&key).unwrap().clone(),
+        stage: pipeline.get(key).unwrap().clone(),
         pipeline,
         brief,
         prior: Vec::new(),
@@ -145,7 +155,7 @@ async fn projects_only_current_stage_with_round_notes() {
             &mut session,
             &[SessionEventKind::StageCompleted {
                 turn_id: crate::agent::TurnId(1),
-                stage_key: StageKey::parse("hr_screen").unwrap(),
+                stage_position: position_for_test("hr_screen"),
                 stage_kind: StageKind::HrScreen,
                 evaluation: StageEvaluation {
                     dimensions: Vec::new(),
@@ -154,7 +164,7 @@ async fn projects_only_current_stage_with_round_notes() {
                     summary: "首轮通过".to_owned(),
                 },
                 outcome: StageOutcome::Advance {
-                    next_stage_key: StageKey::parse("offer").unwrap(),
+                    next_stage_position: position_for_test("offer"),
                     next_stage_kind: StageKind::Offer,
                 },
             }],
@@ -183,7 +193,7 @@ async fn projects_only_current_stage_with_round_notes() {
     let session = sessions.load(session.id).await.unwrap();
     let mut ctx = turn_ctx("offer", StageBrief::default());
     ctx.prior = vec![super::PriorStageSummary {
-        stage_key: StageKey::parse("hr_screen").unwrap(),
+        stage_position: position_for_test("hr_screen"),
         stage_kind: StageKind::HrScreen,
         total: Score::new(75).unwrap(),
         passed: true,
