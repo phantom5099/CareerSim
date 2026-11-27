@@ -10,4 +10,6 @@
 - 查询视图可以批量缓存同一 `pipeline_id` 的阶段列表，但缓存只存在于单次查询，不改变数据库权威关系。
 - `ApplicationView` 供 HTTP 转换使用，不向 HTTP 泄漏 store 适配器或 SQL 行类型。
 - `stage_position` 的更新不修改 Session 事件历史。会话事件只记录已经发生的交互，流程位置由 Application 读取。
+- Offer 列表只查询当前认证用户且 `Application.status = offer` 的记录。Offer 条款从关联 Session 的 `offer_pending` 事件读取，Offer 回复状态使用 Application 的 `offer_response_status` 持久化。
+- Offer 回复只能更新属于当前用户且流程状态为 `offer` 的 Application，不能把 `accepted` 或 `declined` 写入流程状态字段。
 - 测试覆盖一对一约束、初始位置、无效位置、岗位归属、会话不存在、更新冲突和视图阶段读取。

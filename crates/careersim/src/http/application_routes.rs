@@ -17,10 +17,12 @@ use super::{
     router::AppState,
 };
 use crate::{
-    agent::session::{ApplicationId, SessionBinding, SessionService},
-    application::{ApplicationError, ApplicationStatus, CreateApplicationInput},
+    agent::session::{ApplicationId, SessionBinding, SessionEventKind, SessionService},
+    application::{
+        ApplicationError, ApplicationStatus, CreateApplicationInput, OfferResponseStatus, OfferView,
+    },
     catalog::model::JobId,
-    pipeline::model::StageKind,
+    pipeline::model::{StageKind, StageOutcome},
     resume::model::ResumeId,
 };
 
@@ -38,6 +40,11 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/applications/{applicationId}/advance",
             post(advance_application),
+        )
+        .route("/api/v1/offers", get(list_offers))
+        .route(
+            "/api/v1/offers/{applicationId}/respond",
+            post(respond_to_offer),
         )
 }
 
@@ -64,6 +71,30 @@ struct ApplicationResponse {
     current_stage: String,
     stages: Vec<ApplicationStageResponse>,
     next_action: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OfferResponse {
+    id: String,
+    company_id: String,
+    job_id: String,
+    job_title: String,
+    resume_id: String,
+    resume_title: String,
+    base_salary: u32,
+    months: u8,
+    bonus: String,
+    city: String,
+    issued_at: String,
+    deadline: String,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OfferResponseRequest {
+    status: OfferResponseStatus,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,6 +157,18 @@ fn next_action(kind: StageKind, title: &str, status: ApplicationStatus) -> Strin
     }
 }
 
+fn session_has_offer_terms(session: &crate::agent::session::Session) -> bool {
+    session.events.iter().any(|event| {
+        matches!(
+            event.kind,
+            SessionEventKind::StageCompleted {
+                outcome: StageOutcome::OfferPending { .. },
+                ..
+            }
+        )
+    })
+}
+
 fn to_response(view: crate::application::ApplicationView) -> Result<ApplicationResponse, ApiError> {
     let current = view
         .stages
@@ -163,6 +206,26 @@ fn to_response(view: crate::application::ApplicationView) -> Result<ApplicationR
     })
 }
 
+fn to_offer_response(view: OfferView) -> OfferResponse {
+    OfferResponse {
+        id: view.application_id.into_uuid().to_string(),
+        company_id: view.company_id.into_uuid().to_string(),
+        job_id: view.job_id.into_uuid().to_string(),
+        job_title: view.job_title,
+        resume_id: view.resume_id.into_uuid().to_string(),
+        resume_title: view
+            .resume_title
+            .unwrap_or_else(|| "已删除的简历".to_owned()),
+        base_salary: view.offer.base_salary,
+        months: view.offer.months,
+        bonus: view.offer.bonus,
+        city: view.offer.city,
+        issued_at: format_timestamp(view.offer.issued_at),
+        deadline: view.offer.deadline.to_string(),
+        status: view.response_status.as_str().to_owned(),
+    }
+}
+
 async fn list_applications(
     State(state): State<AppState>,
     auth: AuthContext,
@@ -173,6 +236,32 @@ async fn list_applications(
         .map(to_response)
         .collect::<Result<Vec<_>, _>>()
         .map(Json)
+}
+
+async fn list_offers(
+    State(state): State<AppState>,
+    auth: AuthContext,
+) -> Result<Json<Vec<OfferResponse>>, ApiError> {
+    let views = state.application.list_offer_views(auth.user_id).await?;
+    Ok(Json(views.into_iter().map(to_offer_response).collect()))
+}
+
+async fn respond_to_offer(
+    State(state): State<AppState>,
+    auth: AuthContext,
+    Path(application_id): Path<Uuid>,
+    Json(request): Json<OfferResponseRequest>,
+) -> Result<Json<OfferResponse>, ApiError> {
+    let view = state
+        .application
+        .update_offer_response(
+            auth.user_id,
+            ApplicationId::from_uuid(application_id),
+            request.status,
+            Utc::now(),
+        )
+        .await?;
+    Ok(Json(to_offer_response(view)))
 }
 
 async fn get_application(
@@ -257,7 +346,20 @@ async fn advance_application(
         .ok_or_else(ApiError::internal_error)?;
     let (status, next_position) = match view.stages.get(current_index + 1) {
         Some(next) => (ApplicationStatus::Active, u32::from(next.position)),
-        None => (ApplicationStatus::Offer, view.application.stage_position),
+        None => {
+            let session = state
+                .sessions
+                .load(view.application.session_id)
+                .await
+                .map_err(session_error)?;
+            if !session_has_offer_terms(&session) {
+                return Err(ApiError::validation_fields(
+                    "offer terms are not persisted for this application",
+                    vec!["application".to_owned()],
+                ));
+            }
+            (ApplicationStatus::Offer, view.application.stage_position)
+        }
     };
     state
         .application

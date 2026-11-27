@@ -4,14 +4,14 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde_json::json;
+use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use tracing::instrument;
 
 use super::{
     model::{
         Application, ApplicationError, ApplicationId, ApplicationStageView, ApplicationStatus,
-        ApplicationView,
+        ApplicationView, OfferResponseStatus, OfferView,
     },
     store::{ApplicationStore, CreateApplicationRecord},
 };
@@ -19,7 +19,7 @@ use crate::{
     account::model::UserId,
     agent::session::{SessionId, StageRef},
     catalog::model::{CompanyId, JobId, PipelineId},
-    pipeline::model::StageKind,
+    pipeline::model::{OfferTerms, StageKind},
     resume::model::ResumeId,
 };
 
@@ -50,6 +50,13 @@ fn application_from_row(row: &sqlx::postgres::PgRow) -> Result<Application, Appl
         .map_err(|error| backend("read application", error))?;
     let status = ApplicationStatus::parse(&status)
         .ok_or_else(|| ApplicationError::InvalidState("unknown application status".to_owned()))?;
+    let offer_response_status: String = row
+        .try_get("offer_response_status")
+        .map_err(|error| backend("read application", error))?;
+    let offer_response_status =
+        OfferResponseStatus::parse(&offer_response_status).ok_or_else(|| {
+            ApplicationError::InvalidState("unknown offer response status".to_owned())
+        })?;
     let stage_position: i32 = row
         .try_get("stage_position")
         .map_err(|error| backend("read application", error))?;
@@ -77,6 +84,7 @@ fn application_from_row(row: &sqlx::postgres::PgRow) -> Result<Application, Appl
                 .map_err(|error| backend("read application", error))?,
         ),
         status,
+        offer_response_status,
         stage_position,
         created_at: row
             .try_get("created_at")
@@ -88,6 +96,7 @@ fn application_from_row(row: &sqlx::postgres::PgRow) -> Result<Application, Appl
 }
 
 const LIST_APPLICATION_VIEWS_SQL: &str = "SELECT a.id, a.user_id, a.job_id, a.resume_id, a.session_id, a.status, a.stage_position, a.created_at, a.updated_at, \
+    a.offer_response_status, \
     c.id AS company_id, \
     j.title AS job_title, r.title AS resume_title, j.pipeline_id \
     FROM applications a \
@@ -97,6 +106,7 @@ const LIST_APPLICATION_VIEWS_SQL: &str = "SELECT a.id, a.user_id, a.job_id, a.re
     LEFT JOIN resumes r ON r.id = a.resume_id \
     WHERE a.user_id = $1 ORDER BY a.updated_at DESC, a.id DESC";
 const GET_APPLICATION_VIEW_SQL: &str = "SELECT a.id, a.user_id, a.job_id, a.resume_id, a.session_id, a.status, a.stage_position, a.created_at, a.updated_at, \
+    a.offer_response_status, \
     c.id AS company_id, \
     j.title AS job_title, r.title AS resume_title, j.pipeline_id \
     FROM applications a \
@@ -107,6 +117,43 @@ const GET_APPLICATION_VIEW_SQL: &str = "SELECT a.id, a.user_id, a.job_id, a.resu
     WHERE a.id = $1 AND a.user_id = $2";
 const LIST_PIPELINE_STAGES_SQL: &str =
     "SELECT position, kind, title FROM pipeline_stages WHERE pipeline_id = $1 ORDER BY position";
+const LIST_OFFER_VIEWS_SQL: &str = "SELECT a.id, a.job_id, a.resume_id, a.offer_response_status, \
+    c.id AS company_id, j.title AS job_title, r.title AS resume_title, \
+    offer_event.offer_terms \
+    FROM applications a \
+    JOIN jobs j ON j.id = a.job_id AND j.deleted_at IS NULL \
+    JOIN recruitment_projects p ON p.id = j.project_id AND p.deleted_at IS NULL \
+    JOIN companies c ON c.id = p.company_id AND c.deleted_at IS NULL \
+    LEFT JOIN resumes r ON r.id = a.resume_id \
+    LEFT JOIN LATERAL ( \
+        SELECT e.kind->'outcome'->'offer' AS offer_terms \
+        FROM session_events e \
+        WHERE e.session_id = a.session_id \
+          AND e.kind->>'type' = 'stage_completed' \
+          AND e.kind->'outcome'->>'type' = 'offer_pending' \
+        ORDER BY e.seq DESC \
+        LIMIT 1 \
+    ) offer_event ON TRUE \
+    WHERE a.user_id = $1 AND a.status = 'offer' \
+    ORDER BY a.updated_at DESC, a.id DESC";
+const GET_OFFER_VIEW_SQL: &str = "SELECT a.id, a.job_id, a.resume_id, a.offer_response_status, \
+    c.id AS company_id, j.title AS job_title, r.title AS resume_title, \
+    offer_event.offer_terms \
+    FROM applications a \
+    JOIN jobs j ON j.id = a.job_id AND j.deleted_at IS NULL \
+    JOIN recruitment_projects p ON p.id = j.project_id AND p.deleted_at IS NULL \
+    JOIN companies c ON c.id = p.company_id AND c.deleted_at IS NULL \
+    LEFT JOIN resumes r ON r.id = a.resume_id \
+    LEFT JOIN LATERAL ( \
+        SELECT e.kind->'outcome'->'offer' AS offer_terms \
+        FROM session_events e \
+        WHERE e.session_id = a.session_id \
+          AND e.kind->>'type' = 'stage_completed' \
+          AND e.kind->'outcome'->>'type' = 'offer_pending' \
+        ORDER BY e.seq DESC \
+        LIMIT 1 \
+    ) offer_event ON TRUE \
+    WHERE a.id = $1 AND a.user_id = $2 AND a.status = 'offer'";
 const INITIAL_STAGE_SQL: &str = "SELECT ps.position, ps.kind FROM jobs j \
     JOIN recruitment_projects p ON p.id = j.project_id AND p.deleted_at IS NULL \
     JOIN companies c ON c.id = p.company_id AND c.deleted_at IS NULL \
@@ -169,6 +216,49 @@ fn application_view_from_row(
     })
 }
 
+fn offer_view_from_row(row: &sqlx::postgres::PgRow) -> Result<OfferView, ApplicationError> {
+    let response_status: String = row
+        .try_get("offer_response_status")
+        .map_err(|error| backend("read offer response status", error))?;
+    let response_status = OfferResponseStatus::parse(&response_status).ok_or_else(|| {
+        ApplicationError::InvalidState("unknown offer response status".to_owned())
+    })?;
+    let offer_json: Option<Value> = row
+        .try_get("offer_terms")
+        .map_err(|error| backend("read offer terms", error))?;
+    let offer_json = offer_json.ok_or_else(|| {
+        ApplicationError::InvalidState("offer application has no offer terms".to_owned())
+    })?;
+    let offer: OfferTerms = serde_json::from_value(offer_json)
+        .map_err(|error| ApplicationError::InvalidState(format!("invalid offer terms: {error}")))?;
+    Ok(OfferView {
+        application_id: ApplicationId::from_uuid(
+            row.try_get("id")
+                .map_err(|error| backend("read offer application", error))?,
+        ),
+        company_id: CompanyId::from_uuid(
+            row.try_get("company_id")
+                .map_err(|error| backend("read offer company", error))?,
+        ),
+        job_id: JobId::from_uuid(
+            row.try_get("job_id")
+                .map_err(|error| backend("read offer job", error))?,
+        ),
+        job_title: row
+            .try_get("job_title")
+            .map_err(|error| backend("read offer job title", error))?,
+        resume_id: ResumeId::from_uuid(
+            row.try_get("resume_id")
+                .map_err(|error| backend("read offer resume", error))?,
+        ),
+        resume_title: row
+            .try_get("resume_title")
+            .map_err(|error| backend("read offer resume title", error))?,
+        offer,
+        response_status,
+    })
+}
+
 #[async_trait]
 impl ApplicationStore for PgApplicationStore {
     #[instrument(name = "application.postgres.list_views", level = "debug", skip(self), fields(owner_id = ?owner))]
@@ -216,6 +306,57 @@ impl ApplicationStore for PgApplicationStore {
         );
         let stages = load_pipeline_stages(&self.pool, pipeline_id).await?;
         application_view_from_row(&row, stages)
+    }
+
+    #[instrument(name = "application.postgres.list_offer_views", level = "debug", skip(self), fields(owner_id = ?owner))]
+    async fn list_offer_views(&self, owner: UserId) -> Result<Vec<OfferView>, ApplicationError> {
+        let rows = sqlx::query(LIST_OFFER_VIEWS_SQL)
+            .bind(owner.into_uuid())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| backend("list offer views", error))?;
+        rows.iter().map(offer_view_from_row).collect()
+    }
+
+    #[instrument(name = "application.postgres.update_offer_response", level = "debug", skip(self), fields(owner_id = ?owner, application_id = ?id, response_status = status.as_str()))]
+    async fn update_offer_response(
+        &self,
+        owner: UserId,
+        id: ApplicationId,
+        status: OfferResponseStatus,
+        now: DateTime<Utc>,
+    ) -> Result<OfferView, ApplicationError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|error| backend("begin update offer response", error))?;
+        let row = sqlx::query(
+            "UPDATE applications SET offer_response_status = $3, updated_at = $4 \
+             WHERE id = $1 AND user_id = $2 AND status = 'offer' \
+             RETURNING id",
+        )
+        .bind(id.into_uuid())
+        .bind(owner.into_uuid())
+        .bind(status.as_str())
+        .bind(now)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| backend("update offer response", error))?;
+        if row.is_none() {
+            return Err(ApplicationError::NotFound);
+        }
+        tx.commit()
+            .await
+            .map_err(|error| backend("commit offer response", error))?;
+        let row = sqlx::query(GET_OFFER_VIEW_SQL)
+            .bind(id.into_uuid())
+            .bind(owner.into_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|error| backend("get updated offer view", error))?
+            .ok_or(ApplicationError::NotFound)?;
+        offer_view_from_row(&row)
     }
 
     #[instrument(name = "application.postgres.initial_stage", level = "debug", skip(self), fields(owner_id = ?owner, job_id = ?job_id))]
@@ -311,7 +452,7 @@ impl ApplicationStore for PgApplicationStore {
             "INSERT INTO applications \
              (id, user_id, job_id, resume_id, session_id, status, stage_position, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $7) \
-             RETURNING id, user_id, job_id, resume_id, session_id, status, stage_position, created_at, updated_at",
+             RETURNING id, user_id, job_id, resume_id, session_id, status, offer_response_status, stage_position, created_at, updated_at",
         )
         .bind(new.id.into_uuid())
         .bind(owner.into_uuid())
@@ -381,7 +522,7 @@ impl ApplicationStore for PgApplicationStore {
         let row = sqlx::query(
             "UPDATE applications SET status = $3, stage_position = $4, updated_at = $5 \
              WHERE id = $1 AND user_id = $2 \
-             RETURNING id, user_id, job_id, resume_id, session_id, status, stage_position, created_at, updated_at",
+             RETURNING id, user_id, job_id, resume_id, session_id, status, offer_response_status, stage_position, created_at, updated_at",
         )
         .bind(id.into_uuid())
         .bind(owner.into_uuid())

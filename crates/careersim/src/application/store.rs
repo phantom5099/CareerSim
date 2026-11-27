@@ -5,6 +5,7 @@ use chrono::DateTime;
 
 use super::model::{
     Application, ApplicationError, ApplicationId, ApplicationStatus, ApplicationView,
+    OfferResponseStatus, OfferView,
 };
 use crate::{account::model::UserId, agent::session::StageRef};
 
@@ -25,6 +26,16 @@ pub trait ApplicationStore: Send + Sync {
         owner: UserId,
         id: ApplicationId,
     ) -> Result<ApplicationView, ApplicationError>;
+
+    async fn list_offer_views(&self, owner: UserId) -> Result<Vec<OfferView>, ApplicationError>;
+
+    async fn update_offer_response(
+        &self,
+        owner: UserId,
+        id: ApplicationId,
+        status: OfferResponseStatus,
+        now: DateTime<chrono::Utc>,
+    ) -> Result<OfferView, ApplicationError>;
 
     async fn initial_stage(
         &self,

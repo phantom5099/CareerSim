@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use super::{
     model::{
         Application, ApplicationError, ApplicationId, ApplicationStatus, ApplicationView,
-        CreateApplicationInput,
+        CreateApplicationInput, OfferResponseStatus, OfferView,
     },
     store::{ApplicationStore, CreateApplicationRecord},
 };
@@ -35,6 +35,25 @@ impl ApplicationService {
         id: ApplicationId,
     ) -> Result<ApplicationView, ApplicationError> {
         self.store.get_view(owner, id).await
+    }
+
+    pub async fn list_offer_views(
+        &self,
+        owner: UserId,
+    ) -> Result<Vec<OfferView>, ApplicationError> {
+        self.store.list_offer_views(owner).await
+    }
+
+    pub async fn update_offer_response(
+        &self,
+        owner: UserId,
+        id: ApplicationId,
+        status: OfferResponseStatus,
+        now: DateTime<Utc>,
+    ) -> Result<OfferView, ApplicationError> {
+        self.store
+            .update_offer_response(owner, id, status, now)
+            .await
     }
 
     pub async fn initial_stage(

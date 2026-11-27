@@ -30,7 +30,7 @@ use crate::{
     agent::session::{StageRef, StoreSessionService},
     application::{
         Application, ApplicationError, ApplicationId, ApplicationService, ApplicationStatus,
-        ApplicationView,
+        ApplicationView, OfferResponseStatus, OfferView,
         store::{ApplicationStore, CreateApplicationRecord},
     },
     catalog::{
@@ -1412,6 +1412,20 @@ impl ApplicationStore for NoopApplicationStore {
         _owner: UserId,
         _id: ApplicationId,
     ) -> Result<ApplicationView, ApplicationError> {
+        Err(ApplicationError::NotFound)
+    }
+
+    async fn list_offer_views(&self, _owner: UserId) -> Result<Vec<OfferView>, ApplicationError> {
+        Err(ApplicationError::NotFound)
+    }
+
+    async fn update_offer_response(
+        &self,
+        _owner: UserId,
+        _id: ApplicationId,
+        _status: OfferResponseStatus,
+        _now: DateTime<Utc>,
+    ) -> Result<OfferView, ApplicationError> {
         Err(ApplicationError::NotFound)
     }
 

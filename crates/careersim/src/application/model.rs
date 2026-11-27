@@ -21,6 +21,33 @@ pub enum ApplicationStatus {
     Withdrawn,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OfferResponseStatus {
+    Pending,
+    Accepted,
+    Declined,
+}
+
+impl OfferResponseStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Accepted => "accepted",
+            Self::Declined => "declined",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "accepted" => Some(Self::Accepted),
+            "declined" => Some(Self::Declined),
+            _ => None,
+        }
+    }
+}
+
 impl ApplicationStatus {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -50,6 +77,7 @@ pub struct Application {
     pub resume_id: ResumeId,
     pub session_id: SessionId,
     pub status: ApplicationStatus,
+    pub offer_response_status: OfferResponseStatus,
     /// 当前流程位置，从零开始，唯一的当前阶段定位依据。
     pub stage_position: u32,
     pub created_at: DateTime<Utc>,
@@ -79,6 +107,18 @@ pub struct ApplicationStageView {
     pub position: StagePosition,
     pub kind: StageKind,
     pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfferView {
+    pub application_id: ApplicationId,
+    pub company_id: CompanyId,
+    pub job_id: JobId,
+    pub job_title: String,
+    pub resume_id: ResumeId,
+    pub resume_title: Option<String>,
+    pub offer: crate::pipeline::model::OfferTerms,
+    pub response_status: OfferResponseStatus,
 }
 
 #[derive(Debug, thiserror::Error)]
